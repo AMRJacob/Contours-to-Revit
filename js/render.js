@@ -1,6 +1,6 @@
 // Canvas rendering for the on-screen preview and the printable PNG contour map.
-import { BUILDING_SOURCES } from './context.js?v=0.7.0';
-import { labelPositions, isMajor } from './contours.js?v=0.7.0';
+import { BUILDING_SOURCES } from './context.js?v=0.7.1';
+import { labelPositions, isMajor } from './contours.js?v=0.7.1';
 
 /** Hillshade (0..1) for a grid; azimuth 315°, altitude 45°. */
 export function hillshade(g, zFactor = 1) {
@@ -226,7 +226,7 @@ export function drawMap(canvas, site, mode = 'preview') {
   if (site.context && v.labels) {
     const tags = [];
     for (const z of v.flood ? site.context.floodZones || [] : none) if ((z.sfha || z.shadedX) && z.label) tags.push({ text: z.text, x: z.label.x, y: z.label.y, fg: '#cfe0ff', size: print ? 12 : 10, lead: '#93b4ff' });
-    for (const pc of v.parcels ? site.context.parcels || [] : none) if (pc.label && pc.id) tags.push({ text: pc.id, x: pc.label.x, y: pc.label.y, fg: '#ffd1f5', size: print ? 10 : 9, lead: '#ff9ce8' });
+    for (const pc of v.parcels ? site.context.parcels || [] : none) if (pc.label && pc.id) tags.push({ text: pc.id, x: pc.label.x, y: pc.label.y, fg: '#ffd1f5', size: print ? 10 : 9, lead: '#ff9ce8', optional: true });
     for (const t of tags) {
       ctx.font = `600 ${Math.round(t.size * px)}px "IBM Plex Sans", system-ui, sans-serif`;
       const w = ctx.measureText(t.text).width, h = t.size * px * 1.25;
@@ -234,7 +234,7 @@ export function drawMap(canvas, site, mode = 'preview') {
       // Try the anchor, then rings of offsets around it (below/above first, then sideways and diagonals).
       let spot = null;
       const dirs = [[0, 0], [0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [-1, 1], [1, -1], [-1, -1]];
-      for (let ring = 0; ring <= 6 && !spot; ring++) {
+      for (let ring = 0; ring <= (t.optional ? 1 : 6) && !spot; ring++) {
         for (const [dx, dy] of dirs) {
           if (ring === 0 && (dx || dy)) continue;
           if (ring > 0 && !dx && !dy) continue;
@@ -243,7 +243,8 @@ export function drawMap(canvas, site, mode = 'preview') {
           if (!hits(b) && inMap(b)) { spot = { cx, cy, b }; break; }
         }
       }
-      if (!spot) spot = { cx: ax, cy: ay, b: boxFor(ax, ay, w, h) }; // nowhere free: keep it at its anchor
+      if (!spot && t.optional) continue; // parcel IDs are dropped where there's no room (dense town lots)
+      if (!spot) spot = { cx: ax, cy: ay, b: boxFor(ax, ay, w, h) }; // flood labels: keep at anchor
       if (Math.hypot(spot.cx - ax, spot.cy - ay) > h * 0.6) {
         ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(spot.cx, spot.cy > ay ? spot.b.y0 + 2 * px : spot.b.y1 - 2 * px);
         ctx.lineWidth = 1.2 * px; ctx.strokeStyle = t.lead; ctx.setLineDash([3 * px, 2 * px]); ctx.stroke(); ctx.setLineDash([]);

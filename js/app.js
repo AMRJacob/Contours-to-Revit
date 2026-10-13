@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.7.0';
-import { fetchElevation, sample } from './dem.js?v=0.7.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.7.0';
-import { Dxf } from './dxf.js?v=0.7.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.7.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.7.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.7.1';
+import { fetchElevation, sample } from './dem.js?v=0.7.1';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.7.1';
+import { Dxf } from './dxf.js?v=0.7.1';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.7.1';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.7.1';
 
-const VERSION = '0.7.0';
+const VERSION = '0.7.1';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -686,12 +686,12 @@ function contextLabels(site, v) {
   const h = labelHeight(site);
   const items = [], boxes = [];
   if (v.labels === false) return { items, boxes };
-  const place = (lines, x, y, z) => {
+  const place = (lines, x, y, z, optional = false) => {
     // lines: [{text, size, dy}] stacked around (x, y); try the anchor, then offsets below/above/sideways.
     const w = Math.max(...lines.map(l => textW(l.text, l.size)));
     const hh = lines.reduce((a, l) => a + l.size * 1.4, 0);
     const dirs = [[0, 0], [0, -1], [0, 1], [1, 0], [-1, 0], [1, -1], [-1, -1], [1, 1], [-1, 1]];
-    for (let ring = 0; ring <= 5; ring++) {
+    for (let ring = 0; ring <= (optional ? 1 : 5); ring++) {
       for (const [dx, dy] of dirs) {
         if ((ring === 0) !== (!dx && !dy)) continue;
         const cx = x + dx * ring * w * 0.6, cy = y + dy * ring * hh;
@@ -699,6 +699,7 @@ function contextLabels(site, v) {
         if (!overlaps(b, boxes)) { boxes.push(b); items.push({ lines, x: cx, y: cy, z, ax: x, ay: y }); return; }
       }
     }
+    if (optional) return; // no room: drop (parcel labels on dense lots)
     const b = dxfBox(x, y, w, hh); boxes.push(b); items.push({ lines, x, y, z, ax: x, ay: y });
   };
   if (site.context) {
@@ -721,7 +722,7 @@ function contextLabels(site, v) {
         const lines = [];
         if (pc.id) lines.push({ text: pc.id, size: h * 0.8, layer: 'C-PROP-TEXT' });
         if (pc.owner) lines.push({ text: pc.owner.slice(0, 60), size: h * 0.6, layer: 'C-PROP-TEXT' });
-        if (lines.length) place(lines, x, y, pc.label.z);
+        if (lines.length) place(lines, x, y, pc.label.z, true);
       }
     }
   }
