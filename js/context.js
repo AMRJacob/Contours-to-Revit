@@ -228,10 +228,8 @@ export function prepareContext({ buildings = [], roads = [] }, { fwd, box, zAt, 
     for (const piece of clipPolyline(line, box)) {
       const center = densify(piece, step);
       const drape = pts => pts.map(([x, y]) => [x, y, zAt(x, y)]).filter(q => Number.isFinite(q[2]));
-      const edges = r.kind === 'road'
-        ? [half, -half].flatMap(d => clipPolyline(offsetPolyline(center, d), box).map(drape))
-        : [];
-      outR.push({ kind: r.kind, type: r.type, name: r.name, widthNative: half * 2, widthKnown: r.widthKnown, bridge: r.bridge, tunnel: r.tunnel, center: drape(center), edges: edges.filter(e => e.length > 1) });
+      // Only real geometry: none of the sources publish pavement edges, so no edge lines are invented.
+      outR.push({ kind: r.kind, type: r.type, name: r.name, widthNative: half * 2, widthKnown: r.widthKnown, bridge: r.bridge, tunnel: r.tunnel, center: drape(center), edges: [] });
     }
   }
   return { buildings: outB, roads: outR };
@@ -533,4 +531,32 @@ export function prepareOverlays({ parcels = [], flood = null }, { fwd, box, zAt,
     }
   }
   return { parcels: outP, floodZones: outZ, bfes: outBfe };
+}
+
+/**
+ * Hatch lines for a polygon (even-odd fill rule), at angleDeg, `spacing` apart, clipped to the box.
+ * Returns 2D segments [[x0,y0],[x1,y1]].
+ */
+export function hatchPolygon(rings, angleDeg, spacing, box) {
+  const a = angleDeg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  const rot = ([x, y]) => [x * c + y * s, -x * s + y * c];      // into hatch space (lines are horizontal)
+  const unrot = ([u, v]) => [u * c - v * s, u * s + v * c];
+  const rr = rings.map(r => r.map(rot));
+  let vmin = Infinity, vmax = -Infinity;
+  for (const r of rr) for (const [, v] of r) { if (v < vmin) vmin = v; if (v > vmax) vmax = v; }
+  const out = [];
+  for (let v = Math.ceil(vmin / spacing) * spacing; v <= vmax; v += spacing) {
+    const xs = [];
+    for (const r of rr) {
+      for (let i = 0; i < r.length; i++) {
+        const [u0, v0] = r[i], [u1, v1] = r[(i + 1) % r.length];
+        if ((v0 > v) !== (v1 > v)) xs.push(u0 + (v - v0) * (u1 - u0) / (v1 - v0));
+      }
+    }
+    xs.sort((p, q) => p - q);
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      for (const piece of clipPolyline([unrot([xs[k], v]), unrot([xs[k + 1], v])], box)) out.push(piece);
+    }
+  }
+  return out;
 }

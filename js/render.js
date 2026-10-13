@@ -1,5 +1,5 @@
 // Canvas rendering for the on-screen preview and the printable PNG contour map.
-import { labelPositions, isMajor } from './contours.js?v=0.5.1';
+import { labelPositions, isMajor } from './contours.js?v=0.5.2';
 
 /** Hillshade (0..1) for a grid; azimuth 315°, altitude 45°. */
 export function hillshade(g, zFactor = 1) {
@@ -145,14 +145,17 @@ export function drawMap(canvas, site, mode = 'preview') {
       if (close) ctx.closePath();
     };
     ctx.setLineDash([]);
-    // FEMA flood zones: translucent blue (darker for floodway, light for 0.2% chance).
+    // FEMA flood zones: hatched (floodway cross-hatch, SFHA single hatch, shaded X sparse) with a solid boundary.
+    const floodCol = onImagery ? '#8ec5ff' : '#1d4ed8';
     for (const z of v.flood ? site.context.floodZones || [] : none) {
       if (!z.sfha && !z.shadedX) continue;
       ctx.beginPath();
+      for (const seg of z.hatch || []) { ctx.moveTo(X(seg[0][0]), Y(seg[0][1])); ctx.lineTo(X(seg[1][0]), Y(seg[1][1])); }
+      if (onImagery) { ctx.lineWidth = 2.6 * px; ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.stroke(); }
+      ctx.lineWidth = (z.shadedX ? 1 : 1.3) * px; ctx.strokeStyle = floodCol; ctx.stroke();
+      ctx.beginPath();
       for (const r of z.rings) { r.forEach(([x, y], i) => (i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y)))); ctx.closePath(); }
-      ctx.fillStyle = z.floodway ? 'rgba(29,78,216,0.38)' : z.shadedX ? 'rgba(59,130,246,0.14)' : 'rgba(59,130,246,0.28)';
-      ctx.fill('evenodd');
-      ctx.lineWidth = 1.6 * px; ctx.strokeStyle = 'rgba(37,99,235,0.95)'; ctx.stroke();
+      ctx.lineWidth = 2 * px; ctx.strokeStyle = floodCol; ctx.stroke();
     }
     // Parcels: magenta property lines.
     for (const pc of v.parcels ? site.context.parcels || [] : none) {
@@ -162,7 +165,7 @@ export function drawMap(canvas, site, mode = 'preview') {
       for (const e of r.edges) { path(e); ctx.lineWidth = 1.4 * px; ctx.strokeStyle = onImagery ? 'rgba(255,224,102,0.95)' : 'rgba(90,70,20,0.9)'; ctx.stroke(); }
       path(r.center);
       ctx.setLineDash(r.kind === 'road' ? [10 * px, 6 * px] : [3 * px, 3 * px]);
-      ctx.lineWidth = (r.kind === 'road' ? 1 : 1.2) * px;
+      ctx.lineWidth = (r.kind === 'road' ? 1.6 : 1.2) * px;
       ctx.strokeStyle = r.kind === 'road' ? (onImagery ? 'rgba(255,224,102,0.8)' : 'rgba(90,70,20,0.7)') : (onImagery ? 'rgba(155,231,255,0.9)' : 'rgba(20,70,110,0.8)');
       ctx.stroke();
       ctx.setLineDash([]);

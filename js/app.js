@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.5.1';
-import { fetchElevation, sample } from './dem.js?v=0.5.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.5.1';
-import { Dxf } from './dxf.js?v=0.5.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.5.1';
-import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays } from './context.js?v=0.5.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.5.2';
+import { fetchElevation, sample } from './dem.js?v=0.5.2';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.5.2';
+import { Dxf } from './dxf.js?v=0.5.2';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.5.2';
+import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.5.2';
 
-const VERSION = '0.5.1';
+const VERSION = '0.5.2';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -377,6 +377,16 @@ async function generate() {
     Object.assign(context, prepareOverlays(
       { parcels: pRes.status === 'fulfilled' ? pRes.value : [], flood: fRes.status === 'fulfilled' ? fRes.value : null },
       { fwd: p.fwd, box, zAt, nativePerM, bfeToOut }));
+    // Flood-zone hatching as real linework: floodway cross-hatched, other SFHA zones single hatch,
+    // shaded X (0.2% chance) sparse. Spacing scales with the site so the pattern reads at any size.
+    const hs = Math.max(Math.max(box.xmax - box.xmin, box.ymax - box.ymin) / 70, 4 * nativePerM / 3.2808);
+    for (const z of context.floodZones) {
+      if (!z.sfha && !z.shadedX) { z.hatch = []; continue; }
+      const angles = z.floodway ? [45, 135] : [45];
+      const sp = z.shadedX ? hs * 2.2 : hs;
+      z.hatch = angles.flatMap(a => hatchPolygon(z.rings, a, sp, box));
+      z.hatch3d = z.hatch.map(seg => densify(seg, 1.5 * nativePerM).map(([x, y]) => [x, y, zAt(x, y)]).filter(q => Number.isFinite(q[2]))).filter(l => l.length > 1);
+    }
     await tick();
   }
 
@@ -485,7 +495,7 @@ function showResults(site) {
     html += `<div style="margin:10px 0 4px;font-weight:600;color:var(--ink)">Site context</div>`;
     const np = site.context.roads.length - nr;
     if (site.ctxInclude.b) html += `<div>${nb} building footprint${nb === 1 ? '' : 's'} (USA Structures${dates.length ? `, imagery ${escapeHtml(dates[0].slice(0, 4))}${dates.length > 1 && dates.at(-1).slice(0, 4) !== dates[0].slice(0, 4) ? '–' + escapeHtml(dates.at(-1).slice(0, 4)) : ''}` : ''}), ${nh} with height data</div>`;
-    if (site.ctxInclude.r) html += `<div>${nr} road segment${nr === 1 ? '' : 's'}${np ? `, ${np} path${np === 1 ? '' : 's'}` : ''} (${site.roadsSource === 'tiger' ? 'US Census TIGER' : 'OpenStreetMap'})</div>`;
+    if (site.ctxInclude.r) html += `<div>${nr} road segment${nr === 1 ? '' : 's'}${np ? `, ${np} path${np === 1 ? '' : 's'}` : ''} (${site.roadsSource === 'tiger' ? 'US Census TIGER' : 'OpenStreetMap'}) — centerlines only; no source publishes pavement edges</div>`;
     if (site.ctxInclude.p) {
       const npc = site.context.parcels.length;
       html += `<div>${npc} parcel${npc === 1 ? '' : 's'} (Arkansas GIS Office)</div>`;
@@ -580,14 +590,16 @@ function drawContoursOnMap(site) {
   if (site.context) {
     for (const z of site.context.floodZones || []) {
       if (!z.sfha && !z.shadedX) continue;
-      L.polygon(z.rings.map(r => r.map(ll)), { renderer, color: '#3b82f6', weight: 1, fillColor: z.floodway ? '#1d4ed8' : '#3b82f6', fillOpacity: z.shadedX ? 0.12 : 0.3, interactive: false }).addTo(groups.flood);
+      L.polygon(z.rings.map(r => r.map(ll)), { renderer, color: '#3b82f6', weight: 1.5, fill: false, interactive: false }).addTo(groups.flood);
+      for (const seg of z.hatch || []) L.polyline(seg.map(ll), { renderer, color: '#3b82f6', weight: z.shadedX ? 0.8 : 1, opacity: 0.85, interactive: false }).addTo(groups.flood);
     }
     for (const pc of site.context.parcels || []) {
       for (const l of pc.lines) L.polyline(l.map(ll), { renderer, color: '#ff4fd8', weight: 1.4, interactive: false }).addTo(groups.parcels);
     }
     for (const r of site.context.roads) {
-      L.polyline(r.center.map(ll), { renderer, color: r.kind === 'road' ? '#ffe066' : '#9be7ff', weight: r.kind === 'road' ? 2 : 1, dashArray: r.kind === 'road' ? null : '4 4', interactive: false }).addTo(groups.roads);
-      for (const e of r.edges) L.polyline(e.map(ll), { renderer, color: '#ffe066', weight: 0.8, opacity: 0.7, interactive: false }).addTo(groups.roads);
+      // Centerlines dashed; edges (solid) only if a source ever provides real ones.
+      L.polyline(r.center.map(ll), { renderer, color: r.kind === 'road' ? '#ffe066' : '#9be7ff', weight: r.kind === 'road' ? 2 : 1.2, dashArray: r.kind === 'road' ? '10 6' : '3 4', interactive: false }).addTo(groups.roads);
+      for (const e of r.edges) L.polyline(e.map(ll), { renderer, color: '#ffe066', weight: 1.4, interactive: false }).addTo(groups.roads);
     }
     for (const b of site.context.buildings) {
       L.polygon(b.ring.map(ll), { renderer, color: '#4fd1ff', weight: 1.5, fillColor: '#4fd1ff', fillOpacity: 0.15, interactive: false }).addTo(groups.buildings);
@@ -761,7 +773,8 @@ function addContext(d, site, v, labels) {
     }
   }
   if (site.ctxInclude.f && v.flood) {
-    d.layer('C-FLOD-ZONE', 5).layer('C-FLOD-BFE', 4).layer('C-FLOD-TEXT', 5);
+    d.layer('C-FLOD-ZONE', 5).layer('C-FLOD-PATT', 5).layer('C-FLOD-BFE', 4).layer('C-FLOD-TEXT', 5);
+    for (const z of site.context.floodZones) for (const l of z.hatch3d || []) d.polyline3d('C-FLOD-PATT', l.map(([x, y, zz]) => P(x, y, zz)));
     for (const z of site.context.floodZones) {
       for (const l of z.lines) d.polyline3d('C-FLOD-ZONE', l.map(([x, y, zz]) => P(x, y, zz)));
     }
@@ -778,11 +791,11 @@ function addContext(d, site, v, labels) {
       d.polyline3d(it.lines[0].layer, [[it.ax, it.ay, it.z], [it.x, it.y + (it.y > it.ay ? -total / 2 : total / 2), it.z]]);
     }
   }
-  if (v.roads) d.layer('C-ROAD-CNTR', 2).layer('C-ROAD-EDGE', 7).layer('C-WALK-CNTR', 5);
+  if (v.roads) d.layer('C-ROAD-CNTR', 2).layer('C-WALK-CNTR', 5);
   for (const r of v.roads ? site.context.roads : []) {
     const layer = r.kind === 'road' ? 'C-ROAD-CNTR' : 'C-WALK-CNTR';
     if (r.center.length > 1) d.polyline3d(layer, r.center.map(([x, y, z]) => P(x, y, z)));
-    for (const e of r.edges) d.polyline3d('C-ROAD-EDGE', e.map(([x, y, z]) => P(x, y, z)));
+    for (const e of r.edges) { d.layer('C-ROAD-EDGE', 7); d.polyline3d('C-ROAD-EDGE', e.map(([x, y, z]) => P(x, y, z))); }
   }
 }
 
@@ -886,9 +899,9 @@ function makeReadme(site, v = vis()) {
     ...(v.contours ? ['                 C-TOPO-MAJR / C-TOPO-MINR  index / intermediate contours; C-TOPO-TEXT labels'] : []),
     ...(v.points ? ['                 C-TOPO-PNTS  the CSV grid as 3D POINT entities'] : []),
     ...(v.buildings ? ['                 C-BLDG-OTLN  building footprints at the lowest ground point; A-MASS massing (3DFACE)'] : []),
-    ...(v.roads ? ['                 C-ROAD-CNTR / C-ROAD-EDGE  road centerlines / estimated edges, draped; C-WALK-CNTR paths'] : []),
+    ...(v.roads ? ['                 C-ROAD-CNTR  road centerlines, draped (no pavement edges: not published by the sources); C-WALK-CNTR paths'] : []),
     ...(v.parcels && site.ctxInclude.p ? ['                 C-PROP-LINE  parcel lines draped on terrain; C-PROP-TEXT parcel ID / owner'] : []),
-    ...(v.flood ? ['                 C-FLOD-ZONE  flood zone boundaries draped; C-FLOD-TEXT labels; C-FLOD-BFE lines AT the BFE'] : []),
+    ...(v.flood ? ['                 C-FLOD-ZONE  flood zone boundaries draped; C-FLOD-PATT hatch (floodway cross-hatched,', '                 SFHA single hatch, shaded X sparse); C-FLOD-TEXT labels; C-FLOD-BFE lines AT the BFE'] : []),
     '                 Link into Revit with import units set to the units above (not Auto-Detect).',
     '*_map.png        Printable map over aerial imagery with the same layers, grid-north up.',
     '',
@@ -910,8 +923,8 @@ function makeReadme(site, v = vis()) {
     }
     if (v.roads) {
       L_(`Roads:                ${roads.length} segments, ${site.context.roads.length - roads.length} paths, from ${site.roadsSource === 'tiger' ? 'US Census TIGER/Line (public domain)' : 'OpenStreetMap (© OpenStreetMap contributors, ODbL), via Esri\'s hosted OSM North America layer'}`,
-        `                      Edge lines use OSM width/lanes where tagged (${roads.filter(r => r.widthKnown).length} of ${roads.length}); otherwise a typical width`,
-        '                      by road type (e.g. residential 8 m, service 5 m, driveway 3.5 m). Bridges are draped on the ground.');
+        '                      CENTERLINES ONLY. None of these sources publish pavement edges, so no edge lines are drawn;',
+        '                      city/county GIS or a survey may have edge-of-pavement data. Bridges are draped on the ground.');
     }
     if (v.parcels && site.ctxInclude.p) {
       L_(`Parcels:              ${site.context.parcels.length} from the Arkansas GIS Office statewide parcel layer (CAMP / county assessor data).`,
