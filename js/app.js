@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.3.0';
-import { fetchElevation, sample } from './dem.js?v=0.3.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.3.0';
-import { Dxf } from './dxf.js?v=0.3.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.3.0';
-import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate } from './context.js?v=0.3.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.4.0';
+import { fetchElevation, sample } from './dem.js?v=0.4.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.4.0';
+import { Dxf } from './dxf.js?v=0.4.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.4.0';
+import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays } from './context.js?v=0.4.0';
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -172,7 +172,7 @@ function updateZoneHint() {
 function saveSettings() {
   store.set({
     units: units(), spacing: $('spacing').value, interval: $('interval').value,
-    localOrigin: $('local-origin').checked, smooth: $('smooth').checked, ctxBuildings: $('ctx-buildings').checked, ctxRoads: $('ctx-roads').checked,
+    localOrigin: $('local-origin').checked, smooth: $('smooth').checked, ctxBuildings: $('ctx-buildings').checked, ctxRoads: $('ctx-roads').checked, ctxParcels: $('ctx-parcels').checked, ctxFlood: $('ctx-flood').checked,
     zone: $('zone').value,
   });
 }
@@ -187,13 +187,15 @@ function restoreSettings() {
   if (typeof s.smooth === 'boolean') $('smooth').checked = s.smooth;
   if (typeof s.ctxBuildings === 'boolean') $('ctx-buildings').checked = s.ctxBuildings;
   if (typeof s.ctxRoads === 'boolean') $('ctx-roads').checked = s.ctxRoads;
+  if (typeof s.ctxParcels === 'boolean') $('ctx-parcels').checked = s.ctxParcels;
+  if (typeof s.ctxFlood === 'boolean') $('ctx-flood').checked = s.ctxFlood;
   if (s.zone && [...$('zone').options].some(o => o.value === s.zone)) $('zone').value = s.zone;
 }
 
 document.querySelectorAll('input[name="units"]').forEach(r => r.addEventListener('change', () => {
   fillUnitOptions(); onSiteChanged(false); saveSettings(); invalidate();
 }));
-['spacing', 'interval', 'local-origin', 'smooth', 'ctx-buildings', 'ctx-roads'].forEach(id => $(id).addEventListener('change', () => {
+['spacing', 'interval', 'local-origin', 'smooth', 'ctx-buildings', 'ctx-roads', 'ctx-parcels', 'ctx-flood'].forEach(id => $(id).addEventListener('change', () => {
   onSiteChanged(false); saveSettings(); invalidate();
 }));
 $('zone').addEventListener('change', () => { updateZoneHint(); onSiteChanged(false); saveSettings(); invalidate(); });
@@ -318,8 +320,16 @@ async function generate() {
     Math.max(...ll.map(q => q[0])) + margin, Math.max(...ll.map(q => q[1])) + margin];
 
   const wantB = $('ctx-buildings').checked, wantR = $('ctx-roads').checked;
-  const ctxFetch = (wantB || wantR)
-    ? Promise.allSettled([wantB ? fetchBuildings(bbox) : Promise.resolve([]), wantR ? fetchRoadsAny(bbox) : Promise.resolve({ roads: [], source: '' })])
+  const wantF = $('ctx-flood').checked;
+  const inArkansas = /^arkansas/i.test(zone.state);
+  const wantP = $('ctx-parcels').checked && inArkansas;
+  const ctxFetch = (wantB || wantR || wantP || wantF)
+    ? Promise.allSettled([
+      wantB ? fetchBuildings(bbox) : Promise.resolve([]),
+      wantR ? fetchRoadsAny(bbox) : Promise.resolve({ roads: [], source: '' }),
+      wantP ? fetchParcels(bbox) : Promise.resolve([]),
+      wantF ? fetchFlood(bbox) : Promise.resolve(null),
+    ])
     : null;
   const dem = await fetchElevation(bbox, 1, msg => setStatus(msg));
 
@@ -348,9 +358,10 @@ async function generate() {
   let context = null;
   let roadsSource = '';
   const contextNotes = [];
+  if ($('ctx-parcels').checked && !inArkansas) contextNotes.push('Parcels are only available for sites in Arkansas (statewide data from the Arkansas GIS Office).');
   if (ctxFetch) {
-    setStatus(wantB && wantR ? 'Adding buildings and roads…' : wantB ? 'Adding buildings…' : 'Adding roads…');
-    const [bRes, rRes] = await ctxFetch;
+    setStatus('Adding site context…');
+    const [bRes, rRes, pRes, fRes] = await ctxFetch;
     if (bRes.status === 'rejected') contextNotes.push(`Building footprints unavailable: ${bRes.reason?.message || bRes.reason}`);
     if (rRes.status === 'rejected') contextNotes.push(`Roads unavailable: ${rRes.reason?.message || rRes.reason}`);
     else if (rRes.value.note) contextNotes.push(rRes.value.note);
@@ -358,6 +369,16 @@ async function generate() {
     context = prepareContext(
       { buildings: bRes.status === 'fulfilled' ? bRes.value : [], roads: rRes.status === 'fulfilled' ? rRes.value.roads : [] },
       { fwd: p.fwd, box, zAt, nativePerM, zPerM });
+    if (pRes.status === 'rejected') contextNotes.push(pRes.reason?.message || String(pRes.reason));
+    if (fRes.status === 'rejected') contextNotes.push(fRes.reason?.message || String(fRes.reason));
+    // BFE values from FEMA are in their own unit (normally feet, NAVD88); convert to the output Z unit.
+    const bfeToOut = (v, unit) => {
+      const meters = /met/i.test(unit) ? v : v * 1200 / 3937;
+      return meters * zPerM;
+    };
+    Object.assign(context, prepareOverlays(
+      { parcels: pRes.status === 'fulfilled' ? pRes.value : [], flood: fRes.status === 'fulfilled' ? fRes.value : null },
+      { fwd: p.fwd, box, zAt, nativePerM, bfeToOut }));
     await tick();
   }
 
@@ -373,7 +394,7 @@ async function generate() {
   const now = new Date();
   const site = {
     zone, units: u, toOut, zPerM, spacingOut, interval, box, pts, pStats, grid: cgrid, stats: cStats, shade,
-    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR }, imagery, imageryCredit, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
+    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, imagery, imageryCredit, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
     tinted: false,
   };
   site.meta = buildMeta(site);
@@ -430,7 +451,7 @@ function buildMeta(site) {
       `North arrow: grid north; true north is ${fmt(Math.abs(site.convergence), 2)}° ${site.convergence >= 0 ? 'east' : 'west'} of grid north`,
       `Imagery: ${site.imagery ? site.imageryCredit : 'not available — hillshade shown'}`,
       `Generated ${site.generated.toISOString().slice(0, 10)} by Contours to Revit ${VERSION}`,
-      ...(site.context ? [[site.ctxInclude.b ? `Buildings: FEMA/ORNL USA Structures (${site.context.buildings.length})` : '', site.ctxInclude.r ? `Roads: ${site.roadsSource === 'tiger' ? 'US Census TIGER' : '© OpenStreetMap contributors'}` : ''].filter(Boolean).join('; ')] : []),
+      ...(site.context ? [[site.ctxInclude.b ? `Buildings: FEMA/ORNL USA Structures (${site.context.buildings.length})` : '', site.ctxInclude.r ? `Roads: ${site.roadsSource === 'tiger' ? 'US Census TIGER' : '© OpenStreetMap contributors'}` : '', site.ctxInclude.p ? 'Parcels: Arkansas GIS Office' : '', site.ctxInclude.f ? 'Flood: FEMA NFHL' : ''].filter(Boolean).join('; ')] : []),
     ],
   };
 }
@@ -467,6 +488,18 @@ function showResults(site) {
     const np = site.context.roads.length - nr;
     if (site.ctxInclude.b) html += `<div>${nb} building footprint${nb === 1 ? '' : 's'} (USA Structures${dates.length ? `, imagery ${escapeHtml(dates[0].slice(0, 4))}${dates.length > 1 && dates.at(-1).slice(0, 4) !== dates[0].slice(0, 4) ? '–' + escapeHtml(dates.at(-1).slice(0, 4)) : ''}` : ''}), ${nh} with height data</div>`;
     if (site.ctxInclude.r) html += `<div>${nr} road segment${nr === 1 ? '' : 's'}${np ? `, ${np} path${np === 1 ? '' : 's'}` : ''} (${site.roadsSource === 'tiger' ? 'US Census TIGER' : 'OpenStreetMap'})</div>`;
+    if (site.ctxInclude.p) {
+      const npc = site.context.parcels.length;
+      html += `<div>${npc} parcel${npc === 1 ? '' : 's'} (Arkansas GIS Office)</div>`;
+    }
+    if (site.ctxInclude.f) {
+      const fz = site.context.floodZones;
+      const sfha = fz.filter(z => z.sfha);
+      const zones = [...new Set(fz.map(z => z.zone + (z.floodway ? ' floodway' : z.shadedX ? ' (0.2%)' : '')))].sort();
+      html += fz.length
+        ? `<div>${sfha.length ? '<strong style="color:var(--warn)">Site is partly in a FEMA Special Flood Hazard Area.</strong> ' : ''}Flood zones: ${escapeHtml(zones.join(', '))}${site.context.bfes.length ? ` · ${site.context.bfes.length} BFE line${site.context.bfes.length === 1 ? '' : 's'}` : ''} (FEMA NFHL)</div>`
+        : '<div>No mapped FEMA flood zones on this site (NFHL) — the area may be unmapped; check the FIRM panel.</div>';
+    }
     for (const n of site.contextNotes) html += `<div class="warn" style="margin-top:6px">${escapeHtml(n)}</div>`;
   }
   src.innerHTML = html;
@@ -493,6 +526,13 @@ function drawContoursOnMap(site) {
     }
     for (const b of site.context.buildings) {
       L.polygon(b.ring.map(ll), { renderer, color: '#4fd1ff', weight: 1.5, fillColor: '#4fd1ff', fillOpacity: 0.15, interactive: false }).addTo(layer);
+    }
+    for (const z of site.context.floodZones || []) {
+      if (!z.sfha && !z.shadedX) continue;
+      L.polygon(z.rings.map(r => r.map(ll)), { renderer, color: '#3b82f6', weight: 1, fillColor: z.floodway ? '#1d4ed8' : '#3b82f6', fillOpacity: z.shadedX ? 0.12 : 0.3, interactive: false }).addTo(layer);
+    }
+    for (const pc of site.context.parcels || []) {
+      for (const l of pc.lines) L.polyline(l.map(ll), { renderer, color: '#ff4fd8', weight: 1.4, interactive: false }).addTo(layer);
     }
   }
   layer.addTo(map);
@@ -580,6 +620,34 @@ function makeContextDxf(site) {
     }
     for (const [i, j, k] of triangulate(ring)) {
       d.face3d('A-MASS', [P(...ring[i], b.top), P(...ring[j], b.top), P(...ring[k], b.top)]);
+    }
+  }
+  const h = labelHeight(site);
+  if (site.ctxInclude.p) {
+    d.layer('C-PROP-LINE', 6).layer('C-PROP-TEXT', 6);
+    for (const pc of site.context.parcels) {
+      for (const l of pc.lines) d.polyline3d('C-PROP-LINE', l.map(([x, y, z]) => P(x, y, z)));
+      if (pc.label && Number.isFinite(pc.label.z)) {
+        const [lx, ly] = outXY(site, pc.label.x, pc.label.y);
+        if (pc.id) d.text('C-PROP-TEXT', lx, ly + h * 0.7, pc.label.z, h * 0.8, pc.id);
+        if (pc.owner) d.text('C-PROP-TEXT', lx, ly - h * 0.7, pc.label.z, h * 0.6, pc.owner.slice(0, 60));
+      }
+    }
+  }
+  if (site.ctxInclude.f) {
+    d.layer('C-FLOD-ZONE', 5).layer('C-FLOD-BFE', 4).layer('C-FLOD-TEXT', 5);
+    for (const z of site.context.floodZones) {
+      for (const l of z.lines) d.polyline3d('C-FLOD-ZONE', l.map(([x, y, zz]) => P(x, y, zz)));
+      if (Number.isFinite(z.label.z)) {
+        const [lx, ly] = outXY(site, z.label.x, z.label.y);
+        d.text('C-FLOD-TEXT', lx, ly, z.label.z, h, z.text);
+      }
+    }
+    for (const b of site.context.bfes) {
+      d.polyline3d('C-FLOD-BFE', b.line.map(([x, y, z]) => P(x, y, z)));
+      const mid = b.line[Math.floor(b.line.length / 2)];
+      const [lx, ly] = outXY(site, mid[0], mid[1]);
+      d.text('C-FLOD-TEXT', lx, ly + h, b.elevOut, h * 0.8, `BFE ${b.elev}`);
     }
   }
   for (const r of site.context.roads) {
@@ -694,6 +762,9 @@ function makeReadme(site) {
     '                 C-ROAD-CNTR  road centerlines draped on the terrain',
     '                 C-ROAD-EDGE  estimated road edges (offset from centerline; see widths below)',
     '                 C-WALK-CNTR  footpaths / trails / cycleways (centerlines)',
+    '                 C-PROP-LINE  parcel lines draped on terrain; C-PROP-TEXT parcel ID / owner',
+    '                 C-FLOD-ZONE  FEMA flood zone boundaries draped on terrain; C-FLOD-TEXT zone labels',
+    '                 C-FLOD-BFE   FEMA base flood elevation lines, drawn AT the BFE elevation',
     '*_map.png        Printable contour map over aerial imagery, grid-north up.',
     '',
     `Map imagery: ${site.imagery ? site.imageryCredit : 'none (hillshade shown)'}.`,
@@ -716,6 +787,18 @@ function makeReadme(site) {
       L_(`Roads:                ${roads.length} segments, ${site.context.roads.length - roads.length} paths, from ${site.roadsSource === 'tiger' ? 'US Census TIGER/Line (public domain)' : 'OpenStreetMap (© OpenStreetMap contributors, ODbL), via Esri\'s hosted OSM North America layer'}`,
         `                      Edge lines use OSM width/lanes where tagged (${roads.filter(r => r.widthKnown).length} of ${roads.length}); otherwise a typical width`,
         '                      by road type (e.g. residential 8 m, service 5 m, driveway 3.5 m). Bridges are draped on the ground.');
+    }
+    if (site.ctxInclude.p) {
+      L_(`Parcels:              ${site.context.parcels.length} from the Arkansas GIS Office statewide parcel layer (CAMP / county assessor data).`,
+        '                      Assessor parcel lines are NOT boundary survey lines; offsets of several feet are common.');
+    }
+    if (site.ctxInclude.f) {
+      const fz = site.context.floodZones;
+      const dfirms = [...new Set(fz.map(z => z.dfirm).filter(Boolean))];
+      L_(`Flood zones:          ${fz.length ? [...new Set(fz.map(z => z.text))].join('; ') : 'none mapped on this site'}`,
+        '                      Source: FEMA National Flood Hazard Layer (NFHL), https://hazards.fema.gov/',
+        `                      ${dfirms.length ? `FIRM database(s): ${dfirms.join(', ')}. ` : ''}Confirm against the effective FIRM panel and any LOMRs.`,
+        `                      BFE lines: ${site.context.bfes.length}${site.context.bfes.length ? ` (values as published, ${site.context.bfes[0].unit || 'feet'} ${site.context.bfes[0].datum || ''}`.trimEnd() + ')' : ''}.`);
     }
     for (const n of site.contextNotes) L_(`Note:                 ${n}`);
     L_('');

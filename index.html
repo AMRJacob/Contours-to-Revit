@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.3.0">
+  <link rel="stylesheet" href="css/app.css?v=0.4.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -84,6 +84,14 @@
             <input type="checkbox" id="ctx-roads" checked>
             <span><strong>Roads</strong> — centerlines &amp; estimated edges (OpenStreetMap; Census TIGER as backup)</span>
           </label>
+          <label class="check">
+            <input type="checkbox" id="ctx-parcels" checked>
+            <span><strong>Parcels</strong> — property lines with parcel ID &amp; owner (Arkansas sites only, Arkansas GIS Office)</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="ctx-flood" checked>
+            <span><strong>Flood zones</strong> — FEMA flood hazard zones, floodway &amp; base flood elevation lines</span>
+          </label>
         </div>
         <label class="check">
           <input type="checkbox" id="smooth" checked>
@@ -108,7 +116,7 @@
         <div class="downloads">
           <button class="dl dl-main" data-out="csv"><span class="dl-name">Points CSV</span><span class="dl-desc">X,Y,Z for Toposolid &ldquo;Create from points file&rdquo;</span></button>
           <button class="dl" data-out="dxf-contours"><span class="dl-name">Contours DXF</span><span class="dl-desc">3D polylines, major/minor layers, labels</span></button>
-          <button class="dl" data-out="dxf-context" hidden><span class="dl-name">Context DXF</span><span class="dl-desc">Buildings &amp; massing and/or roads, draped on terrain</span></button>
+          <button class="dl" data-out="dxf-context" hidden><span class="dl-name">Context DXF</span><span class="dl-desc">Buildings, roads, parcels &amp; flood zones on separate layers</span></button>
           <button class="dl" data-out="dxf-points"><span class="dl-name">Points DXF</span><span class="dl-desc">Same grid as the CSV, as 3D points</span></button>
           <button class="dl" data-out="png"><span class="dl-name">Contour map PNG</span><span class="dl-desc">Over aerial, with north arrow &amp; scale</span></button>
           <button class="dl" data-out="readme"><span class="dl-name">README.txt</span><span class="dl-desc">Source, datum, zone, units, disclaimer</span></button>
@@ -145,6 +153,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.3.0"></script>
+  <script type="module" src="js/app.js?v=0.4.0"></script>
 </body>
 </html>

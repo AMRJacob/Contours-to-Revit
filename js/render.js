@@ -1,5 +1,5 @@
 // Canvas rendering for the on-screen preview and the printable PNG contour map.
-import { labelPositions, isMajor } from './contours.js?v=0.3.0';
+import { labelPositions, isMajor } from './contours.js?v=0.4.0';
 
 /** Hillshade (0..1) for a grid; azimuth 315°, altitude 45°. */
 export function hillshade(g, zFactor = 1) {
@@ -143,6 +143,19 @@ export function drawMap(canvas, site, mode = 'preview') {
       if (close) ctx.closePath();
     };
     ctx.setLineDash([]);
+    // FEMA flood zones: translucent blue (darker for floodway, light for 0.2% chance).
+    for (const z of site.context.floodZones || []) {
+      if (!z.sfha && !z.shadedX) continue;
+      ctx.beginPath();
+      for (const r of z.rings) { r.forEach(([x, y], i) => (i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y)))); ctx.closePath(); }
+      ctx.fillStyle = z.floodway ? 'rgba(29,78,216,0.38)' : z.shadedX ? 'rgba(59,130,246,0.14)' : 'rgba(59,130,246,0.28)';
+      ctx.fill('evenodd');
+      ctx.lineWidth = 1.6 * px; ctx.strokeStyle = 'rgba(37,99,235,0.95)'; ctx.stroke();
+    }
+    // Parcels: magenta property lines.
+    for (const pc of site.context.parcels || []) {
+      for (const l of pc.lines) { path(l); ctx.lineWidth = 1.4 * px; ctx.strokeStyle = onImagery ? '#ff4fd8' : '#a3157f'; ctx.stroke(); }
+    }
     for (const r of site.context.roads) {
       for (const e of r.edges) { path(e); ctx.lineWidth = 1.4 * px; ctx.strokeStyle = onImagery ? 'rgba(255,224,102,0.95)' : 'rgba(90,70,20,0.9)'; ctx.stroke(); }
       path(r.center);
@@ -160,6 +173,18 @@ export function drawMap(canvas, site, mode = 'preview') {
       ctx.strokeStyle = onImagery ? '#4fd1ff' : '#1d2a33';
       ctx.stroke();
     }
+  }
+
+  // Parcel IDs and flood zone labels
+  if (site.context) {
+    const tag = (text, x, y, fg, size) => {
+      ctx.font = `600 ${Math.round(size * px)}px "IBM Plex Sans", system-ui, sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 3 * px; ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.strokeText(text, X(x), Y(y));
+      ctx.fillStyle = fg; ctx.fillText(text, X(x), Y(y));
+    };
+    for (const pc of site.context.parcels || []) if (pc.label && pc.id) tag(pc.id, pc.label.x, pc.label.y, '#ffd1f5', print ? 10 : 9);
+    for (const z of site.context.floodZones || []) if (z.sfha || z.shadedX) tag(z.text, z.label.x, z.label.y, '#cfe0ff', print ? 12 : 10);
   }
 
   // Labels on major contours

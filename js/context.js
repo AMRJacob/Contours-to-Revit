@@ -328,3 +328,196 @@ export async function fetchRoadsAny(bbox) {
   const roads = await fetchRoadsTiger(bbox);
   return { roads, source: 'tiger', note: `OpenStreetMap roads unavailable (${fails.join('; ')}). Used US Census TIGER roads instead (street centerlines only, less precise).` };
 }
+
+// ---------- Parcels (Arkansas GIS Office, statewide CAMP parcels) ----------
+const AR_PARCELS = 'https://gis.arkansas.gov/arcgis/rest/services/FEATURESERVICES/Planning_Cadastre/FeatureServer/6';
+
+async function arcgisQueryAll(url, [w, s, e, n], outFields, pageSize = 1000) {
+  const out = [];
+  let offset = 0;
+  for (let page = 0; page < 20; page++) {
+    const params = new URLSearchParams({
+      geometry: `${w},${s},${e},${n}`, geometryType: 'esriGeometryEnvelope', inSR: '4326', outSR: '4326',
+      spatialRel: 'esriSpatialRelIntersects', outFields, returnGeometry: 'true', geometryPrecision: '8',
+      resultOffset: String(offset), resultRecordCount: String(pageSize), f: 'json',
+    });
+    const r = await fetch(`${url}/query?${params}`, { signal: AbortSignal.timeout(25000) });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error.message || 'query failed');
+    out.push(...(j.features || []));
+    if (!j.exceededTransferLimit || !(j.features || []).length) break;
+    offset += j.features.length;
+  }
+  return out;
+}
+
+const pick = (a, re) => {
+  const k = Object.keys(a).find(key => re.test(key) && a[key] !== null && a[key] !== '');
+  return k ? a[k] : '';
+};
+
+/** Arkansas parcels. Returns [{rings, id, owner, acres, attrs}]. */
+export async function fetchParcels(bbox) {
+  let feats;
+  try {
+    feats = await arcgisQueryAll(AR_PARCELS, bbox, '*', 500);
+  } catch (err) {
+    throw new Error(`Arkansas parcel service (gis.arkansas.gov) unavailable: ${err.message === 'Failed to fetch' ? 'no response' : err.message}`);
+  }
+  return feats.filter(f => f.geometry?.rings?.length).map(f => {
+    const a = f.attributes;
+    const acres = parseFloat(pick(a, /acre/i));
+    return {
+      rings: f.geometry.rings,
+      id: String(pick(a, /^(parcel_?id|parcelid|parcel_?num|pin|parcelno)$/i) || pick(a, /parcel/i) || ''),
+      owner: String(pick(a, /owner/i) || ''),
+      acres: Number.isFinite(acres) ? acres : null,
+    };
+  });
+}
+
+// ---------- FEMA National Flood Hazard Layer ----------
+const NFHL = 'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer';
+
+/** Flood hazard zones (layer 28) and base flood elevation lines (layer 16). */
+export async function fetchFlood(bbox) {
+  let zones, bfes;
+  try {
+    [zones, bfes] = await Promise.all([
+      arcgisQueryAll(`${NFHL}/28`, bbox, 'FLD_ZONE,ZONE_SUBTY,SFHA_TF,STATIC_BFE,LEN_UNIT,V_DATUM,DFIRM_ID', 1000),
+      arcgisQueryAll(`${NFHL}/16`, bbox, 'ELEV,LEN_UNIT,V_DATUM,DFIRM_ID', 1000),
+    ]);
+  } catch (err) {
+    throw new Error(`FEMA flood map service unavailable: ${err.message === 'Failed to fetch' ? 'no response' : err.message}`);
+  }
+  return {
+    zones: zones.filter(f => f.geometry?.rings?.length).map(f => {
+      const a = f.attributes;
+      return {
+        rings: f.geometry.rings, zone: a.FLD_ZONE || '', subtype: a.ZONE_SUBTY || '', sfha: a.SFHA_TF === 'T',
+        bfe: a.STATIC_BFE > -9000 ? a.STATIC_BFE : null, unit: a.LEN_UNIT || '', datum: a.V_DATUM || '', dfirm: a.DFIRM_ID || '',
+      };
+    }),
+    bfes: bfes.filter(f => f.geometry?.paths?.length).map(f => ({
+      paths: f.geometry.paths, elev: f.attributes.ELEV, unit: f.attributes.LEN_UNIT || 'Feet', datum: f.attributes.V_DATUM || '',
+    })),
+  };
+}
+
+export function floodLabel(z) {
+  let s = `ZONE ${z.zone}`;
+  if (/floodway/i.test(z.subtype)) s += ' FLOODWAY';
+  else if (/0\.2/.test(z.subtype)) s = 'SHADED X (0.2% ANNUAL CHANCE)';
+  if (z.bfe !== null) s += ` (EL ${z.bfe})`;
+  return s;
+}
+
+// ---------- polygon helpers ----------
+
+/** Sutherland–Hodgman clip of a ring to an axis-aligned box. */
+export function clipRing(ring, { xmin, ymin, xmax, ymax }) {
+  let pts = ring;
+  const edges = [
+    [p => p[0] >= xmin, (a, b) => { const t = (xmin - a[0]) / (b[0] - a[0]); return [xmin, a[1] + t * (b[1] - a[1])]; }],
+    [p => p[0] <= xmax, (a, b) => { const t = (xmax - a[0]) / (b[0] - a[0]); return [xmax, a[1] + t * (b[1] - a[1])]; }],
+    [p => p[1] >= ymin, (a, b) => { const t = (ymin - a[1]) / (b[1] - a[1]); return [a[0] + t * (b[0] - a[0]), ymin]; }],
+    [p => p[1] <= ymax, (a, b) => { const t = (ymax - a[1]) / (b[1] - a[1]); return [a[0] + t * (b[0] - a[0]), ymax]; }],
+  ];
+  for (const [inside, cut] of edges) {
+    const out = [];
+    for (let i = 0; i < pts.length; i++) {
+      const cur = pts[i], prev = pts[(i + pts.length - 1) % pts.length];
+      const ci = inside(cur), pi = inside(prev);
+      if (ci) { if (!pi) out.push(cut(prev, cur)); out.push(cur); } else if (pi) out.push(cut(prev, cur));
+    }
+    pts = out;
+    if (!pts.length) break;
+  }
+  return pts;
+}
+
+export function pointInRing([x, y], ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+function ringArea2(r) {
+  let a = 0;
+  for (let i = 0; i < r.length; i++) { const [x0, y0] = r[i], [x1, y1] = r[(i + 1) % r.length]; a += x0 * y1 - x1 * y0; }
+  return a / 2;
+}
+
+/** A label point inside the part of a polygon that falls within the box (or null). */
+export function labelPoint(rings, box) {
+  let best = null;
+  for (const r of rings) {
+    const c = clipRing(r, box);
+    if (c.length < 3) continue;
+    const A = Math.abs(ringArea2(c));
+    if (!best || A > best.A) best = { c, A };
+  }
+  if (!best || best.A <= 0) return null;
+  const { c } = best;
+  let cx = 0, cy = 0, a = 0;
+  for (let i = 0; i < c.length; i++) {
+    const [x0, y0] = c[i], [x1, y1] = c[(i + 1) % c.length];
+    const k = x0 * y1 - x1 * y0;
+    a += k; cx += (x0 + x1) * k; cy += (y0 + y1) * k;
+  }
+  let p = [cx / (3 * a), cy / (3 * a)];
+  const inAll = q => { let n = 0; for (const r of rings) if (pointInRing(q, r)) n++; return n % 2 === 1; };
+  if (!inAll(p)) {
+    // Scan a few horizontal lines through the clipped piece for an interior point.
+    const ys = c.map(q => q[1]); const y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const xs = c.map(q => q[0]); const x0 = Math.min(...xs), x1 = Math.max(...xs);
+    p = null;
+    for (let k = 1; k < 10 && !p; k++) for (let m = 1; m < 20 && !p; m++) {
+      const q = [x0 + (x1 - x0) * m / 20, y0 + (y1 - y0) * k / 10];
+      if (inAll(q) && pointInRing(q, c)) p = q;
+    }
+  }
+  return p ? { x: p[0], y: p[1], area: best.A } : null;
+}
+
+/**
+ * Project parcels and flood data into the zone; boundary lines are clipped to the site and draped.
+ * Returns { parcels: [{lines, label, rings}], floodZones: [{lines, rings, label, zone, sfha, floodway}], bfes: [{lines, elev}] }.
+ */
+export function prepareOverlays({ parcels = [], flood = null }, { fwd, box, zAt, nativePerM, bfeToOut }) {
+  const step = 1.5 * nativePerM;
+  const drape = pts => pts.map(([x, y]) => [x, y, zAt(x, y)]).filter(q => Number.isFinite(q[2]));
+  const outline = rings => rings.flatMap(r => clipPolyline(densify([...r, r[0]], step), box).map(drape)).filter(l => l.length > 1);
+  const proj = rings => rings.map(r => openRing(r.map(c => fwd(c)))).filter(r => r.length > 2);
+  const outP = [];
+  for (const p of parcels) {
+    const rings = proj(p.rings);
+    const lines = outline(rings);
+    if (!lines.length && !rings.some(r => r.some(([x, y]) => x >= box.xmin && x <= box.xmax && y >= box.ymin && y <= box.ymax))) continue;
+    const lp = labelPoint(rings, box);
+    outP.push({ rings, lines, id: p.id, owner: p.owner, acres: p.acres, label: lp && { ...lp, z: zAt(lp.x, lp.y) } });
+  }
+  const outZ = [], outBfe = [];
+  if (flood) {
+    for (const z of flood.zones) {
+      const rings = proj(z.rings);
+      const lp = labelPoint(rings, box);
+      if (!lp) continue; // zone does not reach into the site
+      outZ.push({ rings, lines: outline(rings), zone: z.zone, sfha: z.sfha, floodway: /floodway/i.test(z.subtype), shadedX: /0\.2/.test(z.subtype),
+        text: floodLabel(z), dfirm: z.dfirm, label: { ...lp, z: zAt(lp.x, lp.y) } });
+    }
+    for (const b of flood.bfes) {
+      for (const path of b.paths) {
+        for (const piece of clipPolyline(path.map(c => fwd(c)), box)) {
+          const elevOut = bfeToOut(b.elev, b.unit);
+          // BFE lines are drawn AT the base flood elevation, not on the ground.
+          outBfe.push({ line: densify(piece, step).map(([x, y]) => [x, y, elevOut]), elev: b.elev, elevOut, unit: b.unit, datum: b.datum });
+        }
+      }
+    }
+  }
+  return { parcels: outP, floodZones: outZ, bfes: outBfe };
+}
