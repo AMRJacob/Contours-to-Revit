@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.6.0">
+  <link rel="stylesheet" href="css/app.css?v=0.7.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -74,6 +74,14 @@
           <input type="checkbox" id="local-origin">
           <span><strong>Use a local origin</strong> — subtract a base point from X/Y so Revit doesn't get coordinates millions of feet from its origin.</span>
         </label>
+        <div class="origin-row">
+          <button id="pick-origin" class="btn" type="button">
+            <svg viewBox="0 0 20 20" aria-hidden="true" style="stroke-dasharray:none"><circle cx="10" cy="10" r="4"/><path d="M10 1v5M10 14v5M1 10h5M14 10h5"/></svg>
+            Pick on map
+          </button>
+          <button id="reset-origin" class="btn btn-quiet" type="button" hidden>Use SW corner</button>
+        </div>
+        <p class="hint" id="origin-hint">Origin: south-west corner of the site, rounded to 100.</p>
         <p class="hint">Buildings, roads, parcels (Arkansas) and FEMA flood zones are gathered automatically. Turn layers on and off in the map's <strong>Layers</strong> panel — the preview, PNG and DXF include only what's shown.</p>
         <label class="check">
           <input type="checkbox" id="smooth" checked>
@@ -134,6 +142,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.6.0"></script>
+  <script type="module" src="js/app.js?v=0.7.0"></script>
 </body>
 </html>

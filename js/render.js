@@ -1,6 +1,6 @@
 // Canvas rendering for the on-screen preview and the printable PNG contour map.
-import { BUILDING_SOURCES } from './context.js?v=0.6.0';
-import { labelPositions, isMajor } from './contours.js?v=0.6.0';
+import { BUILDING_SOURCES } from './context.js?v=0.7.0';
+import { labelPositions, isMajor } from './contours.js?v=0.7.0';
 
 /** Hillshade (0..1) for a grid; azimuth 315°, altitude 45°. */
 export function hillshade(g, zFactor = 1) {
@@ -184,6 +184,19 @@ export function drawMap(canvas, site, mode = 'preview') {
         ctx.stroke();
       }
     }
+  }
+
+  // Local origin marker (0,0 of the exported files)
+  if (site.originNative) {
+    const ox0 = X(site.originNative[0]), oy0 = Y(site.originNative[1]);
+    ctx.save();
+    ctx.lineWidth = 3.5 * px; ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.beginPath(); ctx.arc(ox0, oy0, 7 * px, 0, Math.PI * 2); ctx.moveTo(ox0 - 14 * px, oy0); ctx.lineTo(ox0 + 14 * px, oy0); ctx.moveTo(ox0, oy0 - 14 * px); ctx.lineTo(ox0, oy0 + 14 * px); ctx.stroke();
+    ctx.lineWidth = 1.8 * px; ctx.strokeStyle = '#e8913f'; ctx.stroke();
+    ctx.font = `700 ${Math.round(10 * px)}px system-ui, sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+    ctx.lineWidth = 3 * px; ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.strokeText('0,0', ox0 + 9 * px, oy0 - 6 * px);
+    ctx.fillStyle = '#ffd6a8'; ctx.fillText('0,0', ox0 + 9 * px, oy0 - 6 * px);
+    ctx.restore();
   }
 
   // ---- Labels, placed with collision avoidance ----

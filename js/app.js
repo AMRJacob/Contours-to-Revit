@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.6.0';
-import { fetchElevation, sample } from './dem.js?v=0.6.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.6.0';
-import { Dxf } from './dxf.js?v=0.6.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.6.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.6.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.7.0';
+import { fetchElevation, sample } from './dem.js?v=0.7.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.7.0';
+import { Dxf } from './dxf.js?v=0.7.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.7.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.7.0';
 
-const VERSION = '0.6.0';
+const VERSION = '0.7.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -191,7 +191,8 @@ function restoreSettings() {
 document.querySelectorAll('input[name="units"]').forEach(r => r.addEventListener('change', () => {
   fillUnitOptions(); onSiteChanged(false); saveSettings(); invalidate();
 }));
-['spacing', 'interval', 'local-origin', 'smooth'].forEach(id => $(id).addEventListener('change', () => {
+$('local-origin').addEventListener('change', () => { saveSettings(); applyOrigin(); });
+['spacing', 'interval', 'smooth'].forEach(id => $(id).addEventListener('change', () => {
   onSiteChanged(false); saveSettings(); invalidate();
 }));
 $('zone').addEventListener('change', () => { updateZoneHint(); onSiteChanged(false); saveSettings(); invalidate(); });
@@ -402,10 +403,7 @@ async function generate() {
 
   const conv = convergence(zone, c.lng, c.lat);
   const shade = hillshade(cgrid, 1 / toOut); // z (output units) -> native XY units
-  let base = [0, 0];
-  if ($('local-origin').checked) {
-    base = [Math.floor(pts.x0 * toOut / 100) * 100, Math.floor(pts.y0 * toOut / 100) * 100];
-  }
+  const base = baseFor(zone, toOut, pts);
   const now = new Date();
   const site = {
     zone, units: u, toOut, zPerM, spacingOut, interval, box, pts, pStats, grid: cgrid, stats: cStats, shade,
@@ -417,6 +415,7 @@ async function generate() {
 
   showResults(site);
   drawContoursOnMap(site);
+  applyOrigin();
   renderPreview();
   const missing = pStats.missing;
   setStatus(missing
@@ -736,6 +735,25 @@ function makeDxf(site, v) {
   if (v.contours) addContours(d, site, labels.boxes, v.labels !== false);
   if (site.context) addContext(d, site, v, labels);
   if (v.points) addPoints(d, site);
+  if (site.base[0] || site.base[1]) {
+    // Origin marker at (0,0): a cross and circle on C-ORIG, at ground level, labelled with its State Plane values.
+    const h = labelHeight(site);
+    const ox = site.base[0] / site.toOut, oy = site.base[1] / site.toOut;
+    const [lon, lat] = projector(site.zone).inv([ox, oy]);
+    let z = sample(site.dem, lon, lat) * site.zPerM;
+    if (!Number.isFinite(z)) z = site.pStats.min;
+    d.layer('C-ORIG', 1);
+    const r = h * 2;
+    d.polyline3d('C-ORIG', [[-r * 2, 0, z], [r * 2, 0, z]]);
+    d.polyline3d('C-ORIG', [[0, -r * 2, z], [0, r * 2, z]]);
+    const circ = []; for (let i = 0; i < 24; i++) { const a = i / 24 * Math.PI * 2; circ.push([r * Math.cos(a), r * Math.sin(a), z]); }
+    d.polyline3d('C-ORIG', circ, true);
+    if (v.labels !== false) {
+      d.text('C-ORIG', r * 2.2 + textW('LOCAL ORIGIN 0,0', h) / 2, r * 0.9, z, h, 'LOCAL ORIGIN 0,0');
+      const t2 = `= E ${site.base[0].toFixed(3)} N ${site.base[1].toFixed(3)} (EPSG:${site.zone.code})`;
+      d.text('C-ORIG', r * 2.2 + textW(t2, h * 0.7) / 2, -r * 0.4, z, h * 0.7, t2);
+    }
+  }
   return d.toString();
 }
 
@@ -896,9 +914,12 @@ function makeReadme(site, v = vis()) {
     `Vertical units:       ${unitName}`);
   if (z.note) L_(`Note:                 ${z.note}.`);
   if (site.base[0] || site.base[1]) {
-    L_(`LOCAL ORIGIN:         X/Y have the base point (${site.base[0]}, ${site.base[1]}) ${u} SUBTRACTED.`,
-      '                      Add it back to recover true State Plane coordinates.',
-      '                      In Revit, you can place the Survey Point at this base point.');
+    L_(`LOCAL ORIGIN:         X/Y have the base point (${site.base[0].toFixed(3)}, ${site.base[1].toFixed(3)}) ${u} SUBTRACTED.`,
+      `                      ${state.origin && site.originPicked ? `Picked on the map: ${state.origin.label} (${state.origin.lat.toFixed(7)}, ${state.origin.lon.toFixed(7)}).` : 'South-west corner of the site, rounded down to 100.'}`,
+      '                      (0,0) in these files = that point. Add the base point back to recover true State Plane',
+      '                      coordinates. In Revit: link/import "Auto - Origin to Origin" so (0,0) lands on the Internal',
+      '                      Origin; to report real coordinates, set the Survey Point to the base point values above.',
+      '                      The DXF marks the origin on layer C-ORIG.');
   } else {
     L_('Local origin:         none — X/Y are true State Plane coordinates.');
   }
@@ -1033,6 +1054,138 @@ document.querySelectorAll('.dl').forEach(b => b.addEventListener('click', async 
   }
 }));
 
+// ---------- Local origin: pick on the map with snapping ----------
+state.origin = null; // { lat, lon, label }
+let originMarker = null;
+
+/** Base point (output units) subtracted from X/Y. */
+function baseFor(zone, toOut, pts) {
+  if (!$('local-origin').checked) return [0, 0];
+  if (state.origin) {
+    const [x, y] = projector(zone).fwd([state.origin.lon, state.origin.lat]);
+    return [x * toOut, y * toOut];
+  }
+  return [Math.floor(pts.x0 * toOut / 100) * 100, Math.floor(pts.y0 * toOut / 100) * 100];
+}
+
+function applyOrigin() {
+  const on = $('local-origin').checked;
+  $('reset-origin').hidden = !state.origin;
+  const site = state.result;
+  if (site) {
+    site.base = baseFor(site.zone, site.toOut, site.pts);
+    site.originPicked = !!state.origin && on;
+    site.originNative = on ? [site.base[0] / site.toOut, site.base[1] / site.toOut] : null;
+  }
+  const u = site ? site.units : units();
+  if (!on) $('origin-hint').textContent = 'Off — X/Y are true State Plane coordinates.';
+  else if (state.origin) {
+    $('origin-hint').textContent = site
+      ? `Origin: ${state.origin.label} — E ${fmt(site.base[0], 3)}, N ${fmt(site.base[1], 3)} ${u} (State Plane).`
+      : `Origin: ${state.origin.label} (${state.origin.lat.toFixed(6)}, ${state.origin.lon.toFixed(6)}).`;
+  } else {
+    $('origin-hint').textContent = site
+      ? `Origin: south-west corner, rounded — E ${fmt(site.base[0], 0)}, N ${fmt(site.base[1], 0)} ${u}.`
+      : 'Origin: south-west corner of the site, rounded to 100.';
+  }
+  if (originMarker) { map.removeLayer(originMarker); originMarker = null; }
+  if (on && (state.origin || site)) {
+    let ll = state.origin ? [state.origin.lat, state.origin.lon] : null;
+    if (!ll && site) { const [lon, lat] = projector(site.zone).inv(site.originNative); ll = [lat, lon]; }
+    if (ll) {
+      originMarker = L.marker(ll, { interactive: false, keyboard: false, icon: L.divIcon({ className: 'origin-icon', iconSize: [28, 28], iconAnchor: [14, 14],
+        html: '<svg width="28" height="28" viewBox="0 0 28 28"><circle cx="14" cy="14" r="6" fill="none" stroke="#fff" stroke-width="3"/><circle cx="14" cy="14" r="6" fill="none" stroke="#e8913f" stroke-width="1.6"/><path d="M14 0v9M14 19v9M0 14h9M19 14h9" stroke="#e8913f" stroke-width="1.6"/></svg>' }) }).addTo(map);
+    }
+  }
+  if (!$('preview').hidden) renderPreview();
+}
+
+const pick = { active: false, corners: [], segs: [], hover: null, dot: null };
+
+/** Snap targets from the visible layers of the last result, in lat/lon. */
+function buildSnapTargets() {
+  pick.corners = []; pick.segs = [];
+  const site = state.result;
+  if (!site?.context) return;
+  const p = projector(site.zone);
+  const ll = ([x, y]) => { const [lon, lat] = p.inv([x, y]); return L.latLng(lat, lon); };
+  const v = vis();
+  const addRing = (ring, label, closed = true) => {
+    const pts = ring.map(ll);
+    pts.forEach(q => pick.corners.push({ ll: q, label: `Corner — ${label}` }));
+    for (let i = 0; i < pts.length - (closed ? 0 : 1); i++) pick.segs.push({ a: pts[i], b: pts[(i + 1) % pts.length], label: `Edge — ${label}` });
+  };
+  for (const src of BUILDING_SOURCES) if (v[src.key]) for (const b of site.context[src.key] || []) addRing(b.ring, src.label);
+  if (v.parcels) for (const pc of site.context.parcels || []) for (const r of pc.rings) addRing(r, `Parcel ${pc.id || ''}`.trim());
+  if (v.roads) for (const r of site.context.roads) {
+    const pts = r.center.map(ll);
+    for (let i = 0; i + 1 < pts.length; i++) pick.segs.push({ a: pts[i], b: pts[i + 1], label: `Road centerline${r.name ? ' — ' + r.name : ''}` });
+  }
+}
+
+function snapAt(cp) {
+  const P = q => map.latLngToContainerPoint(q);
+  let best = null, bd = 12;
+  for (const c of pick.corners) { const d = P(c.ll).distanceTo(cp); if (d < bd) { bd = d; best = { ll: c.ll, label: c.label }; } }
+  if (best) return best;
+  bd = 8;
+  for (const sg of pick.segs) {
+    const a = P(sg.a), b = P(sg.b);
+    const dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy;
+    const t = L2 ? Math.max(0, Math.min(1, ((cp.x - a.x) * dx + (cp.y - a.y) * dy) / L2)) : 0;
+    const q = L.point(a.x + t * dx, a.y + t * dy);
+    const d = q.distanceTo(cp);
+    if (d < bd) { bd = d; best = { ll: map.containerPointToLatLng(q), label: sg.label }; }
+  }
+  return best;
+}
+
+function startPick() {
+  if (pick.active) return stopPick();
+  if (!$('preview').hidden) document.querySelector('.tab[data-view="map"]').click();
+  pick.active = true;
+  buildSnapTargets();
+  map.getContainer().classList.add('picking');
+  $('pick-origin').classList.add('active');
+  setStatus(pick.corners.length || pick.segs.length
+    ? 'Click the map to set the origin — snaps to corners and lines of the shown layers. Esc to cancel.'
+    : 'Click the map to set the origin (generate first to snap to buildings, parcels and roads). Esc to cancel.');
+}
+
+function stopPick() {
+  pick.active = false;
+  map.getContainer().classList.remove('picking');
+  $('pick-origin').classList.remove('active');
+  if (pick.dot) { map.removeLayer(pick.dot); pick.dot = null; }
+}
+
+map.on('mousemove', e => {
+  if (!pick.active) return;
+  const snap = snapAt(e.containerPoint);
+  pick.hover = snap;
+  const at = snap ? snap.ll : e.latlng;
+  if (!pick.dot) pick.dot = L.circleMarker(at, { radius: 6, color: '#e8913f', weight: 2, fillColor: '#fff', fillOpacity: 0.9, interactive: false }).addTo(map);
+  pick.dot.setLatLng(at);
+  pick.dot.unbindTooltip();
+  if (snap) pick.dot.bindTooltip(snap.label, { permanent: true, direction: 'right', offset: [8, 0], className: 'snap-tip' }).openTooltip();
+});
+
+map.on('click', e => {
+  if (!pick.active) return;
+  const snap = snapAt(e.containerPoint);
+  const at = snap ? snap.ll : e.latlng;
+  state.origin = { lat: at.lat, lon: at.lng, label: snap ? snap.label : 'Picked point (no snap)' };
+  $('local-origin').checked = true;
+  saveSettings();
+  stopPick();
+  applyOrigin();
+  setStatus('Origin set. Downloads now use it as (0,0) — no need to generate again.');
+});
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && pick.active) { stopPick(); setStatus('Origin pick cancelled.'); } });
+$('pick-origin').addEventListener('click', startPick);
+$('reset-origin').addEventListener('click', () => { state.origin = null; applyOrigin(); setStatus('Origin reset to the south-west corner of the site.'); });
+
 // ---------- Utils ----------
 function fmt(v, dec = 0) {
   return Number(v).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
@@ -1048,5 +1201,6 @@ function escapeHtml(s) {
 // ---------- Init ----------
 fillZones();
 restoreSettings();
+applyOrigin();
 updateZoneHint();
 window.c2r = { state, map, makers: MAKERS }; // for debugging in the console
