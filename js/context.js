@@ -560,3 +560,51 @@ export function hatchPolygon(rings, angleDeg, spacing, box) {
   }
   return out;
 }
+
+// ---------- Additional building footprint sources ----------
+/** Footprint sources shown as separate toggles. `key` is both the visibility key and the context property. */
+export const BUILDING_SOURCES = [
+  { key: 'buildings', label: 'Buildings · FEMA/ORNL', short: 'FEMA/ORNL USA Structures', color: '#4fd1ff', tag: 'FEMA' },
+  { key: 'bldgMs', label: 'Buildings · Microsoft', short: 'Microsoft Building Footprints', color: '#a3e635', tag: 'MSFT' },
+  { key: 'bldgOsm', label: 'Buildings · OpenStreetMap', short: 'OpenStreetMap buildings', color: '#c084fc', tag: 'OSM' },
+];
+
+const MS_BFP = 'https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/MSBFP2/FeatureServer/0';
+const ESRI_OSM_BLDG = 'https://services6.arcgis.com/Do88DoK2xjTUCXd1/arcgis/rest/services/OSM_NA_Buildings/FeatureServer/0';
+
+/** Microsoft Building Footprints (Esri-hosted, nationwide). No heights. */
+export async function fetchBuildingsMs(bbox) {
+  let feats;
+  try { feats = await arcgisQueryAll(MS_BFP, bbox, 'OBJECTID', 2000); } catch (err) {
+    throw new Error(`Microsoft footprints unavailable: ${err.message === 'Failed to fetch' ? 'no response' : err.message}`);
+  }
+  return feats.filter(f => f.geometry?.rings?.length).map(f => ({
+    rings: f.geometry.rings, heightM: DEFAULT_HEIGHT_M, heightKnown: false, use: '', address: '', imageDate: '', source: 'Microsoft',
+  }));
+}
+
+function parseHeightM(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const s = String(v).trim();
+  const ft = s.match(/^([\d.]+)\s*(ft|')/i);
+  if (ft) return parseFloat(ft[1]) * 0.3048;
+  const m = parseFloat(s);
+  return Number.isFinite(m) && m > 0 ? m : null;
+}
+
+/** OpenStreetMap buildings (Esri-hosted OSM North America). Height from height=*, else building:levels × 3.2 m. */
+export async function fetchBuildingsOsm(bbox) {
+  let feats;
+  try { feats = await arcgisQueryAll(ESRI_OSM_BLDG, bbox, 'building,height,building_levels,name,osm_timestamp', 2000); } catch (err) {
+    throw new Error(`OpenStreetMap buildings unavailable: ${err.message === 'Failed to fetch' ? 'no response' : err.message}`);
+  }
+  return feats.filter(f => f.geometry?.rings?.length && f.attributes.building).map(f => {
+    const a = f.attributes;
+    let h = parseHeightM(a.height);
+    if (h === null && parseFloat(a.building_levels) > 0) h = parseFloat(a.building_levels) * 3.2;
+    return {
+      rings: f.geometry.rings, heightM: h ?? DEFAULT_HEIGHT_M, heightKnown: h !== null, use: a.building !== 'yes' ? a.building : '',
+      address: a.name || '', imageDate: a.osm_timestamp ? String(a.osm_timestamp).slice(0, 10) : '', source: 'OpenStreetMap',
+    };
+  });
+}

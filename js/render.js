@@ -1,5 +1,6 @@
 // Canvas rendering for the on-screen preview and the printable PNG contour map.
-import { labelPositions, isMajor } from './contours.js?v=0.5.6';
+import { BUILDING_SOURCES } from './context.js?v=0.6.0';
+import { labelPositions, isMajor } from './contours.js?v=0.6.0';
 
 /** Hillshade (0..1) for a grid; azimuth 315°, altitude 45°. */
 export function hillshade(g, zFactor = 1) {
@@ -173,13 +174,15 @@ export function drawMap(canvas, site, mode = 'preview') {
       ctx.stroke();
       ctx.setLineDash([]);
     }
-    for (const b of v.buildings ? site.context.buildings : none) {
-      path(b.ring, true);
-      ctx.fillStyle = onImagery ? 'rgba(79,209,255,0.22)' : 'rgba(30,40,50,0.28)';
-      ctx.fill();
-      ctx.lineWidth = 1.8 * px;
-      ctx.strokeStyle = onImagery ? '#4fd1ff' : '#1d2a33';
-      ctx.stroke();
+    // Building footprints, one color per source (see BUILDING_SOURCES).
+    for (const src of BUILDING_SOURCES) {
+      for (const b of v[src.key] ? site.context[src.key] || [] : none) {
+        path(b.ring, true);
+        ctx.globalAlpha = 0.18; ctx.fillStyle = onImagery ? src.color : '#1d2a33'; ctx.fill(); ctx.globalAlpha = 1;
+        ctx.lineWidth = 1.8 * px;
+        ctx.strokeStyle = onImagery ? src.color : '#1d2a33';
+        ctx.stroke();
+      }
     }
   }
 

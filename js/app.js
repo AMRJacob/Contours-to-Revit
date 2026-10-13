@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.5.6';
-import { fetchElevation, sample } from './dem.js?v=0.5.6';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.5.6';
-import { Dxf } from './dxf.js?v=0.5.6';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.5.6';
-import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.5.6';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.6.0';
+import { fetchElevation, sample } from './dem.js?v=0.6.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.6.0';
+import { Dxf } from './dxf.js?v=0.6.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.6.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.6.0';
 
-const VERSION = '0.5.6';
+const VERSION = '0.6.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -324,6 +324,8 @@ async function generate() {
       wantR ? fetchRoadsAny(bbox) : Promise.resolve({ roads: [], source: '' }),
       wantP ? fetchParcels(bbox) : Promise.resolve([]),
       wantF ? fetchFlood(bbox) : Promise.resolve(null),
+      fetchBuildingsMs(bbox),
+      fetchBuildingsOsm(bbox),
     ])
     : null;
   const dem = await fetchElevation(bbox, 1, msg => setStatus(msg));
@@ -351,20 +353,25 @@ async function generate() {
   const contours = contourLines(cgrid, levels);
 
   let context = null;
-  let floodFailed = false, parcelsFailed = false;
+  let floodFailed = false, parcelsFailed = false, bldgFailed = {};
   let roadsSource = '';
   const contextNotes = [];
   if (!inArkansas) contextNotes.push('Parcels are only available for sites in Arkansas (statewide data from the Arkansas GIS Office).');
   if (ctxFetch) {
     setStatus('Adding site context…');
-    const [bRes, rRes, pRes, fRes] = await ctxFetch;
-    if (bRes.status === 'rejected') contextNotes.push(`Building footprints unavailable: ${bRes.reason?.message || bRes.reason}`);
+    const [bRes, rRes, pRes, fRes, msRes, osmRes] = await ctxFetch;
+    if (bRes.status === 'rejected') contextNotes.push(`USA Structures footprints unavailable: ${bRes.reason?.message || bRes.reason}`);
+    for (const r of [msRes, osmRes]) if (r.status === 'rejected') contextNotes.push(r.reason?.message || String(r.reason));
+    bldgFailed = { buildings: bRes.status === 'rejected', bldgMs: msRes.status === 'rejected', bldgOsm: osmRes.status === 'rejected' };
     if (rRes.status === 'rejected') contextNotes.push(`Roads unavailable: ${rRes.reason?.message || rRes.reason}`);
     else if (rRes.value.note) contextNotes.push(rRes.value.note);
     roadsSource = rRes.status === 'fulfilled' ? rRes.value.source : '';
     context = prepareContext(
       { buildings: bRes.status === 'fulfilled' ? bRes.value : [], roads: rRes.status === 'fulfilled' ? rRes.value.roads : [] },
       { fwd: p.fwd, box, zAt, nativePerM, zPerM });
+    // Other footprint sources go through the same projection / draping.
+    context.bldgMs = prepareContext({ buildings: msRes.status === 'fulfilled' ? msRes.value : [] }, { fwd: p.fwd, box, zAt, nativePerM, zPerM }).buildings;
+    context.bldgOsm = prepareContext({ buildings: osmRes.status === 'fulfilled' ? osmRes.value : [] }, { fwd: p.fwd, box, zAt, nativePerM, zPerM }).buildings;
     if (pRes.status === 'rejected') contextNotes.push(pRes.reason?.message || String(pRes.reason));
     if (fRes.status === 'rejected') contextNotes.push(`${fRes.reason?.message || fRes.reason} — flood zones are NOT included; generate again to retry.`);
     floodFailed = fRes.status === 'rejected';
@@ -402,7 +409,7 @@ async function generate() {
   const now = new Date();
   const site = {
     zone, units: u, toOut, zPerM, spacingOut, interval, box, pts, pStats, grid: cgrid, stats: cStats, shade,
-    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, floodFailed, parcelsFailed, imagery, imageryCredit, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
+    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, floodFailed, parcelsFailed, bldgFailed, imagery, imageryCredit, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
     tinted: false,
   };
   site.meta = buildMeta(site);
@@ -459,7 +466,7 @@ function buildMeta(site) {
       `North arrow: grid north; true north is ${fmt(Math.abs(site.convergence), 2)}° ${site.convergence >= 0 ? 'east' : 'west'} of grid north`,
       `Imagery: ${site.imagery ? site.imageryCredit : 'not available — hillshade shown'}`,
       `Generated ${site.generated.toISOString().slice(0, 10)} by Contours to Revit ${VERSION}`,
-      ...(site.context ? [[(site.vis || {}).buildings !== false && site.ctxInclude.b ? `Buildings: FEMA/ORNL USA Structures (${site.context.buildings.length})` : '', (site.vis || {}).roads !== false && site.ctxInclude.r ? `Roads: ${site.roadsSource === 'tiger' ? 'US Census TIGER' : '© OpenStreetMap contributors'}` : '', (site.vis || {}).parcels !== false && site.ctxInclude.p ? 'Parcels: Arkansas GIS Office' : '', (site.vis || {}).flood !== false ? 'Flood: FEMA NFHL' : ''].filter(Boolean).join('; ')] : []),
+      ...(site.context ? [[BUILDING_SOURCES.filter(b => (site.vis || { buildings: true })[b.key]).map(b => `Buildings: ${b.short} (${(site.context[b.key] || []).length})`).join('; '), (site.vis || {}).roads !== false && site.ctxInclude.r ? `Roads: ${site.roadsSource === 'tiger' ? 'US Census TIGER' : '© OpenStreetMap contributors'}` : '', (site.vis || {}).parcels !== false && site.ctxInclude.p ? 'Parcels: Arkansas GIS Office' : '', (site.vis || {}).flood !== false ? 'Flood: FEMA NFHL' : ''].filter(Boolean).join('; ')] : []),
     ],
   };
 }
@@ -495,7 +502,7 @@ function showResults(site) {
     const dates = [...new Set(site.context.buildings.map(b => b.imageDate).filter(Boolean))].sort();
     html += `<div style="margin:10px 0 4px;font-weight:600;color:var(--ink)">Site context</div>`;
     const np = site.context.roads.length - nr;
-    if (site.ctxInclude.b) html += `<div>${nb} building footprint${nb === 1 ? '' : 's'} (USA Structures${dates.length ? `, imagery ${escapeHtml(dates[0].slice(0, 4))}${dates.length > 1 && dates.at(-1).slice(0, 4) !== dates[0].slice(0, 4) ? '–' + escapeHtml(dates.at(-1).slice(0, 4)) : ''}` : ''}), ${nh} with height data</div>`;
+    if (site.ctxInclude.b) html += `<div>Footprints — USA Structures: ${nb}${dates.length ? ` (imagery ${escapeHtml(dates[0].slice(0, 4))}${dates.length > 1 && dates.at(-1).slice(0, 4) !== dates[0].slice(0, 4) ? '–' + escapeHtml(dates.at(-1).slice(0, 4)) : ''})` : ''}, ${nh} with heights · Microsoft: ${(site.context.bldgMs || []).length} (no heights) · OpenStreetMap: ${(site.context.bldgOsm || []).length}, ${(site.context.bldgOsm || []).filter(b => b.heightKnown).length} with heights</div>`;
     if (site.ctxInclude.r) html += `<div>${nr} road segment${nr === 1 ? '' : 's'}${np ? `, ${np} path${np === 1 ? '' : 's'}` : ''} (${site.roadsSource === 'tiger' ? 'US Census TIGER' : 'OpenStreetMap'}) — centerlines only; no source publishes pavement edges</div>`;
     if (site.ctxInclude.p) {
       const npc = site.context.parcels.length;
@@ -520,7 +527,7 @@ function showResults(site) {
 // ---------- Layer visibility (map "Layers" panel drives the map, preview, PNG and DXF) ----------
 const LAYERS = [
   { key: 'contours', label: 'Contours', swatch: '#ffb347' },
-  { key: 'buildings', label: 'Buildings', swatch: '#4fd1ff' },
+  ...BUILDING_SOURCES.map(b => ({ key: b.key, label: b.label, swatch: b.color })),
   { key: 'roads', label: 'Roads', swatch: '#ffe066' },
   { key: 'parcels', label: 'Parcels', swatch: '#ff4fd8' },
   { key: 'flood', label: 'Flood zones', swatch: '#3b82f6' },
@@ -528,7 +535,7 @@ const LAYERS = [
   { key: 'points', label: 'Grid points', swatch: '#7bd88f', note: 'DXF only' },
 ];
 const visibility = (() => {
-  const v = { contours: true, buildings: true, roads: true, parcels: true, flood: true, labels: true, points: false };
+  const v = { contours: true, buildings: true, bldgMs: false, bldgOsm: false, roads: true, parcels: true, flood: true, labels: true, points: false };
   try { Object.assign(v, JSON.parse(localStorage.getItem('c2r-layers') || '{}')); } catch { /* ignore */ }
   return v;
 })();
@@ -561,7 +568,9 @@ function updateLayerCounts(site) {
   const c = site?.context;
   const counts = {
     contours: site ? `${site.contours.length} levels` : '',
-    buildings: c ? String(c.buildings.length) : '',
+    buildings: c ? (site.bldgFailed?.buildings ? 'failed' : String(c.buildings.length)) : '',
+    bldgMs: c ? (site.bldgFailed?.bldgMs ? 'failed' : String((c.bldgMs || []).length)) : '',
+    bldgOsm: c ? (site.bldgFailed?.bldgOsm ? 'failed' : String((c.bldgOsm || []).length)) : '',
     roads: c ? String(c.roads.length) : '',
     parcels: c ? (!site.ctxInclude.p ? 'AR only' : site.parcelsFailed ? 'failed' : String(c.parcels.length)) : '',
     flood: c ? (site.floodFailed ? 'failed' : c.floodZones.length ? String(c.floodZones.length) : 'none') : '',
@@ -583,7 +592,8 @@ function drawContoursOnMap(site) {
   const p = projector(site.zone);
   const renderer = L.canvas({ padding: 0.3 });
   const ll = ([x, y]) => { const [lon, lat] = p.inv([x, y]); return [lat, lon]; };
-  const groups = { contours: L.layerGroup(), buildings: L.layerGroup(), roads: L.layerGroup(), parcels: L.layerGroup(), flood: L.layerGroup() };
+  const groups = { contours: L.layerGroup(), roads: L.layerGroup(), parcels: L.layerGroup(), flood: L.layerGroup() };
+  for (const src of BUILDING_SOURCES) groups[src.key] = L.layerGroup();
   for (const c of site.contours) {
     const major = isMajor(c.level, site.interval);
     for (const line of c.lines) {
@@ -604,8 +614,10 @@ function drawContoursOnMap(site) {
       L.polyline(r.center.map(ll), { renderer, color: r.kind === 'road' ? '#ffe066' : '#9be7ff', weight: r.kind === 'road' ? 2 : 1.2, dashArray: r.kind === 'road' ? '10 6' : '3 4', interactive: false }).addTo(groups.roads);
       for (const e of r.edges) L.polyline(e.map(ll), { renderer, color: '#ffe066', weight: 1.4, interactive: false }).addTo(groups.roads);
     }
-    for (const b of site.context.buildings) {
-      L.polygon(b.ring.map(ll), { renderer, color: '#4fd1ff', weight: 1.5, fillColor: '#4fd1ff', fillOpacity: 0.15, interactive: false }).addTo(groups.buildings);
+    for (const src of BUILDING_SOURCES) {
+      for (const b of site.context[src.key] || []) {
+        L.polygon(b.ring.map(ll), { renderer, color: src.color, weight: 1.5, fillColor: src.color, fillOpacity: 0.12, interactive: false }).addTo(groups[src.key]);
+      }
     }
   }
   state.mapGroups = groups;
@@ -755,20 +767,26 @@ function addContours(d, site, avoid, labelsOn = true) {
   }
 }
 
-function addContext(d, site, v, labels) {
-  const P = (x, y, z) => [...outXY(site, x, y), z];
-  if (v.buildings) d.layer('C-BLDG-OTLN', 4).layer('A-MASS', 9);
-  for (const b of v.buildings ? site.context.buildings : []) {
+/** Footprint outlines (closed 3D polylines at the lowest ground point) and massing (3DFACE walls + flat roof). */
+function addBuildings(d, list, otln, mass, P) {
+  for (const b of list) {
     const ring = b.ring;
-    d.polyline3d('C-BLDG-OTLN', ring.map(([x, y]) => P(x, y, b.base)), true);
-    // Massing: vertical walls plus a flat roof, as 3D faces (base at the lowest ground point under the footprint).
+    d.polyline3d(otln, ring.map(([x, y]) => P(x, y, b.base)), true);
     for (let i = 0; i < ring.length; i++) {
       const [x0, y0] = ring[i], [x1, y1] = ring[(i + 1) % ring.length];
-      d.face3d('A-MASS', [P(x0, y0, b.base), P(x1, y1, b.base), P(x1, y1, b.top), P(x0, y0, b.top)]);
+      d.face3d(mass, [P(x0, y0, b.base), P(x1, y1, b.base), P(x1, y1, b.top), P(x0, y0, b.top)]);
     }
-    for (const [i, j, k] of triangulate(ring)) {
-      d.face3d('A-MASS', [P(...ring[i], b.top), P(...ring[j], b.top), P(...ring[k], b.top)]);
-    }
+    for (const [i, j, k] of triangulate(ring)) d.face3d(mass, [P(...ring[i], b.top), P(...ring[j], b.top), P(...ring[k], b.top)]);
+  }
+}
+
+function addContext(d, site, v, labels) {
+  const P = (x, y, z) => [...outXY(site, x, y), z];
+  for (const src of BUILDING_SOURCES) {
+    if (!v[src.key]) continue;
+    const otln = `C-BLDG-OTLN-${src.tag}`, mass = `A-MASS-${src.tag}`;
+    d.layer(otln, src.tag === 'FEMA' ? 4 : src.tag === 'MSFT' ? 3 : 6).layer(mass, 9);
+    addBuildings(d, site.context[src.key] || [], otln, mass, P);
   }
   const h = labelHeight(site);
   if (site.ctxInclude.p && v.parcels) {
@@ -905,7 +923,7 @@ function makeReadme(site, v = vis()) {
     '*.dxf            AutoCAD R12 DXF with the layers shown in the app. 3D polylines carry true Z on every vertex.',
     ...(v.contours ? ['                 C-TOPO-MAJR / C-TOPO-MINR  index / intermediate contours; C-TOPO-TEXT labels'] : []),
     ...(v.points ? ['                 C-TOPO-PNTS  the CSV grid as 3D POINT entities'] : []),
-    ...(v.buildings ? ['                 C-BLDG-OTLN  building footprints at the lowest ground point; A-MASS massing (3DFACE)'] : []),
+    ...BUILDING_SOURCES.filter(b => v[b.key]).map(b => `                 C-BLDG-OTLN-${b.tag} / A-MASS-${b.tag}  ${b.short}: footprints at the lowest ground point / massing (3DFACE)`),
     ...(v.roads ? ['                 C-ROAD-CNTR  road centerlines, draped (no pavement edges: not published by the sources); C-WALK-CNTR paths'] : []),
     ...(v.parcels && site.ctxInclude.p ? ['                 C-PROP-LINE  parcel lines draped on terrain; C-PROP-TEXT parcel ID / owner'] : []),
     ...(v.flood ? ['                 C-FLOD-ZONE  flood zone boundaries draped; C-FLOD-PATT hatch (floodway cross-hatched,', '                 SFHA single hatch, shaded X sparse); C-FLOD-TEXT labels; C-FLOD-BFE lines AT the BFE'] : []),
@@ -916,7 +934,7 @@ function makeReadme(site, v = vis()) {
     '',
     `Map imagery: ${site.imagery ? site.imageryCredit : 'none (hillshade shown)'}.`,
     '');
-  if (site.context && (v.buildings || v.roads || v.parcels || v.flood)) {
+  if (site.context && (BUILDING_SOURCES.some(b => v[b.key]) || v.roads || v.parcels || v.flood)) {
     const bs = site.context.buildings;
     const dates = [...new Set(bs.map(b => b.imageDate).filter(Boolean))].sort();
     const roads = site.context.roads.filter(r => r.kind === 'road');
@@ -929,6 +947,16 @@ function makeReadme(site, v = vis()) {
         `Heights:              ${bs.filter(b => b.heightKnown).length} of ${bs.length} from the dataset (meters; lidar-derived where`,
         '                      available, otherwise modelled by ORNL). Missing heights use 3.5 m (one storey).',
         '                      Massing is a flat-roofed extrusion from the LOWEST ground point under each footprint.');
+    }
+    if (v.bldgMs) {
+      const ms = site.context.bldgMs || [];
+      L_(`Buildings (MSFT):     ${ms.length} footprints from Microsoft Building Footprints (machine-detected from imagery;`,
+        '                      Esri-hosted copy). No heights or capture dates: massing uses 3.5 m (one storey).');
+    }
+    if (v.bldgOsm) {
+      const os = site.context.bldgOsm || [];
+      L_(`Buildings (OSM):      ${os.length} footprints from OpenStreetMap (© OpenStreetMap contributors, ODbL; hand-mapped).`,
+        `                      Heights: ${os.filter(b => b.heightKnown).length} of ${os.length} from height= or building:levels × 3.2 m; others use 3.5 m.`);
     }
     if (v.roads) {
       L_(`Roads:                ${roads.length} segments, ${site.context.roads.length - roads.length} paths, from ${site.roadsSource === 'tiger' ? 'US Census TIGER/Line (public domain)' : 'OpenStreetMap (© OpenStreetMap contributors, ODbL), via Esri\'s hosted OSM North America layer'}`,
