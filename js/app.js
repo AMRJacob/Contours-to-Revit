@@ -339,7 +339,7 @@ async function generate() {
   const contours = contourLines(cgrid, levels);
 
   setStatus('Fetching aerial imagery for the map…');
-  const imagery = await fetchImagery(zone, box);
+  const { bitmap: imagery, credit: imageryCredit } = await fetchImagery(zone, box);
 
   const conv = convergence(zone, c.lng, c.lat);
   const shade = hillshade(cgrid, 1 / toOut); // z (output units) -> native XY units
@@ -350,7 +350,7 @@ async function generate() {
   const now = new Date();
   const site = {
     zone, units: u, toOut, zPerM, spacingOut, interval, box, pts, pStats, grid: cgrid, stats: cStats, shade,
-    contours, imagery, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
+    contours, imagery, imageryCredit, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
     tinted: false,
   };
   site.meta = buildMeta(site);
@@ -371,24 +371,25 @@ async function fetchImagery(zone, box) {
   // Request imagery already reprojected to the State Plane zone so it aligns exactly with the grid.
   const toReq = zone.note ? 1 / zoneUnitsPerMeter(zone) : 1; // converted zones are requested in their metric EPSG units
   const w = box.xmax - box.xmin, h = box.ymax - box.ymin;
-  const long = 3000;
-  const size = w >= h ? [long, Math.max(1, Math.round(long * h / w))] : [Math.max(1, Math.round(long * w / h)), long];
-  const params = new URLSearchParams({
-    bbox: [box.xmin * toReq, box.ymin * toReq, box.xmax * toReq, box.ymax * toReq].join(','),
-    bboxSR: String(zone.code), imageSR: String(zone.code), size: size.join(','), format: 'jpg', f: 'image',
-  });
   const sources = [
-    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export',
-    'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/export',
+    { url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/export', long: 2400, credit: 'USGS The National Map: Orthoimagery (public domain)' },
+    { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export', long: 1600, credit: 'Esri World Imagery (Esri, Maxar, Earthstar Geographics)' },
   ];
   for (const src of sources) {
+    const size = w >= h ? [src.long, Math.max(1, Math.round(src.long * h / w))] : [Math.max(1, Math.round(src.long * w / h)), src.long];
+    const params = new URLSearchParams({
+      bbox: [box.xmin * toReq, box.ymin * toReq, box.xmax * toReq, box.ymax * toReq].join(','),
+      bboxSR: String(zone.code), imageSR: String(zone.code), size: size.join(','), format: 'jpg', f: 'image',
+    });
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 20000);
     try {
-      const r = await fetch(`${src}?${params}`);
+      const r = await fetch(`${src.url}?${params}`, { signal: ac.signal });
       if (!r.ok || !(r.headers.get('content-type') || '').startsWith('image/')) continue;
-      return await createImageBitmap(await r.blob());
-    } catch { /* try next */ }
+      return { bitmap: await createImageBitmap(await r.blob()), credit: src.credit };
+    } catch { /* try next */ } finally { clearTimeout(timer); }
   }
-  return null;
+  return { bitmap: null, credit: '' };
 }
 
 function buildMeta(site) {
@@ -404,7 +405,7 @@ function buildMeta(site) {
       `Contour interval: ${site.interval}${OPTIONS[u].tick} (index every ${site.interval * 5}${OPTIONS[u].tick})`,
       `Elevation range: ${fmt(site.pStats.min, 1)} – ${fmt(site.pStats.max, 1)} ${u}`,
       `North arrow: grid north; true north is ${fmt(Math.abs(site.convergence), 2)}° ${site.convergence >= 0 ? 'east' : 'west'} of grid north`,
-      `Imagery: ${site.imagery ? 'Esri World Imagery (Esri, Maxar, Earthstar Geographics)' : 'not available — hillshade shown'}`,
+      `Imagery: ${site.imagery ? site.imageryCredit : 'not available — hillshade shown'}`,
       `Generated ${site.generated.toISOString().slice(0, 10)} by Contours to Revit ${VERSION}`,
     ],
   };
@@ -620,7 +621,7 @@ function makeReadme(site) {
     '*_points.dxf     AutoCAD R12 DXF. The CSV grid as 3D POINT entities on layer C-TOPO-PNTS.',
     '*_map.png        Printable contour map over aerial imagery, grid-north up.',
     '',
-    'Imagery: Esri World Imagery (Esri, Maxar, Earthstar Geographics) where shown.',
+    `Map imagery: ${site.imagery ? site.imageryCredit : 'none (hillshade shown)'}.`,
     '');
   return lines.join('\r\n');
 }
