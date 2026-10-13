@@ -70,7 +70,7 @@ export async function fetchRoads([w, s, e, n]) {
   const q = `[out:json][timeout:25];way["highway"](${s},${w},${n},${e});out tags geom;`;
   // Ask both public Overpass servers at once and use whichever answers first (they are often overloaded).
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 30000);
+  const timer = setTimeout(() => ac.abort(), 20000);
   let j;
   try {
     j = await Promise.any(OVERPASS.map(async url => {
@@ -248,4 +248,43 @@ export function prepareContext({ buildings = [], roads = [] }, { fwd, box, zAt, 
     }
   }
   return { buildings: outB, roads: outR };
+}
+
+// ---------- Census TIGER roads (fallback when Overpass is down) ----------
+const TIGER = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Transportation/MapServer';
+// MTFCC -> [kind, OSM-like type]
+const MTFCC = {
+  S1100: ['road', 'primary'], S1200: ['road', 'secondary'], S1400: ['road', 'residential'], S1500: ['road', 'track'],
+  S1630: ['road', 'primary_link'], S1640: ['road', 'service'], S1730: ['road', 'service'], S1740: ['road', 'service'],
+  S1710: ['path', 'footway'], S1720: ['path', 'steps'], S1820: ['path', 'cycleway'], S1830: ['path', 'bridleway'],
+};
+
+export async function fetchRoadsTiger([w, s, e, n]) {
+  const params = new URLSearchParams({
+    geometry: `${w},${s},${e},${n}`, geometryType: 'esriGeometryEnvelope', inSR: '4326', outSR: '4326',
+    spatialRel: 'esriSpatialRelIntersects', outFields: 'NAME,MTFCC', returnGeometry: 'true', f: 'json',
+  });
+  const layers = [2, 6, 8]; // primary, secondary (large scale), local roads
+  const res = await Promise.all(layers.map(id => fetch(`${TIGER}/${id}/query?${params}`, { signal: AbortSignal.timeout(20000) }).then(r => r.json())));
+  const out = [];
+  for (const j of res) {
+    if (j.error) throw new Error(`TIGER: ${j.error.message}`);
+    for (const f of j.features || []) {
+      const [kind, type] = MTFCC[f.attributes.MTFCC] || ['road', 'unclassified'];
+      for (const path of f.geometry?.paths || []) {
+        out.push({ kind, type, name: f.attributes.NAME || '', widthM: kind === 'path' ? 2 : (ROAD_WIDTH_M[type] || 6), widthKnown: false, coords: path });
+      }
+    }
+  }
+  return out;
+}
+
+/** Roads from OpenStreetMap, falling back to Census TIGER. Returns {roads, source, note}. */
+export async function fetchRoadsAny(bbox) {
+  try {
+    return { roads: await fetchRoads(bbox), source: 'osm' };
+  } catch (err) {
+    const roads = await fetchRoadsTiger(bbox);
+    return { roads, source: 'tiger', note: `${err.message} Used US Census TIGER roads instead (less precise, no driveways).` };
+  }
 }
