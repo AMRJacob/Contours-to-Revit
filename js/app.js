@@ -1,12 +1,12 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.1.2';
-import { fetchElevation, sample } from './dem.js?v=0.1.2';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.1.2';
-import { Dxf } from './dxf.js?v=0.1.2';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.1.2';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.1.3';
+import { fetchElevation, sample } from './dem.js?v=0.1.3';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.1.3';
+import { Dxf } from './dxf.js?v=0.1.3';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.1.3';
 
-const VERSION = '0.1.2';
+const VERSION = '0.1.3';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;

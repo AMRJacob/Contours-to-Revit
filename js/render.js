@@ -1,5 +1,5 @@
 // Canvas rendering for the on-screen preview and the printable PNG contour map.
-import { labelPositions, isMajor } from './contours.js?v=0.1.2';
+import { labelPositions, isMajor } from './contours.js?v=0.1.3';
 
 /** Hillshade (0..1) for a grid; azimuth 315°, altitude 45°. */
 export function hillshade(g, zFactor = 1) {
@@ -136,7 +136,7 @@ export function drawMap(canvas, site, mode = 'preview') {
   }
 
   // Labels on major contours
-  const fontPx = Math.round(11 * px);
+  const fontPx = Math.round((print ? 13 : 11) * px);
   ctx.font = `600 ${fontPx}px "IBM Plex Sans", system-ui, sans-serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const spacingUnits = (print ? 420 : 300) * px / k;
@@ -228,18 +228,18 @@ function drawFooter(ctx, site, x, y, w, h, px) {
   ctx.save();
   ctx.fillStyle = '#111';
   ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  ctx.font = `700 ${Math.round(15 * px)}px system-ui, sans-serif`;
+  ctx.font = `700 ${Math.round(24 * px)}px system-ui, sans-serif`;
   ctx.fillText(site.meta.title, x, y);
-  ctx.font = `600 ${Math.round(10.5 * px)}px system-ui, sans-serif`;
+  ctx.font = `600 ${Math.round(16 * px)}px system-ui, sans-serif`;
   ctx.fillStyle = '#b3261e';
-  ctx.fillText('PRELIMINARY — NOT SURVEY DATA. Bare-earth surface is interpolated under buildings and trees.', x, y + 22 * px);
+  ctx.fillText('PRELIMINARY — NOT SURVEY DATA. Bare-earth surface is interpolated under buildings and trees.', x, y + 34 * px);
   ctx.fillStyle = '#333';
-  ctx.font = `400 ${Math.round(9.5 * px)}px system-ui, sans-serif`;
-  let ly = y + 42 * px;
+  ctx.font = `400 ${Math.round(14 * px)}px system-ui, sans-serif`;
+  let ly = y + 64 * px;
   const colW = w / 2;
   site.meta.lines.forEach((line, i) => {
     const col = i % 2, row = Math.floor(i / 2);
-    ctx.fillText(line, x + col * colW, ly + row * 14 * px, colW - 10 * px);
+    ctx.fillText(line, x + col * colW, ly + row * 21 * px, colW - 10 * px);
   });
   ctx.restore();
 }
