@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.4.1';
-import { fetchElevation, sample } from './dem.js?v=0.4.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.4.1';
-import { Dxf } from './dxf.js?v=0.4.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.4.1';
-import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays } from './context.js?v=0.4.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.5.0';
+import { fetchElevation, sample } from './dem.js?v=0.5.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.5.0';
+import { Dxf } from './dxf.js?v=0.5.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.5.0';
+import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays } from './context.js?v=0.5.0';
 
-const VERSION = '0.4.1';
+const VERSION = '0.5.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -172,7 +172,7 @@ function updateZoneHint() {
 function saveSettings() {
   store.set({
     units: units(), spacing: $('spacing').value, interval: $('interval').value,
-    localOrigin: $('local-origin').checked, smooth: $('smooth').checked, ctxBuildings: $('ctx-buildings').checked, ctxRoads: $('ctx-roads').checked, ctxParcels: $('ctx-parcels').checked, ctxFlood: $('ctx-flood').checked,
+    localOrigin: $('local-origin').checked, smooth: $('smooth').checked,
     zone: $('zone').value,
   });
 }
@@ -185,17 +185,13 @@ function restoreSettings() {
   if (s.interval && [...$('interval').options].some(o => o.value === s.interval)) $('interval').value = s.interval;
   if (typeof s.localOrigin === 'boolean') $('local-origin').checked = s.localOrigin;
   if (typeof s.smooth === 'boolean') $('smooth').checked = s.smooth;
-  if (typeof s.ctxBuildings === 'boolean') $('ctx-buildings').checked = s.ctxBuildings;
-  if (typeof s.ctxRoads === 'boolean') $('ctx-roads').checked = s.ctxRoads;
-  if (typeof s.ctxParcels === 'boolean') $('ctx-parcels').checked = s.ctxParcels;
-  if (typeof s.ctxFlood === 'boolean') $('ctx-flood').checked = s.ctxFlood;
   if (s.zone && [...$('zone').options].some(o => o.value === s.zone)) $('zone').value = s.zone;
 }
 
 document.querySelectorAll('input[name="units"]').forEach(r => r.addEventListener('change', () => {
   fillUnitOptions(); onSiteChanged(false); saveSettings(); invalidate();
 }));
-['spacing', 'interval', 'local-origin', 'smooth', 'ctx-buildings', 'ctx-roads', 'ctx-parcels', 'ctx-flood'].forEach(id => $(id).addEventListener('change', () => {
+['spacing', 'interval', 'local-origin', 'smooth'].forEach(id => $(id).addEventListener('change', () => {
   onSiteChanged(false); saveSettings(); invalidate();
 }));
 $('zone').addEventListener('change', () => { updateZoneHint(); onSiteChanged(false); saveSettings(); invalidate(); });
@@ -319,10 +315,9 @@ async function generate() {
   const bbox = [Math.min(...ll.map(q => q[0])) - margin, Math.min(...ll.map(q => q[1])) - margin,
     Math.max(...ll.map(q => q[0])) + margin, Math.max(...ll.map(q => q[1])) + margin];
 
-  const wantB = $('ctx-buildings').checked, wantR = $('ctx-roads').checked;
-  const wantF = $('ctx-flood').checked;
+  // Fetch every context layer up front; the map's Layers panel decides what is shown and exported.
   const inArkansas = /^arkansas/i.test(zone.state);
-  const wantP = $('ctx-parcels').checked && inArkansas;
+  const wantB = true, wantR = true, wantF = true, wantP = inArkansas;
   const ctxFetch = (wantB || wantR || wantP || wantF)
     ? Promise.allSettled([
       wantB ? fetchBuildings(bbox) : Promise.resolve([]),
@@ -358,7 +353,7 @@ async function generate() {
   let context = null;
   let roadsSource = '';
   const contextNotes = [];
-  if ($('ctx-parcels').checked && !inArkansas) contextNotes.push('Parcels are only available for sites in Arkansas (statewide data from the Arkansas GIS Office).');
+  if (!inArkansas) contextNotes.push('Parcels are only available for sites in Arkansas (statewide data from the Arkansas GIS Office).');
   if (ctxFetch) {
     setStatus('Adding site context…');
     const [bRes, rRes, pRes, fRes] = await ctxFetch;
@@ -451,7 +446,7 @@ function buildMeta(site) {
       `North arrow: grid north; true north is ${fmt(Math.abs(site.convergence), 2)}° ${site.convergence >= 0 ? 'east' : 'west'} of grid north`,
       `Imagery: ${site.imagery ? site.imageryCredit : 'not available — hillshade shown'}`,
       `Generated ${site.generated.toISOString().slice(0, 10)} by Contours to Revit ${VERSION}`,
-      ...(site.context ? [[site.ctxInclude.b ? `Buildings: FEMA/ORNL USA Structures (${site.context.buildings.length})` : '', site.ctxInclude.r ? `Roads: ${site.roadsSource === 'tiger' ? 'US Census TIGER' : '© OpenStreetMap contributors'}` : '', site.ctxInclude.p ? 'Parcels: Arkansas GIS Office' : '', site.ctxInclude.f ? 'Flood: FEMA NFHL' : ''].filter(Boolean).join('; ')] : []),
+      ...(site.context ? [[(site.vis || {}).buildings !== false && site.ctxInclude.b ? `Buildings: FEMA/ORNL USA Structures (${site.context.buildings.length})` : '', (site.vis || {}).roads !== false && site.ctxInclude.r ? `Roads: ${site.roadsSource === 'tiger' ? 'US Census TIGER' : '© OpenStreetMap contributors'}` : '', (site.vis || {}).parcels !== false && site.ctxInclude.p ? 'Parcels: Arkansas GIS Office' : '', (site.vis || {}).flood !== false ? 'Flood: FEMA NFHL' : ''].filter(Boolean).join('; ')] : []),
     ],
   };
 }
@@ -503,40 +498,99 @@ function showResults(site) {
     for (const n of site.contextNotes) html += `<div class="warn" style="margin-top:6px">${escapeHtml(n)}</div>`;
   }
   src.innerHTML = html;
-  document.querySelector('[data-out="dxf-context"]').hidden = !site.context;
   document.querySelector('.tab[data-view="preview"]').disabled = false;
 }
 
+// ---------- Layer visibility (map "Layers" panel drives the map, preview, PNG and DXF) ----------
+const LAYERS = [
+  { key: 'contours', label: 'Contours', swatch: '#ffb347' },
+  { key: 'buildings', label: 'Buildings', swatch: '#4fd1ff' },
+  { key: 'roads', label: 'Roads', swatch: '#ffe066' },
+  { key: 'parcels', label: 'Parcels', swatch: '#ff4fd8' },
+  { key: 'flood', label: 'Flood zones', swatch: '#3b82f6' },
+  { key: 'points', label: 'Grid points', swatch: '#7bd88f', note: 'DXF only' },
+];
+const visibility = (() => {
+  const v = { contours: true, buildings: true, roads: true, parcels: true, flood: true, points: false };
+  try { Object.assign(v, JSON.parse(localStorage.getItem('c2r-layers') || '{}')); } catch { /* ignore */ }
+  return v;
+})();
+function vis() { return { ...visibility }; }
+
+const LayersControl = L.Control.extend({
+  options: { position: 'topright' },
+  onAdd() {
+    const el = L.DomUtil.create('div', 'layers-panel leaflet-bar');
+    el.innerHTML = '<div class="lp-title">Layers</div>' + LAYERS.map(l => `
+      <label class="lp-row" data-key="${l.key}">
+        <input type="checkbox" ${visibility[l.key] ? 'checked' : ''}>
+        <span class="lp-sw" style="background:${l.swatch}"></span>
+        <span class="lp-name">${l.label}</span>
+        <span class="lp-count">${l.note || ''}</span>
+      </label>`).join('') + '<div class="lp-foot">Shown layers go into the preview, PNG &amp; DXF</div>';
+    L.DomEvent.disableClickPropagation(el);
+    L.DomEvent.disableScrollPropagation(el);
+    el.querySelectorAll('.lp-row').forEach(row => row.querySelector('input').addEventListener('change', e => {
+      visibility[row.dataset.key] = e.target.checked;
+      try { localStorage.setItem('c2r-layers', JSON.stringify(visibility)); } catch { /* ignore */ }
+      applyVisibility();
+    }));
+    return el;
+  },
+});
+map.addControl(new LayersControl());
+
+function updateLayerCounts(site) {
+  const c = site?.context;
+  const counts = {
+    contours: site ? `${site.contours.length} levels` : '',
+    buildings: c ? String(c.buildings.length) : '',
+    roads: c ? String(c.roads.length) : '',
+    parcels: c ? (site.ctxInclude.p ? String(c.parcels.length) : 'AR only') : '',
+    flood: c ? (c.floodZones.length ? String(c.floodZones.length) : 'none') : '',
+    points: site ? `${fmt(site.pts.nx * site.pts.ny - site.pStats.missing, 0)} · DXF only` : 'DXF only',
+  };
+  document.querySelectorAll('.layers-panel .lp-row').forEach(row => { row.querySelector('.lp-count').textContent = counts[row.dataset.key]; });
+}
+
+function applyVisibility() {
+  for (const [key, group] of Object.entries(state.mapGroups || {})) {
+    if (visibility[key]) group.addTo(map); else map.removeLayer(group);
+  }
+  if (!$('preview').hidden) renderPreview();
+}
+
 function drawContoursOnMap(site) {
-  if (state.contourLayer) map.removeLayer(state.contourLayer);
+  for (const g of Object.values(state.mapGroups || {})) map.removeLayer(g);
   const p = projector(site.zone);
-  const layer = L.layerGroup();
   const renderer = L.canvas({ padding: 0.3 });
+  const ll = ([x, y]) => { const [lon, lat] = p.inv([x, y]); return [lat, lon]; };
+  const groups = { contours: L.layerGroup(), buildings: L.layerGroup(), roads: L.layerGroup(), parcels: L.layerGroup(), flood: L.layerGroup() };
   for (const c of site.contours) {
     const major = isMajor(c.level, site.interval);
     for (const line of c.lines) {
-      const latlngs = line.map(([x, y]) => { const [lon, lat] = p.inv([x, y]); return [lat, lon]; });
-      L.polyline(latlngs, { renderer, color: major ? '#ffb347' : '#ffffff', weight: major ? 2 : 0.8, opacity: major ? 0.95 : 0.7, interactive: false }).addTo(layer);
+      L.polyline(line.map(ll), { renderer, color: major ? '#ffb347' : '#ffffff', weight: major ? 2 : 0.8, opacity: major ? 0.95 : 0.7, interactive: false }).addTo(groups.contours);
     }
   }
   if (site.context) {
-    const ll = ([x, y]) => { const [lon, lat] = p.inv([x, y]); return [lat, lon]; };
-    for (const r of site.context.roads) {
-      L.polyline(r.center.map(ll), { renderer, color: r.kind === 'road' ? '#ffe066' : '#9be7ff', weight: r.kind === 'road' ? 2 : 1, dashArray: r.kind === 'road' ? null : '4 4', interactive: false }).addTo(layer);
-    }
-    for (const b of site.context.buildings) {
-      L.polygon(b.ring.map(ll), { renderer, color: '#4fd1ff', weight: 1.5, fillColor: '#4fd1ff', fillOpacity: 0.15, interactive: false }).addTo(layer);
-    }
     for (const z of site.context.floodZones || []) {
       if (!z.sfha && !z.shadedX) continue;
-      L.polygon(z.rings.map(r => r.map(ll)), { renderer, color: '#3b82f6', weight: 1, fillColor: z.floodway ? '#1d4ed8' : '#3b82f6', fillOpacity: z.shadedX ? 0.12 : 0.3, interactive: false }).addTo(layer);
+      L.polygon(z.rings.map(r => r.map(ll)), { renderer, color: '#3b82f6', weight: 1, fillColor: z.floodway ? '#1d4ed8' : '#3b82f6', fillOpacity: z.shadedX ? 0.12 : 0.3, interactive: false }).addTo(groups.flood);
     }
     for (const pc of site.context.parcels || []) {
-      for (const l of pc.lines) L.polyline(l.map(ll), { renderer, color: '#ff4fd8', weight: 1.4, interactive: false }).addTo(layer);
+      for (const l of pc.lines) L.polyline(l.map(ll), { renderer, color: '#ff4fd8', weight: 1.4, interactive: false }).addTo(groups.parcels);
+    }
+    for (const r of site.context.roads) {
+      L.polyline(r.center.map(ll), { renderer, color: r.kind === 'road' ? '#ffe066' : '#9be7ff', weight: r.kind === 'road' ? 2 : 1, dashArray: r.kind === 'road' ? null : '4 4', interactive: false }).addTo(groups.roads);
+      for (const e of r.edges) L.polyline(e.map(ll), { renderer, color: '#ffe066', weight: 0.8, opacity: 0.7, interactive: false }).addTo(groups.roads);
+    }
+    for (const b of site.context.buildings) {
+      L.polygon(b.ring.map(ll), { renderer, color: '#4fd1ff', weight: 1.5, fillColor: '#4fd1ff', fillOpacity: 0.15, interactive: false }).addTo(groups.buildings);
     }
   }
-  layer.addTo(map);
-  state.contourLayer = layer;
+  state.mapGroups = groups;
+  updateLayerCounts(site);
+  applyVisibility();
 }
 
 function renderPreview() {
@@ -549,6 +603,7 @@ function renderPreview() {
   canvas.width = Math.round(r.width * dpr);
   canvas.height = Math.round(r.height * dpr);
   site.tinted = document.querySelector('input[name="pv"]:checked').value === 'tint';
+  site.vis = vis();
   drawMap(canvas, site, 'preview');
 }
 
@@ -595,9 +650,8 @@ const dxfBox = (x, y, w, h, ang = 0) => {
 };
 const overlaps = (b, list) => list.some(o => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
 
-/** Positions for flood-zone, parcel and BFE labels (output units), nudged apart. Cached per site. */
-function contextLabels(site) {
-  if (site._ctxLabels) return site._ctxLabels;
+/** Positions for flood-zone, parcel and BFE labels (output units) for the visible layers, nudged apart. */
+function contextLabels(site, v) {
   const h = labelHeight(site);
   const items = [], boxes = [];
   const place = (lines, x, y, z) => {
@@ -616,7 +670,7 @@ function contextLabels(site) {
     const b = dxfBox(x, y, w, hh); boxes.push(b); items.push({ lines, x, y, z, ax: x, ay: y });
   };
   if (site.context) {
-    if (site.ctxInclude.f) {
+    if (site.ctxInclude.f && v.flood) {
       for (const z of site.context.floodZones) {
         if (!z.label || !Number.isFinite(z.label.z)) continue;
         const [x, y] = outXY(site, z.label.x, z.label.y);
@@ -628,7 +682,7 @@ function contextLabels(site) {
         place([{ text: `BFE ${b.elev}`, size: h * 0.8, layer: 'C-FLOD-TEXT' }], x, y + h, b.elevOut);
       }
     }
-    if (site.ctxInclude.p) {
+    if (site.ctxInclude.p && v.parcels) {
       for (const pc of site.context.parcels) {
         if (!pc.label || !Number.isFinite(pc.label.z)) continue;
         const [x, y] = outXY(site, pc.label.x, pc.label.y);
@@ -639,14 +693,23 @@ function contextLabels(site) {
       }
     }
   }
-  site._ctxLabels = { items, boxes };
-  return site._ctxLabels;
+  return { items, boxes };
 }
 
-function makeContourDxf(site) {
-  const d = new Dxf().layer('C-TOPO-MAJR', 30).layer('C-TOPO-MINR', 8).layer('C-TOPO-TEXT', 7);
+/** One DXF with every layer currently shown in the map's Layers panel. */
+function makeDxf(site, v) {
+  const d = new Dxf();
+  const labels = contextLabels(site, v);
+  if (v.contours) addContours(d, site, labels.boxes);
+  if (site.context) addContext(d, site, v, labels);
+  if (v.points) addPoints(d, site);
+  return d.toString();
+}
+
+function addContours(d, site, avoid) {
+  d.layer('C-TOPO-MAJR', 30).layer('C-TOPO-MINR', 8).layer('C-TOPO-TEXT', 7);
   const h = labelHeight(site);
-  const taken = [...contextLabels(site).boxes]; // keep clear of parcel / flood labels in the context DXF
+  const taken = [...avoid]; // keep clear of parcel / flood labels
   for (const c of site.contours) {
     const major = isMajor(c.level, site.interval);
     const layer = major ? 'C-TOPO-MAJR' : 'C-TOPO-MINR';
@@ -668,14 +731,12 @@ function makeContourDxf(site) {
       }
     }
   }
-  return d.toString();
 }
 
-function makeContextDxf(site) {
-  const d = new Dxf()
-    .layer('C-BLDG-OTLN', 4).layer('A-MASS', 9).layer('C-ROAD-CNTR', 2).layer('C-ROAD-EDGE', 7).layer('C-WALK-CNTR', 5);
+function addContext(d, site, v, labels) {
   const P = (x, y, z) => [...outXY(site, x, y), z];
-  for (const b of site.context.buildings) {
+  if (v.buildings) d.layer('C-BLDG-OTLN', 4).layer('A-MASS', 9);
+  for (const b of v.buildings ? site.context.buildings : []) {
     const ring = b.ring;
     d.polyline3d('C-BLDG-OTLN', ring.map(([x, y]) => P(x, y, b.base)), true);
     // Massing: vertical walls plus a flat roof, as 3D faces (base at the lowest ground point under the footprint).
@@ -688,13 +749,13 @@ function makeContextDxf(site) {
     }
   }
   const h = labelHeight(site);
-  if (site.ctxInclude.p) {
+  if (site.ctxInclude.p && v.parcels) {
     d.layer('C-PROP-LINE', 6).layer('C-PROP-TEXT', 6);
     for (const pc of site.context.parcels) {
       for (const l of pc.lines) d.polyline3d('C-PROP-LINE', l.map(([x, y, z]) => P(x, y, z)));
     }
   }
-  if (site.ctxInclude.f) {
+  if (site.ctxInclude.f && v.flood) {
     d.layer('C-FLOD-ZONE', 5).layer('C-FLOD-BFE', 4).layer('C-FLOD-TEXT', 5);
     for (const z of site.context.floodZones) {
       for (const l of z.lines) d.polyline3d('C-FLOD-ZONE', l.map(([x, y, zz]) => P(x, y, zz)));
@@ -704,7 +765,7 @@ function makeContextDxf(site) {
     }
   }
   // Parcel / flood / BFE labels, nudged apart; a leader line marks labels moved off their anchor.
-  for (const it of contextLabels(site).items) {
+  for (const it of labels.items) {
     const total = it.lines.reduce((a, l) => a + l.size * 1.4, 0);
     let y = it.y + total / 2;
     for (const l of it.lines) { y -= l.size * 0.7; d.text(l.layer, it.x, y, it.z, l.size, l.text); y -= l.size * 0.7; }
@@ -712,16 +773,16 @@ function makeContextDxf(site) {
       d.polyline3d(it.lines[0].layer, [[it.ax, it.ay, it.z], [it.x, it.y + (it.y > it.ay ? -total / 2 : total / 2), it.z]]);
     }
   }
-  for (const r of site.context.roads) {
+  if (v.roads) d.layer('C-ROAD-CNTR', 2).layer('C-ROAD-EDGE', 7).layer('C-WALK-CNTR', 5);
+  for (const r of v.roads ? site.context.roads : []) {
     const layer = r.kind === 'road' ? 'C-ROAD-CNTR' : 'C-WALK-CNTR';
     if (r.center.length > 1) d.polyline3d(layer, r.center.map(([x, y, z]) => P(x, y, z)));
     for (const e of r.edges) d.polyline3d('C-ROAD-EDGE', e.map(([x, y, z]) => P(x, y, z)));
   }
-  return d.toString();
 }
 
-function makePointDxf(site) {
-  const d = new Dxf().layer('C-TOPO-PNTS', 3);
+function addPoints(d, site) {
+  d.layer('C-TOPO-PNTS', 3);
   const { pts } = site;
   for (let j = 0; j < pts.ny; j++) {
     for (let i = 0; i < pts.nx; i++) {
@@ -731,10 +792,9 @@ function makePointDxf(site) {
       d.point('C-TOPO-PNTS', x, y, zv);
     }
   }
-  return d.toString();
 }
 
-async function makePng(site) {
+async function makePng(site, v) {
   const g = site.grid;
   const landscape = (g.nx >= g.ny);
   const canvas = document.createElement('canvas');
@@ -742,12 +802,14 @@ async function makePng(site) {
   canvas.height = landscape ? 2550 : 3300;
   const tinted = site.tinted;
   site.tinted = false;
+  site.vis = v;
+  site.meta = buildMeta(site);
   drawMap(canvas, site, 'print');
   site.tinted = tinted;
   return new Promise(res => canvas.toBlob(res, 'image/png'));
 }
 
-function makeReadme(site) {
+function makeReadme(site, v = vis()) {
   const z = site.zone;
   const u = site.units;
   const unitName = u === 'm' ? 'meters' : zoneUnitLabel(z);
@@ -811,33 +873,29 @@ function makeReadme(site) {
     '',
     'FILES',
     '-----',
+    `Layers included in the DXF and PNG (as shown in the app's Layers panel): ${LAYERS.filter(l => v[l.key] && (l.key !== 'points')).map(l => l.label).join(', ') || 'none'}${v.points ? ', Grid points (DXF only)' : ''}.`,
     '*_points.csv     X,Y,Z, comma-delimited, no header. Revit: Massing & Site > Toposolid >',
     '                 Create from Import > Specify Points File (Toposurface in Revit 2023 and',
-    '                 earlier). Choose the same units as this file when prompted.',
-    '*_contours.dxf   AutoCAD R12 DXF. 3D polylines with true Z on every vertex.',
-    '                 Layers: C-TOPO-MAJR (index), C-TOPO-MINR (intermediate), C-TOPO-TEXT (labels).',
-    '                 Can be linked into Revit and used for Toposolid > Create from Import > Select Import Instance.',
-    '*_points.dxf     AutoCAD R12 DXF. The CSV grid as 3D POINT entities on layer C-TOPO-PNTS.',
-    '*_context.dxf    AutoCAD R12 DXF of site context (when included):',
-    '                 C-BLDG-OTLN  building footprints, closed 3D polylines at the lowest ground point',
-    '                 A-MASS       building massing blocks (3DFACE walls + flat roof)',
-    '                 C-ROAD-CNTR  road centerlines draped on the terrain',
-    '                 C-ROAD-EDGE  estimated road edges (offset from centerline; see widths below)',
-    '                 C-WALK-CNTR  footpaths / trails / cycleways (centerlines)',
-    '                 C-PROP-LINE  parcel lines draped on terrain; C-PROP-TEXT parcel ID / owner',
-    '                 C-FLOD-ZONE  FEMA flood zone boundaries draped on terrain; C-FLOD-TEXT zone labels',
-    '                 C-FLOD-BFE   FEMA base flood elevation lines, drawn AT the BFE elevation',
-    '*_map.png        Printable contour map over aerial imagery, grid-north up.',
+    '                 earlier). Choose the same units as this file when prompted. Always the full terrain grid.',
+    '*.dxf            AutoCAD R12 DXF with the layers shown in the app. 3D polylines carry true Z on every vertex.',
+    ...(v.contours ? ['                 C-TOPO-MAJR / C-TOPO-MINR  index / intermediate contours; C-TOPO-TEXT labels'] : []),
+    ...(v.points ? ['                 C-TOPO-PNTS  the CSV grid as 3D POINT entities'] : []),
+    ...(v.buildings ? ['                 C-BLDG-OTLN  building footprints at the lowest ground point; A-MASS massing (3DFACE)'] : []),
+    ...(v.roads ? ['                 C-ROAD-CNTR / C-ROAD-EDGE  road centerlines / estimated edges, draped; C-WALK-CNTR paths'] : []),
+    ...(v.parcels && site.ctxInclude.p ? ['                 C-PROP-LINE  parcel lines draped on terrain; C-PROP-TEXT parcel ID / owner'] : []),
+    ...(v.flood ? ['                 C-FLOD-ZONE  flood zone boundaries draped; C-FLOD-TEXT labels; C-FLOD-BFE lines AT the BFE'] : []),
+    '                 Link into Revit with import units set to the units above (not Auto-Detect).',
+    '*_map.png        Printable map over aerial imagery with the same layers, grid-north up.',
     '',
     `Map imagery: ${site.imagery ? site.imageryCredit : 'none (hillshade shown)'}.`,
     '');
-  if (site.context) {
+  if (site.context && (v.buildings || v.roads || v.parcels || v.flood)) {
     const bs = site.context.buildings;
     const dates = [...new Set(bs.map(b => b.imageDate).filter(Boolean))].sort();
     const roads = site.context.roads.filter(r => r.kind === 'road');
     L_('SITE CONTEXT (approximate — verify in the field)',
       '-------------------------------------------------');
-    if (site.ctxInclude.b) {
+    if (v.buildings) {
       L_(`Buildings:            ${bs.length} footprints from FEMA/ORNL USA Structures`,
         '                      https://gis-fema.hub.arcgis.com/pages/usa-structures',
         `Footprint imagery:    ${dates.length ? (dates.length > 1 ? `${dates[0]} to ${dates.at(-1)}` : dates[0]) : 'not reported'} (newer buildings may be missing)`,
@@ -845,16 +903,16 @@ function makeReadme(site) {
         '                      available, otherwise modelled by ORNL). Missing heights use 3.5 m (one storey).',
         '                      Massing is a flat-roofed extrusion from the LOWEST ground point under each footprint.');
     }
-    if (site.ctxInclude.r) {
+    if (v.roads) {
       L_(`Roads:                ${roads.length} segments, ${site.context.roads.length - roads.length} paths, from ${site.roadsSource === 'tiger' ? 'US Census TIGER/Line (public domain)' : 'OpenStreetMap (© OpenStreetMap contributors, ODbL), via Esri\'s hosted OSM North America layer'}`,
         `                      Edge lines use OSM width/lanes where tagged (${roads.filter(r => r.widthKnown).length} of ${roads.length}); otherwise a typical width`,
         '                      by road type (e.g. residential 8 m, service 5 m, driveway 3.5 m). Bridges are draped on the ground.');
     }
-    if (site.ctxInclude.p) {
+    if (v.parcels && site.ctxInclude.p) {
       L_(`Parcels:              ${site.context.parcels.length} from the Arkansas GIS Office statewide parcel layer (CAMP / county assessor data).`,
         '                      Assessor parcel lines are NOT boundary survey lines; offsets of several feet are common.');
     }
-    if (site.ctxInclude.f) {
+    if (v.flood) {
       const fz = site.context.floodZones;
       const dfirms = [...new Set(fz.map(z => z.dfirm).filter(Boolean))];
       L_(`Flood zones:          ${fz.length ? [...new Set(fz.map(z => z.text))].join('; ') : 'none mapped on this site'}`,
@@ -875,12 +933,10 @@ function baseName(site) {
 }
 
 const MAKERS = {
-  csv: s => ({ name: `${baseName(s)}_points.csv`, data: makeCsv(s), type: 'text/csv' }),
-  'dxf-contours': s => ({ name: `${baseName(s)}_contours.dxf`, data: makeContourDxf(s), type: 'application/dxf' }),
-  'dxf-context': s => (s.context ? { name: `${baseName(s)}_context.dxf`, data: makeContextDxf(s), type: 'application/dxf' } : null),
-  'dxf-points': s => ({ name: `${baseName(s)}_points.dxf`, data: makePointDxf(s), type: 'application/dxf' }),
-  png: async s => ({ name: `${baseName(s)}_map.png`, data: await makePng(s), type: 'image/png' }),
-  readme: s => ({ name: `${baseName(s)}_README.txt`, data: makeReadme(s), type: 'text/plain' }),
+  csv: (s, v) => ({ name: `${baseName(s)}_points.csv`, data: makeCsv(s), type: 'text/csv' }),
+  dxf: (s, v) => ({ name: `${baseName(s)}.dxf`, data: makeDxf(s, v), type: 'application/dxf' }),
+  png: async (s, v) => ({ name: `${baseName(s)}_map.png`, data: await makePng(s, v), type: 'image/png' }),
+  readme: (s, v) => ({ name: `${baseName(s)}_README.txt`, data: makeReadme(s, v), type: 'text/plain' }),
 };
 
 function saveBlob(name, data, type) {
@@ -898,6 +954,7 @@ document.querySelectorAll('.dl').forEach(b => b.addEventListener('click', async 
   if (!site) return;
   const kind = b.dataset.out;
   const label = b.querySelector('.dl-name').textContent;
+  const v = vis();
   setStatus(`Preparing ${label}…`);
   await tick();
   try {
@@ -905,12 +962,12 @@ document.querySelectorAll('.dl').forEach(b => b.addEventListener('click', async 
       const zip = new JSZip();
       const folder = zip.folder(baseName(site));
       for (const k of Object.keys(MAKERS)) {
-        const f = await MAKERS[k](site);
+        const f = await MAKERS[k](site, v);
         if (f) folder.file(f.name, f.data);
       }
       saveBlob(`${baseName(site)}.zip`, await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' }));
     } else {
-      const f = await MAKERS[kind](site);
+      const f = await MAKERS[kind](site, v);
       if (!f) throw new Error('nothing to export');
       saveBlob(f.name, f.data, f.type);
     }

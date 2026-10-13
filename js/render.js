@@ -1,5 +1,5 @@
 // Canvas rendering for the on-screen preview and the printable PNG contour map.
-import { labelPositions, isMajor } from './contours.js?v=0.4.1';
+import { labelPositions, isMajor } from './contours.js?v=0.5.0';
 
 /** Hillshade (0..1) for a grid; azimuth 315°, altitude 45°. */
 export function hillshade(g, zFactor = 1) {
@@ -115,6 +115,8 @@ export function drawMap(canvas, site, mode = 'preview') {
 
   // Contours
   const onImagery = site.imagery && !site.tinted;
+  const v = site.vis || { contours: true, buildings: true, roads: true, parcels: true, flood: true };
+  const none = [];
   const minorCol = onImagery ? 'rgba(255,255,255,0.85)' : 'rgba(40,30,20,0.55)';
   const majorCol = onImagery ? '#ffb347' : 'rgba(60,30,10,0.95)';
   const halo = onImagery ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.5)';
@@ -125,7 +127,7 @@ export function drawMap(canvas, site, mode = 'preview') {
   };
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   for (const pass of ['halo', 'line']) {
-    for (const c of site.contours) {
+    for (const c of v.contours ? site.contours : none) {
       const major = isMajor(c.level, site.interval);
       const w = (major ? 2.2 : 1) * px;
       for (const line of c.lines) {
@@ -144,7 +146,7 @@ export function drawMap(canvas, site, mode = 'preview') {
     };
     ctx.setLineDash([]);
     // FEMA flood zones: translucent blue (darker for floodway, light for 0.2% chance).
-    for (const z of site.context.floodZones || []) {
+    for (const z of v.flood ? site.context.floodZones || [] : none) {
       if (!z.sfha && !z.shadedX) continue;
       ctx.beginPath();
       for (const r of z.rings) { r.forEach(([x, y], i) => (i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y)))); ctx.closePath(); }
@@ -153,10 +155,10 @@ export function drawMap(canvas, site, mode = 'preview') {
       ctx.lineWidth = 1.6 * px; ctx.strokeStyle = 'rgba(37,99,235,0.95)'; ctx.stroke();
     }
     // Parcels: magenta property lines.
-    for (const pc of site.context.parcels || []) {
+    for (const pc of v.parcels ? site.context.parcels || [] : none) {
       for (const l of pc.lines) { path(l); ctx.lineWidth = 1.4 * px; ctx.strokeStyle = onImagery ? '#ff4fd8' : '#a3157f'; ctx.stroke(); }
     }
-    for (const r of site.context.roads) {
+    for (const r of v.roads ? site.context.roads : none) {
       for (const e of r.edges) { path(e); ctx.lineWidth = 1.4 * px; ctx.strokeStyle = onImagery ? 'rgba(255,224,102,0.95)' : 'rgba(90,70,20,0.9)'; ctx.stroke(); }
       path(r.center);
       ctx.setLineDash(r.kind === 'road' ? [10 * px, 6 * px] : [3 * px, 3 * px]);
@@ -165,7 +167,7 @@ export function drawMap(canvas, site, mode = 'preview') {
       ctx.stroke();
       ctx.setLineDash([]);
     }
-    for (const b of site.context.buildings) {
+    for (const b of v.buildings ? site.context.buildings : none) {
       path(b.ring, true);
       ctx.fillStyle = onImagery ? 'rgba(79,209,255,0.22)' : 'rgba(30,40,50,0.28)';
       ctx.fill();
@@ -201,8 +203,8 @@ export function drawMap(canvas, site, mode = 'preview') {
 
   if (site.context) {
     const tags = [];
-    for (const z of site.context.floodZones || []) if ((z.sfha || z.shadedX) && z.label) tags.push({ text: z.text, x: z.label.x, y: z.label.y, fg: '#cfe0ff', size: print ? 12 : 10, lead: '#93b4ff' });
-    for (const pc of site.context.parcels || []) if (pc.label && pc.id) tags.push({ text: pc.id, x: pc.label.x, y: pc.label.y, fg: '#ffd1f5', size: print ? 10 : 9, lead: '#ff9ce8' });
+    for (const z of v.flood ? site.context.floodZones || [] : none) if ((z.sfha || z.shadedX) && z.label) tags.push({ text: z.text, x: z.label.x, y: z.label.y, fg: '#cfe0ff', size: print ? 12 : 10, lead: '#93b4ff' });
+    for (const pc of v.parcels ? site.context.parcels || [] : none) if (pc.label && pc.id) tags.push({ text: pc.id, x: pc.label.x, y: pc.label.y, fg: '#ffd1f5', size: print ? 10 : 9, lead: '#ff9ce8' });
     for (const t of tags) {
       ctx.font = `600 ${Math.round(t.size * px)}px "IBM Plex Sans", system-ui, sans-serif`;
       const w = ctx.measureText(t.text).width, h = t.size * px * 1.25;
@@ -235,7 +237,7 @@ export function drawMap(canvas, site, mode = 'preview') {
   const fontPx = Math.round((print ? 13 : 11) * px);
   ctx.font = `600 ${fontPx}px "IBM Plex Sans", system-ui, sans-serif`;
   const spacingUnits = (print ? 420 : 300) * px / k;
-  for (const c of site.contours) {
+  for (const c of v.contours ? site.contours : none) {
     if (!isMajor(c.level, site.interval)) continue;
     const label = formatElev(c.level, site.interval);
     const w = ctx.measureText(label).width, h = fontPx * 1.1;

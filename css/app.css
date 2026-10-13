@@ -142,3 +142,13 @@ input[type="search"]:focus, select:focus { outline: 2px solid var(--accent); out
   .stage { order: -1; height: 55vh; }
   .panel { border-right: 0; overflow: visible; }
 }
+
+/* Map layers panel */
+.layers-panel { background: rgba(28,34,38,0.92); color: #e7e4dd; padding: 8px 10px 8px; border: 0 !important; border-radius: 8px !important; min-width: 190px; font-family: var(--sans); backdrop-filter: blur(4px); }
+.lp-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #aab3b8; margin-bottom: 4px; font-weight: 600; }
+.lp-row { display: flex; align-items: center; gap: 7px; padding: 3px 0; cursor: pointer; font-size: 12.5px; }
+.lp-row input { margin: 0; accent-color: #e8913f; }
+.lp-sw { width: 12px; height: 4px; border-radius: 2px; flex: none; }
+.lp-name { flex: 1; }
+.lp-count { color: #8f999e; font-family: var(--mono); font-size: 11px; }
+.lp-foot { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.12); font-size: 10.5px; color: #8f999e; max-width: 190px; }
