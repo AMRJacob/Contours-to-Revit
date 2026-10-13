@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.2.2';
-import { fetchElevation, sample } from './dem.js?v=0.2.2';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.2.2';
-import { Dxf } from './dxf.js?v=0.2.2';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.2.2';
-import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate } from './context.js?v=0.2.2';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.3.0';
+import { fetchElevation, sample } from './dem.js?v=0.3.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.3.0';
+import { Dxf } from './dxf.js?v=0.3.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.3.0';
+import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate } from './context.js?v=0.3.0';
 
-const VERSION = '0.2.2';
+const VERSION = '0.3.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -172,7 +172,7 @@ function updateZoneHint() {
 function saveSettings() {
   store.set({
     units: units(), spacing: $('spacing').value, interval: $('interval').value,
-    localOrigin: $('local-origin').checked, smooth: $('smooth').checked, context: $('context').checked,
+    localOrigin: $('local-origin').checked, smooth: $('smooth').checked, ctxBuildings: $('ctx-buildings').checked, ctxRoads: $('ctx-roads').checked,
     zone: $('zone').value,
   });
 }
@@ -185,14 +185,15 @@ function restoreSettings() {
   if (s.interval && [...$('interval').options].some(o => o.value === s.interval)) $('interval').value = s.interval;
   if (typeof s.localOrigin === 'boolean') $('local-origin').checked = s.localOrigin;
   if (typeof s.smooth === 'boolean') $('smooth').checked = s.smooth;
-  if (typeof s.context === 'boolean') $('context').checked = s.context;
+  if (typeof s.ctxBuildings === 'boolean') $('ctx-buildings').checked = s.ctxBuildings;
+  if (typeof s.ctxRoads === 'boolean') $('ctx-roads').checked = s.ctxRoads;
   if (s.zone && [...$('zone').options].some(o => o.value === s.zone)) $('zone').value = s.zone;
 }
 
 document.querySelectorAll('input[name="units"]').forEach(r => r.addEventListener('change', () => {
   fillUnitOptions(); onSiteChanged(false); saveSettings(); invalidate();
 }));
-['spacing', 'interval', 'local-origin', 'smooth', 'context'].forEach(id => $(id).addEventListener('change', () => {
+['spacing', 'interval', 'local-origin', 'smooth', 'ctx-buildings', 'ctx-roads'].forEach(id => $(id).addEventListener('change', () => {
   onSiteChanged(false); saveSettings(); invalidate();
 }));
 $('zone').addEventListener('change', () => { updateZoneHint(); onSiteChanged(false); saveSettings(); invalidate(); });
@@ -316,8 +317,10 @@ async function generate() {
   const bbox = [Math.min(...ll.map(q => q[0])) - margin, Math.min(...ll.map(q => q[1])) - margin,
     Math.max(...ll.map(q => q[0])) + margin, Math.max(...ll.map(q => q[1])) + margin];
 
-  const wantContext = $('context').checked;
-  const ctxFetch = wantContext ? Promise.allSettled([fetchBuildings(bbox), fetchRoadsAny(bbox)]) : null;
+  const wantB = $('ctx-buildings').checked, wantR = $('ctx-roads').checked;
+  const ctxFetch = (wantB || wantR)
+    ? Promise.allSettled([wantB ? fetchBuildings(bbox) : Promise.resolve([]), wantR ? fetchRoadsAny(bbox) : Promise.resolve({ roads: [], source: '' })])
+    : null;
   const dem = await fetchElevation(bbox, 1, msg => setStatus(msg));
 
   setStatus('Building point grid…');
@@ -346,7 +349,7 @@ async function generate() {
   let roadsSource = '';
   const contextNotes = [];
   if (ctxFetch) {
-    setStatus('Adding buildings and roads…');
+    setStatus(wantB && wantR ? 'Adding buildings and roads…' : wantB ? 'Adding buildings…' : 'Adding roads…');
     const [bRes, rRes] = await ctxFetch;
     if (bRes.status === 'rejected') contextNotes.push(`Building footprints unavailable: ${bRes.reason?.message || bRes.reason}`);
     if (rRes.status === 'rejected') contextNotes.push(`Roads unavailable: ${rRes.reason?.message || rRes.reason}`);
@@ -370,7 +373,7 @@ async function generate() {
   const now = new Date();
   const site = {
     zone, units: u, toOut, zPerM, spacingOut, interval, box, pts, pStats, grid: cgrid, stats: cStats, shade,
-    contours, context, contextNotes, roadsSource, imagery, imageryCredit, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
+    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR }, imagery, imageryCredit, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
     tinted: false,
   };
   site.meta = buildMeta(site);
@@ -427,7 +430,7 @@ function buildMeta(site) {
       `North arrow: grid north; true north is ${fmt(Math.abs(site.convergence), 2)}° ${site.convergence >= 0 ? 'east' : 'west'} of grid north`,
       `Imagery: ${site.imagery ? site.imageryCredit : 'not available — hillshade shown'}`,
       `Generated ${site.generated.toISOString().slice(0, 10)} by Contours to Revit ${VERSION}`,
-      ...(site.context ? [`Buildings: FEMA/ORNL USA Structures (${site.context.buildings.length}); roads ${site.roadsSource === 'tiger' ? 'US Census TIGER' : '© OpenStreetMap contributors'}`] : []),
+      ...(site.context ? [[site.ctxInclude.b ? `Buildings: FEMA/ORNL USA Structures (${site.context.buildings.length})` : '', site.ctxInclude.r ? `Roads: ${site.roadsSource === 'tiger' ? 'US Census TIGER' : '© OpenStreetMap contributors'}` : ''].filter(Boolean).join('; ')] : []),
     ],
   };
 }
@@ -461,7 +464,9 @@ function showResults(site) {
     const nr = site.context.roads.filter(r => r.kind === 'road').length;
     const dates = [...new Set(site.context.buildings.map(b => b.imageDate).filter(Boolean))].sort();
     html += `<div style="margin:10px 0 4px;font-weight:600;color:var(--ink)">Site context</div>`;
-    html += `<div>${nb} building footprint${nb === 1 ? '' : 's'} (USA Structures${dates.length ? `, imagery ${escapeHtml(dates[0].slice(0, 4))}${dates.length > 1 && dates.at(-1).slice(0, 4) !== dates[0].slice(0, 4) ? '–' + escapeHtml(dates.at(-1).slice(0, 4)) : ''}` : ''}), ${nh} with height data · ${nr} road segment${nr === 1 ? '' : 's'} (${site.roadsSource === 'tiger' ? 'US Census TIGER' : 'OpenStreetMap'})</div>`;
+    const np = site.context.roads.length - nr;
+    if (site.ctxInclude.b) html += `<div>${nb} building footprint${nb === 1 ? '' : 's'} (USA Structures${dates.length ? `, imagery ${escapeHtml(dates[0].slice(0, 4))}${dates.length > 1 && dates.at(-1).slice(0, 4) !== dates[0].slice(0, 4) ? '–' + escapeHtml(dates.at(-1).slice(0, 4)) : ''}` : ''}), ${nh} with height data</div>`;
+    if (site.ctxInclude.r) html += `<div>${nr} road segment${nr === 1 ? '' : 's'}${np ? `, ${np} path${np === 1 ? '' : 's'}` : ''} (${site.roadsSource === 'tiger' ? 'US Census TIGER' : 'OpenStreetMap'})</div>`;
     for (const n of site.contextNotes) html += `<div class="warn" style="margin-top:6px">${escapeHtml(n)}</div>`;
   }
   src.innerHTML = html;
@@ -698,16 +703,20 @@ function makeReadme(site) {
     const dates = [...new Set(bs.map(b => b.imageDate).filter(Boolean))].sort();
     const roads = site.context.roads.filter(r => r.kind === 'road');
     L_('SITE CONTEXT (approximate — verify in the field)',
-      '-------------------------------------------------',
-      `Buildings:            ${bs.length} footprints from FEMA/ORNL USA Structures`,
-      '                      https://gis-fema.hub.arcgis.com/pages/usa-structures',
-      `Footprint imagery:    ${dates.length ? (dates.length > 1 ? `${dates[0]} to ${dates.at(-1)}` : dates[0]) : 'not reported'} (newer buildings may be missing)`,
-      `Heights:              ${bs.filter(b => b.heightKnown).length} of ${bs.length} from the dataset (meters; lidar-derived where`,
-      '                      available, otherwise modelled by ORNL). Missing heights use 3.5 m (one storey).',
-      '                      Massing is a flat-roofed extrusion from the LOWEST ground point under each footprint.',
-      `Roads:                ${roads.length} segments, ${site.context.roads.length - roads.length} paths, from ${site.roadsSource === 'tiger' ? 'US Census TIGER/Line (public domain)' : 'OpenStreetMap (© OpenStreetMap contributors, ODbL)'}`,
-      `                      Edge lines use OSM width/lanes where tagged (${roads.filter(r => r.widthKnown).length} of ${roads.length}); otherwise a typical width`,
-      '                      by road type (e.g. residential 8 m, service 5 m). Bridges are draped on the ground surface.');
+      '-------------------------------------------------');
+    if (site.ctxInclude.b) {
+      L_(`Buildings:            ${bs.length} footprints from FEMA/ORNL USA Structures`,
+        '                      https://gis-fema.hub.arcgis.com/pages/usa-structures',
+        `Footprint imagery:    ${dates.length ? (dates.length > 1 ? `${dates[0]} to ${dates.at(-1)}` : dates[0]) : 'not reported'} (newer buildings may be missing)`,
+        `Heights:              ${bs.filter(b => b.heightKnown).length} of ${bs.length} from the dataset (meters; lidar-derived where`,
+        '                      available, otherwise modelled by ORNL). Missing heights use 3.5 m (one storey).',
+        '                      Massing is a flat-roofed extrusion from the LOWEST ground point under each footprint.');
+    }
+    if (site.ctxInclude.r) {
+      L_(`Roads:                ${roads.length} segments, ${site.context.roads.length - roads.length} paths, from ${site.roadsSource === 'tiger' ? 'US Census TIGER/Line (public domain)' : 'OpenStreetMap (© OpenStreetMap contributors, ODbL), via Esri\'s hosted OSM North America layer'}`,
+        `                      Edge lines use OSM width/lanes where tagged (${roads.filter(r => r.widthKnown).length} of ${roads.length}); otherwise a typical width`,
+        '                      by road type (e.g. residential 8 m, service 5 m, driveway 3.5 m). Bridges are draped on the ground.');
+    }
     for (const n of site.contextNotes) L_(`Note:                 ${n}`);
     L_('');
   }

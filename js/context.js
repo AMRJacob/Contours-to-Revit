@@ -87,19 +87,7 @@ export async function fetchRoads([w, s, e, n]) {
   }
   return (j.elements || [])
     .filter(el => el.type === 'way' && el.geometry?.length > 1 && !SKIP_TYPES.has(el.tags.highway))
-    .map(el => {
-      const t = el.tags;
-      const kind = PATH_TYPES.has(t.highway) ? 'path' : 'road';
-      let widthM = parseWidthM(t.width);
-      const known = widthM !== null;
-      if (!known && t.lanes && kind === 'road') widthM = parseFloat(t.lanes) * 3.6;
-      if (!widthM) widthM = kind === 'path' ? 2 : (ROAD_WIDTH_M[t.highway] || 6);
-      return {
-        kind, type: t.highway, name: t.name || t.ref || '', widthM, widthKnown: known || !!t.lanes,
-        bridge: t.bridge && t.bridge !== 'no', tunnel: t.tunnel && t.tunnel !== 'no',
-        coords: el.geometry.map(g => [g.lon, g.lat]),
-      };
-    });
+    .map(el => osmRoad(el.tags, el.geometry.map(g => [g.lon, g.lat])));
 }
 
 // ---------- geometry helpers (native State Plane units) ----------
@@ -267,11 +255,17 @@ export async function fetchRoadsTiger([w, s, e, n]) {
   const layers = [2, 6, 8]; // primary, secondary (large scale), local roads
   const res = await Promise.all(layers.map(id => fetch(`${TIGER}/${id}/query?${params}`, { signal: AbortSignal.timeout(20000) }).then(r => r.json())));
   const out = [];
+  const seen = new Set();
   for (const j of res) {
     if (j.error) throw new Error(`TIGER: ${j.error.message}`);
     for (const f of j.features || []) {
       const [kind, type] = MTFCC[f.attributes.MTFCC] || ['road', 'unclassified'];
       for (const path of f.geometry?.paths || []) {
+        // The same street can appear in more than one TIGER layer; keep one copy.
+        const a = path[0], b = path[path.length - 1];
+        const key = [a, b].map(c => c.map(v => v.toFixed(6)).join(',')).sort().join('|') + '|' + path.length;
+        if (seen.has(key)) continue;
+        seen.add(key);
         out.push({ kind, type, name: f.attributes.NAME || '', widthM: kind === 'path' ? 2 : (ROAD_WIDTH_M[type] || 6), widthKnown: false, coords: path });
       }
     }
@@ -279,12 +273,58 @@ export async function fetchRoadsTiger([w, s, e, n]) {
   return out;
 }
 
-/** Roads from OpenStreetMap, falling back to Census TIGER. Returns {roads, source, note}. */
+// ---------- OpenStreetMap roads hosted by Esri (OSM North America, updated continuously) ----------
+const ESRI_OSM_HWY = 'https://services6.arcgis.com/Do88DoK2xjTUCXd1/arcgis/rest/services/OSM_NA_Highways/FeatureServer/0';
+
+export async function fetchRoadsEsriOsm([w, s, e, n]) {
+  const out = [];
+  let offset = 0;
+  for (let page = 0; page < 10; page++) {
+    const params = new URLSearchParams({
+      geometry: `${w},${s},${e},${n}`, geometryType: 'esriGeometryEnvelope', inSR: '4326', outSR: '4326',
+      spatialRel: 'esriSpatialRelIntersects', outFields: 'highway,service,name,ref,lanes,width,bridge,tunnel',
+      returnGeometry: 'true', geometryPrecision: '8', resultOffset: String(offset), resultRecordCount: '2000', f: 'json',
+    });
+    const r = await fetch(`${ESRI_OSM_HWY}/query?${params}`, { signal: AbortSignal.timeout(20000) });
+    const j = await r.json();
+    if (j.error) throw new Error(`OSM (Esri): ${j.error.message}`);
+    for (const f of j.features || []) {
+      const t = f.attributes;
+      if (!t.highway || SKIP_TYPES.has(t.highway)) continue;
+      for (const path of f.geometry?.paths || []) {
+        if (path.length > 1) out.push(osmRoad(t, path));
+      }
+    }
+    if (!j.exceededTransferLimit) break;
+    offset += (j.features || []).length;
+  }
+  return out;
+}
+
+function osmRoad(t, coords) {
+  const kind = PATH_TYPES.has(t.highway) ? 'path' : 'road';
+  let widthM = parseWidthM(t.width);
+  const known = widthM !== null;
+  if (!known && t.lanes && kind === 'road') widthM = parseFloat(t.lanes) * 3.6;
+  if (!widthM) widthM = kind === 'path' ? 2 : (t.service === 'driveway' ? 3.5 : t.service === 'parking_aisle' ? 7 : (ROAD_WIDTH_M[t.highway] || 6));
+  return {
+    kind, type: t.highway + (t.service ? `/${t.service}` : ''), name: t.name || t.ref || '', widthM, widthKnown: known || !!t.lanes,
+    bridge: !!t.bridge && t.bridge !== 'no', tunnel: !!t.tunnel && t.tunnel !== 'no', coords,
+  };
+}
+
+/**
+ * Roads: OpenStreetMap via Esri's hosted copy (fast), then the public Overpass API, then Census TIGER.
+ * Returns {roads, source, note}.
+ */
 export async function fetchRoadsAny(bbox) {
+  const fails = [];
+  try {
+    return { roads: await fetchRoadsEsriOsm(bbox), source: 'osm' };
+  } catch (err) { fails.push(err.message); }
   try {
     return { roads: await fetchRoads(bbox), source: 'osm' };
-  } catch (err) {
-    const roads = await fetchRoadsTiger(bbox);
-    return { roads, source: 'tiger', note: `${err.message} Used US Census TIGER roads instead (less precise, no driveways).` };
-  }
+  } catch (err) { fails.push(err.message); }
+  const roads = await fetchRoadsTiger(bbox);
+  return { roads, source: 'tiger', note: `OpenStreetMap roads unavailable (${fails.join('; ')}). Used US Census TIGER roads instead (street centerlines only, less precise).` };
 }
