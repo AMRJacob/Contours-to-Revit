@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.5.5">
+  <link rel="stylesheet" href="css/app.css?v=0.5.6">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -98,6 +98,7 @@
         <div class="downloads">
           <button class="dl dl-main" data-out="csv"><span class="dl-name">CSV</span><span class="dl-desc">Terrain points (X,Y,Z) for Toposolid &ldquo;Create from points file&rdquo;</span></button>
           <button class="dl" data-out="dxf"><span class="dl-name">DXF</span><span class="dl-desc">All layers shown on the map, one file, each on its own CAD layer</span></button>
+          <p class="hint dl-note" id="dxf-units-note">In Revit, set <strong>Import units: Feet</strong> when linking the DXF (don't use Auto-Detect).</p>
           <button class="dl" data-out="png"><span class="dl-name">PNG</span><span class="dl-desc">Printable map of the shown layers, north arrow &amp; scale</span></button>
           <button class="dl" data-out="readme"><span class="dl-name">README</span><span class="dl-desc">Sources, datum, zone, units, disclaimer</span></button>
           <button class="dl dl-all" data-out="zip"><span class="dl-name">Download all (.zip)</span></button>
@@ -133,6 +134,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.5.5"></script>
+  <script type="module" src="js/app.js?v=0.5.6"></script>
 </body>
 </html>

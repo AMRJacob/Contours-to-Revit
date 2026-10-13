@@ -4,7 +4,9 @@
 const f = v => (Math.round(v * 10000) / 10000).toString();
 
 export class Dxf {
-  constructor() {
+  /** units: 'ft' | 'm' — written as $INSUNITS/$MEASUREMENT so CAD/Revit "Auto-Detect" picks the right scale. */
+  constructor(units = 'ft') {
+    this.units = units;
     this.layers = new Map();
     this.ents = [];
     this.min = [Infinity, Infinity, Infinity];
@@ -59,6 +61,10 @@ export class Dxf {
     const ext = (code, v) => [code[0], f(v[0]), code[1], f(v[1]), code[2], f(v[2])];
     const okExt = Number.isFinite(this.min[0]);
     const header = ['0', 'SECTION', '2', 'HEADER', '9', '$ACADVER', '1', 'AC1009',
+      // Drawing units: $INSUNITS 2 = feet, 6 = meters; $MEASUREMENT 0 = imperial, 1 = metric.
+      '9', '$INSUNITS', '70', this.units === 'm' ? '6' : '2',
+      '9', '$MEASUREMENT', '70', this.units === 'm' ? '1' : '0',
+      '9', '$LUNITS', '70', '2',
       '9', '$INSBASE', '10', '0', '20', '0', '30', '0'];
     if (okExt) header.push('9', '$EXTMIN', ...ext(['10', '20', '30'], this.min), '9', '$EXTMAX', ...ext(['10', '20', '30'], this.max));
     header.push('0', 'ENDSEC');

@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.5.5';
-import { fetchElevation, sample } from './dem.js?v=0.5.5';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.5.5';
-import { Dxf } from './dxf.js?v=0.5.5';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.5.5';
-import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.5.5';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.5.6';
+import { fetchElevation, sample } from './dem.js?v=0.5.6';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.5.6';
+import { Dxf } from './dxf.js?v=0.5.6';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.5.6';
+import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.5.6';
 
-const VERSION = '0.5.5';
+const VERSION = '0.5.6';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -466,6 +466,7 @@ function buildMeta(site) {
 
 // ---------- Results UI ----------
 function showResults(site) {
+  $('dxf-units-note').innerHTML = `In Revit, set <strong>Import units: ${site.units === 'm' ? 'Meters' : 'Feet'}</strong> when linking the DXF (don't use Auto-Detect).`;
   $('step-results').hidden = false;
   const u = site.units;
   $('rs-min').textContent = `${fmt(site.pStats.min, 1)} ${u}`;
@@ -718,7 +719,7 @@ function contextLabels(site, v) {
 
 /** One DXF with every layer currently shown in the map's Layers panel. */
 function makeDxf(site, v) {
-  const d = new Dxf();
+  const d = new Dxf(site.units);
   const labels = contextLabels(site, v);
   if (v.contours) addContours(d, site, labels.boxes, v.labels !== false);
   if (site.context) addContext(d, site, v, labels);
@@ -908,7 +909,9 @@ function makeReadme(site, v = vis()) {
     ...(v.roads ? ['                 C-ROAD-CNTR  road centerlines, draped (no pavement edges: not published by the sources); C-WALK-CNTR paths'] : []),
     ...(v.parcels && site.ctxInclude.p ? ['                 C-PROP-LINE  parcel lines draped on terrain; C-PROP-TEXT parcel ID / owner'] : []),
     ...(v.flood ? ['                 C-FLOD-ZONE  flood zone boundaries draped; C-FLOD-PATT hatch (floodway cross-hatched,', '                 SFHA single hatch, shaded X sparse); C-FLOD-TEXT labels; C-FLOD-BFE lines AT the BFE'] : []),
-    '                 Link into Revit with import units set to the units above (not Auto-Detect).',
+    `                 REVIT: Insert > Link CAD (or Import CAD) > set "Import units" to ${u === 'm' ? 'METERS' : 'FEET'} — do not rely on`,
+    '                 Auto-Detect (older DXF readers default to inches). Positioning: "Auto - Origin to Origin"',
+    '                 unless you have set up shared coordinates.',
     '*_map.png        Printable map over aerial imagery with the same layers, grid-north up.',
     '',
     `Map imagery: ${site.imagery ? site.imageryCredit : 'none (hillshade shown)'}.`,
