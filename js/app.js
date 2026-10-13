@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.7.1';
-import { fetchElevation, sample } from './dem.js?v=0.7.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.7.1';
-import { Dxf } from './dxf.js?v=0.7.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.7.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.7.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.8.0';
+import { fetchElevation, sample } from './dem.js?v=0.8.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.8.0';
+import { Dxf } from './dxf.js?v=0.8.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.8.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.8.0';
 
-const VERSION = '0.7.1';
+const VERSION = '0.8.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -327,6 +327,7 @@ async function generate() {
       wantF ? fetchFlood(bbox) : Promise.resolve(null),
       fetchBuildingsMs(bbox),
       fetchBuildingsOsm(bbox),
+      inArkansas ? fetchArdotWidths(bbox) : Promise.resolve([]),
     ])
     : null;
   const dem = await fetchElevation(bbox, 1, msg => setStatus(msg));
@@ -354,13 +355,15 @@ async function generate() {
   const contours = contourLines(cgrid, levels);
 
   let context = null;
-  let floodFailed = false, parcelsFailed = false, bldgFailed = {};
+  let floodFailed = false, parcelsFailed = false, bldgFailed = {}, widthsFailed = false;
   let roadsSource = '';
   const contextNotes = [];
   if (!inArkansas) contextNotes.push('Parcels are only available for sites in Arkansas (statewide data from the Arkansas GIS Office).');
   if (ctxFetch) {
     setStatus('Adding site context…');
-    const [bRes, rRes, pRes, fRes, msRes, osmRes] = await ctxFetch;
+    const [bRes, rRes, pRes, fRes, msRes, osmRes, wRes] = await ctxFetch;
+    if (wRes.status === 'rejected') contextNotes.push(wRes.reason?.message || String(wRes.reason));
+    widthsFailed = wRes.status === 'rejected';
     if (bRes.status === 'rejected') contextNotes.push(`USA Structures footprints unavailable: ${bRes.reason?.message || bRes.reason}`);
     for (const r of [msRes, osmRes]) if (r.status === 'rejected') contextNotes.push(r.reason?.message || String(r.reason));
     bldgFailed = { buildings: bRes.status === 'rejected', bldgMs: msRes.status === 'rejected', bldgOsm: osmRes.status === 'rejected' };
@@ -372,6 +375,7 @@ async function generate() {
       { fwd: p.fwd, box, zAt, nativePerM, zPerM });
     // Other footprint sources go through the same projection / draping.
     context.bldgMs = prepareContext({ buildings: msRes.status === 'fulfilled' ? msRes.value : [] }, { fwd: p.fwd, box, zAt, nativePerM, zPerM }).buildings;
+    context.widths = prepareWidths(wRes.status === 'fulfilled' ? wRes.value : [], { fwd: p.fwd, box, zAt, nativePerM, ftToNative: nativePerM * 0.3048 });
     context.bldgOsm = prepareContext({ buildings: osmRes.status === 'fulfilled' ? osmRes.value : [] }, { fwd: p.fwd, box, zAt, nativePerM, zPerM }).buildings;
     if (pRes.status === 'rejected') contextNotes.push(pRes.reason?.message || String(pRes.reason));
     if (fRes.status === 'rejected') contextNotes.push(`${fRes.reason?.message || fRes.reason} — flood zones are NOT included; generate again to retry.`);
@@ -407,7 +411,7 @@ async function generate() {
   const now = new Date();
   const site = {
     zone, units: u, toOut, zPerM, spacingOut, interval, box, pts, pStats, grid: cgrid, stats: cStats, shade,
-    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, floodFailed, parcelsFailed, bldgFailed, imagery, imageryCredit, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
+    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, floodFailed, parcelsFailed, bldgFailed, widthsFailed, imagery, imageryCredit, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
     tinted: false,
   };
   site.meta = buildMeta(site);
@@ -528,13 +532,15 @@ const LAYERS = [
   { key: 'contours', label: 'Contours', swatch: '#ffb347' },
   ...BUILDING_SOURCES.map(b => ({ key: b.key, label: b.label, swatch: b.color })),
   { key: 'roads', label: 'Roads', swatch: '#ffe066' },
+  { key: 'roadWidths', label: 'Road widths · ArDOT', swatch: '#fde68a' },
+  { key: 'roadEdges', label: 'Road edges · ArDOT', swatch: '#facc15' },
   { key: 'parcels', label: 'Parcels', swatch: '#ff4fd8' },
   { key: 'flood', label: 'Flood zones', swatch: '#3b82f6' },
   { key: 'labels', label: 'Labels', swatch: '#ffffff', note: 'preview · PNG · DXF' },
   { key: 'points', label: 'Grid points', swatch: '#7bd88f', note: 'DXF only' },
 ];
 const visibility = (() => {
-  const v = { contours: true, buildings: true, bldgMs: false, bldgOsm: false, roads: true, parcels: true, flood: true, labels: true, points: false };
+  const v = { contours: true, buildings: true, bldgMs: false, bldgOsm: false, roads: true, roadWidths: true, roadEdges: true, parcels: true, flood: true, labels: true, points: false };
   try { Object.assign(v, JSON.parse(localStorage.getItem('c2r-layers') || '{}')); } catch { /* ignore */ }
   return v;
 })();
@@ -571,6 +577,8 @@ function updateLayerCounts(site) {
     bldgMs: c ? (site.bldgFailed?.bldgMs ? 'failed' : String((c.bldgMs || []).length)) : '',
     bldgOsm: c ? (site.bldgFailed?.bldgOsm ? 'failed' : String((c.bldgOsm || []).length)) : '',
     roads: c ? String(c.roads.length) : '',
+    roadWidths: c ? (!site.ctxInclude.p ? 'AR only' : site.widthsFailed ? 'failed' : String((c.widths || []).length)) : '',
+    roadEdges: c ? (!site.ctxInclude.p ? 'AR only' : site.widthsFailed ? 'failed' : String((c.widths || []).length)) : '',
     parcels: c ? (!site.ctxInclude.p ? 'AR only' : site.parcelsFailed ? 'failed' : String(c.parcels.length)) : '',
     flood: c ? (site.floodFailed ? 'failed' : c.floodZones.length ? String(c.floodZones.length) : 'none') : '',
     points: site ? `${fmt(site.pts.nx * site.pts.ny - site.pStats.missing, 0)} · DXF only` : 'DXF only',
@@ -591,7 +599,7 @@ function drawContoursOnMap(site) {
   const p = projector(site.zone);
   const renderer = L.canvas({ padding: 0.3 });
   const ll = ([x, y]) => { const [lon, lat] = p.inv([x, y]); return [lat, lon]; };
-  const groups = { contours: L.layerGroup(), roads: L.layerGroup(), parcels: L.layerGroup(), flood: L.layerGroup() };
+  const groups = { contours: L.layerGroup(), roads: L.layerGroup(), roadWidths: L.layerGroup(), roadEdges: L.layerGroup(), parcels: L.layerGroup(), flood: L.layerGroup() };
   for (const src of BUILDING_SOURCES) groups[src.key] = L.layerGroup();
   for (const c of site.contours) {
     const major = isMajor(c.level, site.interval);
@@ -612,6 +620,12 @@ function drawContoursOnMap(site) {
       // Centerlines dashed; edges (solid) only if a source ever provides real ones.
       L.polyline(r.center.map(ll), { renderer, color: r.kind === 'road' ? '#ffe066' : '#9be7ff', weight: r.kind === 'road' ? 2 : 1.2, dashArray: r.kind === 'road' ? '10 6' : '3 4', interactive: false }).addTo(groups.roads);
       for (const e of r.edges) L.polyline(e.map(ll), { renderer, color: '#ffe066', weight: 1.4, interactive: false }).addTo(groups.roads);
+    }
+    for (const w of site.context.widths || []) {
+      // Recorded widths: ArDOT's own centerline, hover for the record.
+      L.polyline(w.center.map(ll), { color: '#fde68a', weight: 5, opacity: 0.35, interactive: true }).bindTooltip(`${w.text}<br><small>${w.source}</small>`, { sticky: true }).addTo(groups.roadWidths);
+      for (const e of w.roadEdges) L.polyline(e.map(ll), { renderer, color: '#facc15', weight: 1.6, interactive: false }).addTo(groups.roadEdges);
+      for (const e of w.surfaceEdges) L.polyline(e.map(ll), { renderer, color: '#facc15', weight: 0.8, opacity: 0.7, interactive: false }).addTo(groups.roadEdges);
     }
     for (const src of BUILDING_SOURCES) {
       for (const b of site.context[src.key] || []) {
@@ -715,6 +729,14 @@ function contextLabels(site, v) {
         place([{ text: `BFE ${b.elev}`, size: h * 0.8, layer: 'C-FLOD-TEXT' }], x, y + h, b.elevOut);
       }
     }
+    if (v.roadWidths) {
+      for (const w of site.context.widths || []) {
+        const m = w.center[Math.floor(w.center.length / 2)];
+        if (!m) continue;
+        const [x, y] = outXY(site, m[0], m[1]);
+        place([{ text: w.text, size: h * 0.6, layer: 'C-ROAD-WDTH' }], x, y, m[2], true);
+      }
+    }
     if (site.ctxInclude.p && v.parcels) {
       for (const pc of site.context.parcels) {
         if (!pc.label || !Number.isFinite(pc.label.z)) continue;
@@ -815,6 +837,7 @@ function addContext(d, site, v, labels) {
       for (const l of pc.lines) d.polyline3d('C-PROP-LINE', l.map(([x, y, z]) => P(x, y, z)));
     }
   }
+  if (v.roadWidths && v.labels !== false && (site.context.widths || []).length) d.layer('C-ROAD-WDTH', 2);
   if (site.ctxInclude.f && v.flood) {
     d.layer('C-FLOD-ZONE', 5).layer('C-FLOD-PATT', 5).layer('C-FLOD-BFE', 4);
     if (v.labels !== false) d.layer('C-FLOD-TEXT', 5);
@@ -833,6 +856,13 @@ function addContext(d, site, v, labels) {
     for (const l of it.lines) { y -= l.size * 0.7; d.text(l.layer, it.x, y, it.z, l.size, l.text); y -= l.size * 0.7; }
     if (Math.hypot(it.x - it.ax, it.y - it.ay) > h) {
       d.polyline3d(it.lines[0].layer, [[it.ax, it.ay, it.z], [it.x, it.y + (it.y > it.ay ? -total / 2 : total / 2), it.z]]);
+    }
+  }
+  if (v.roadEdges && (site.context.widths || []).length) {
+    d.layer('C-ROAD-EDGE-ARDOT', 2).layer('C-ROAD-PAVE-ARDOT', 52);
+    for (const w of site.context.widths) {
+      for (const e of w.roadEdges) d.polyline3d('C-ROAD-EDGE-ARDOT', e.map(([x, y, z]) => P(x, y, z)));
+      for (const e of w.surfaceEdges) d.polyline3d('C-ROAD-PAVE-ARDOT', e.map(([x, y, z]) => P(x, y, z)));
     }
   }
   if (v.roads) d.layer('C-ROAD-CNTR', 2).layer('C-WALK-CNTR', 5);
@@ -946,7 +976,9 @@ function makeReadme(site, v = vis()) {
     ...(v.contours ? ['                 C-TOPO-MAJR / C-TOPO-MINR  index / intermediate contours; C-TOPO-TEXT labels'] : []),
     ...(v.points ? ['                 C-TOPO-PNTS  the CSV grid as 3D POINT entities'] : []),
     ...BUILDING_SOURCES.filter(b => v[b.key]).map(b => `                 C-BLDG-OTLN-${b.tag} / A-MASS-${b.tag}  ${b.short}: footprints at the lowest ground point / massing (3DFACE)`),
-    ...(v.roads ? ['                 C-ROAD-CNTR  road centerlines, draped (no pavement edges: not published by the sources); C-WALK-CNTR paths'] : []),
+    ...(v.roads ? ['                 C-ROAD-CNTR  road centerlines (OSM/TIGER), draped; C-WALK-CNTR paths'] : []),
+    ...(v.roadEdges ? ['                 C-ROAD-EDGE-ARDOT / C-ROAD-PAVE-ARDOT  edges from ArDOT RECORDED widths (traveled way / paved), draped'] : []),
+    ...(v.roadWidths && v.labels !== false ? ['                 C-ROAD-WDTH  ArDOT lanes / widths labels'] : []),
     ...(v.parcels && site.ctxInclude.p ? ['                 C-PROP-LINE  parcel lines draped on terrain; C-PROP-TEXT parcel ID / owner'] : []),
     ...(v.flood ? ['                 C-FLOD-ZONE  flood zone boundaries draped; C-FLOD-PATT hatch (floodway cross-hatched,', '                 SFHA single hatch, shaded X sparse); C-FLOD-TEXT labels; C-FLOD-BFE lines AT the BFE'] : []),
     `                 REVIT: Insert > Link CAD (or Import CAD) > set "Import units" to ${u === 'm' ? 'METERS' : 'FEET'} — do not rely on`,
@@ -956,7 +988,7 @@ function makeReadme(site, v = vis()) {
     '',
     `Map imagery: ${site.imagery ? site.imageryCredit : 'none (hillshade shown)'}.`,
     '');
-  if (site.context && (BUILDING_SOURCES.some(b => v[b.key]) || v.roads || v.parcels || v.flood)) {
+  if (site.context && (BUILDING_SOURCES.some(b => v[b.key]) || v.roads || v.roadWidths || v.roadEdges || v.parcels || v.flood)) {
     const bs = site.context.buildings;
     const dates = [...new Set(bs.map(b => b.imageDate).filter(Boolean))].sort();
     const roads = site.context.roads.filter(r => r.kind === 'road');
@@ -984,6 +1016,15 @@ function makeReadme(site, v = vis()) {
       L_(`Roads:                ${roads.length} segments, ${site.context.roads.length - roads.length} paths, from ${site.roadsSource === 'tiger' ? 'US Census TIGER/Line (public domain)' : 'OpenStreetMap (© OpenStreetMap contributors, ODbL), via Esri\'s hosted OSM North America layer'}`,
         '                      CENTERLINES ONLY. None of these sources publish pavement edges, so no edge lines are drawn;',
         '                      city/county GIS or a survey may have edge-of-pavement data. Bridges are draped on the ground.');
+    }
+    if ((v.roadWidths || v.roadEdges) && site.ctxInclude.p) {
+      const ws = site.context.widths || [];
+      L_(`Road widths:          ${site.widthsFailed ? 'NOT INCLUDED — ArDOT service did not respond' : `${ws.length} segment(s) with a RECORDED roadway width (feet), from ArDOT:`}`,
+        '                      live Road Inventory (state highway system) + 2019 full inventory copy (ADEM) for other roads.');
+      for (const t of [...new Set(ws.map(w => `${w.text}  [${w.source}]`))]) L_(`                      - ${t}`);
+      if (v.roadEdges) L_('                      Edge lines (C-ROAD-EDGE-ARDOT = traveled way, C-ROAD-PAVE-ARDOT = paved incl. shoulders) are',
+        '                      offset from ArDOT\'s centerline by half the recorded width — assumes the road is centred on it.',
+        '                      Roads without a recorded width get no edge lines.');
     }
     if (v.parcels && site.ctxInclude.p) {
       L_(`Parcels:              ${site.context.parcels.length} from the Arkansas GIS Office statewide parcel layer (CAMP / county assessor data).`,
@@ -1118,6 +1159,10 @@ function buildSnapTargets() {
   };
   for (const src of BUILDING_SOURCES) if (v[src.key]) for (const b of site.context[src.key] || []) addRing(b.ring, src.label);
   if (v.parcels) for (const pc of site.context.parcels || []) for (const r of pc.rings) addRing(r, `Parcel ${pc.id || ''}`.trim());
+  if (v.roadEdges) for (const w of site.context.widths || []) for (const e of [...w.roadEdges, ...w.surfaceEdges]) {
+    const pts = e.map(ll);
+    for (let i = 0; i + 1 < pts.length; i++) pick.segs.push({ a: pts[i], b: pts[i + 1], label: `Road edge (ArDOT) — ${w.label}` });
+  }
   if (v.roads) for (const r of site.context.roads) {
     const pts = r.center.map(ll);
     for (let i = 0; i + 1 < pts.length; i++) pick.segs.push({ a: pts[i], b: pts[i + 1], label: `Road centerline${r.name ? ' — ' + r.name : ''}` });

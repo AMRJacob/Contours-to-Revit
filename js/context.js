@@ -608,3 +608,70 @@ export async function fetchBuildingsOsm(bbox) {
     };
   });
 }
+
+// ---------- ArDOT road inventory: recorded lanes / widths (Arkansas only) ----------
+const ARDOT_LIVE = 'https://gis.ardot.gov/referenced/rest/services/SIR_TIS/Road_Inventory_OnSystem/FeatureServer/0';
+const ARDOT_2019 = 'https://services3.arcgis.com/aHoBXMRQeEIJbBUA/arcgis/rest/services/ROAD_INVENTORY_ARDOT/FeatureServer/0';
+
+/**
+ * Road segments with a recorded roadway width (feet). Live ArDOT data covers the state highway system;
+ * the 2019 full-inventory copy (republished by ADEM) adds city/county streets where a width was recorded.
+ * Returns [{paths, label, route, state, lanes, laneW, roadwayW, surfaceW, shL, shR, medianW, source}]
+ */
+export async function fetchArdotWidths(bbox) {
+  const live = await arcgisQueryAll(ARDOT_LIVE, bbox,
+    'AH_Route,GovernmentCode,Travel_Lanes,LaneWidth,RoadwayWidth,SurfaceWidth,RightShoulderWidth,LeftShoulderWidth,MedianWidth', 1000)
+    .catch(() => null);
+  const old = await arcgisQueryAll(ARDOT_2019, bbox,
+    'AH_Route,Government,Travel_Lan,LaneWidth,RoadwayWid,SurfaceWid,RightSho00,LeftShou00,MedianWidt', 1000)
+    .catch(() => null);
+  if (live === null && old === null) throw new Error('ArDOT road inventory unavailable: no response');
+  const out = [];
+  const label = (route, state) => (state ? `HWY ${route}` : String(route || '').replace(/(AVE|ST|RD|DR|LN|BLVD|HWY|CIR|CT|PL|PKWY|WAY)$/, ' $1').trim());
+  for (const f of live || []) {
+    const a = f.attributes;
+    if (!(a.RoadwayWidth > 0) || !f.geometry?.paths) continue;
+    out.push({ paths: f.geometry.paths, route: a.AH_Route, state: a.GovernmentCode === 1, label: label(a.AH_Route, a.GovernmentCode === 1),
+      lanes: a.Travel_Lanes, laneW: a.LaneWidth, roadwayW: a.RoadwayWidth, surfaceW: a.SurfaceWidth,
+      shL: a.LeftShoulderWidth, shR: a.RightShoulderWidth, medianW: a.MedianWidth, source: 'ArDOT Road Inventory (live)' });
+  }
+  const haveLiveState = (live || []).length > 0;
+  for (const f of old || []) {
+    const a = f.attributes;
+    if (!(a.RoadwayWid > 0) || !f.geometry?.paths) continue;
+    if (haveLiveState && a.Government === 1) continue; // state highways: prefer the live record
+    out.push({ paths: f.geometry.paths, route: a.AH_Route, state: a.Government === 1, label: label(a.AH_Route, a.Government === 1),
+      lanes: a.Travel_Lan, laneW: a.LaneWidth, roadwayW: a.RoadwayWid, surfaceW: a.SurfaceWid,
+      shL: a.LeftShou00, shR: a.RightSho00, medianW: a.MedianWidt, source: 'ArDOT Road Inventory 2019 (ADEM copy)' });
+  }
+  return out;
+}
+
+export function widthText(r) {
+  const parts = [r.label];
+  if (r.lanes) parts.push(`${r.lanes} LANES${r.laneW ? ` @ ${r.laneW}'` : ''}`);
+  parts.push(`${r.roadwayW}' ROADWAY`);
+  if (r.surfaceW > r.roadwayW) parts.push(`${r.surfaceW}' PAVED`);
+  if (r.shL || r.shR) parts.push(r.shL === r.shR ? `${r.shL}' SHLDRS` : `${r.shL}'/${r.shR}' SHLDRS`);
+  if (r.medianW > 0) parts.push(`${r.medianW}' MEDIAN`);
+  return parts.join(' · ');
+}
+
+/** Project, clip, drape ArDOT segments; edges offset by half the recorded widths (feet -> native via ftToNative). */
+export function prepareWidths(records, { fwd, box, zAt, nativePerM, ftToNative }) {
+  const step = 1.5 * nativePerM;
+  const drape = pts => pts.map(([x, y]) => [x, y, zAt(x, y)]).filter(q => Number.isFinite(q[2]));
+  const out = [];
+  for (const r of records) {
+    for (const path of r.paths) {
+      for (const piece of clipPolyline(path.map(c => fwd(c)), box)) {
+        const center = densify(piece, step);
+        if (center.length < 2) continue;
+        const edge = w => [w / 2, -w / 2].flatMap(d => clipPolyline(offsetPolyline(center, d * ftToNative), box).map(drape)).filter(l => l.length > 1);
+        out.push({ ...r, paths: undefined, center: drape(center), text: widthText(r),
+          roadEdges: edge(r.roadwayW), surfaceEdges: r.surfaceW > r.roadwayW ? edge(r.surfaceW) : [] });
+      }
+    }
+  }
+  return out;
+}

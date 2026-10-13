@@ -1,6 +1,6 @@
 // Canvas rendering for the on-screen preview and the printable PNG contour map.
-import { BUILDING_SOURCES } from './context.js?v=0.7.1';
-import { labelPositions, isMajor } from './contours.js?v=0.7.1';
+import { BUILDING_SOURCES } from './context.js?v=0.8.0';
+import { labelPositions, isMajor } from './contours.js?v=0.8.0';
 
 /** Hillshade (0..1) for a grid; azimuth 315°, altitude 45°. */
 export function hillshade(g, zFactor = 1) {
@@ -174,6 +174,11 @@ export function drawMap(canvas, site, mode = 'preview') {
       ctx.stroke();
       ctx.setLineDash([]);
     }
+    // ArDOT recorded-width edges: solid = traveled way, thin = paved incl. shoulders.
+    for (const w of v.roadEdges ? site.context.widths || [] : none) {
+      for (const e of w.surfaceEdges) { path(e); ctx.lineWidth = 0.9 * px; ctx.strokeStyle = onImagery ? 'rgba(250,204,21,0.75)' : 'rgba(120,90,0,0.7)'; ctx.stroke(); }
+      for (const e of w.roadEdges) { path(e); ctx.lineWidth = 1.6 * px; ctx.strokeStyle = onImagery ? '#facc15' : '#7a5a00'; ctx.stroke(); }
+    }
     // Building footprints, one color per source (see BUILDING_SOURCES).
     for (const src of BUILDING_SOURCES) {
       for (const b of v[src.key] ? site.context[src.key] || [] : none) {
@@ -226,6 +231,10 @@ export function drawMap(canvas, site, mode = 'preview') {
   if (site.context && v.labels) {
     const tags = [];
     for (const z of v.flood ? site.context.floodZones || [] : none) if ((z.sfha || z.shadedX) && z.label) tags.push({ text: z.text, x: z.label.x, y: z.label.y, fg: '#cfe0ff', size: print ? 12 : 10, lead: '#93b4ff' });
+    for (const w of v.roadWidths ? site.context.widths || [] : none) {
+      const m = w.center[Math.floor(w.center.length / 2)];
+      if (m) tags.push({ text: w.text, x: m[0], y: m[1], fg: '#fde68a', size: print ? 10 : 9, lead: '#fde68a', optional: true });
+    }
     for (const pc of v.parcels ? site.context.parcels || [] : none) if (pc.label && pc.id) tags.push({ text: pc.id, x: pc.label.x, y: pc.label.y, fg: '#ffd1f5', size: print ? 10 : 9, lead: '#ff9ce8', optional: true });
     for (const t of tags) {
       ctx.font = `600 ${Math.round(t.size * px)}px "IBM Plex Sans", system-ui, sans-serif`;
