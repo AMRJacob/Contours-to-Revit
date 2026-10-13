@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.5.4';
-import { fetchElevation, sample } from './dem.js?v=0.5.4';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.5.4';
-import { Dxf } from './dxf.js?v=0.5.4';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.5.4';
-import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.5.4';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.5.5';
+import { fetchElevation, sample } from './dem.js?v=0.5.5';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.5.5';
+import { Dxf } from './dxf.js?v=0.5.5';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.5.5';
+import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.5.5';
 
-const VERSION = '0.5.4';
+const VERSION = '0.5.5';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -523,10 +523,11 @@ const LAYERS = [
   { key: 'roads', label: 'Roads', swatch: '#ffe066' },
   { key: 'parcels', label: 'Parcels', swatch: '#ff4fd8' },
   { key: 'flood', label: 'Flood zones', swatch: '#3b82f6' },
+  { key: 'labels', label: 'Labels', swatch: '#ffffff', note: 'preview · PNG · DXF' },
   { key: 'points', label: 'Grid points', swatch: '#7bd88f', note: 'DXF only' },
 ];
 const visibility = (() => {
-  const v = { contours: true, buildings: true, roads: true, parcels: true, flood: true, points: false };
+  const v = { contours: true, buildings: true, roads: true, parcels: true, flood: true, labels: true, points: false };
   try { Object.assign(v, JSON.parse(localStorage.getItem('c2r-layers') || '{}')); } catch { /* ignore */ }
   return v;
 })();
@@ -564,6 +565,7 @@ function updateLayerCounts(site) {
     parcels: c ? (!site.ctxInclude.p ? 'AR only' : site.parcelsFailed ? 'failed' : String(c.parcels.length)) : '',
     flood: c ? (site.floodFailed ? 'failed' : c.floodZones.length ? String(c.floodZones.length) : 'none') : '',
     points: site ? `${fmt(site.pts.nx * site.pts.ny - site.pStats.missing, 0)} · DXF only` : 'DXF only',
+    labels: 'preview · PNG · DXF',
   };
   document.querySelectorAll('.layers-panel .lp-row').forEach(row => { row.querySelector('.lp-count').textContent = counts[row.dataset.key]; });
 }
@@ -671,6 +673,7 @@ const overlaps = (b, list) => list.some(o => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 
 function contextLabels(site, v) {
   const h = labelHeight(site);
   const items = [], boxes = [];
+  if (v.labels === false) return { items, boxes };
   const place = (lines, x, y, z) => {
     // lines: [{text, size, dy}] stacked around (x, y); try the anchor, then offsets below/above/sideways.
     const w = Math.max(...lines.map(l => textW(l.text, l.size)));
@@ -717,14 +720,15 @@ function contextLabels(site, v) {
 function makeDxf(site, v) {
   const d = new Dxf();
   const labels = contextLabels(site, v);
-  if (v.contours) addContours(d, site, labels.boxes);
+  if (v.contours) addContours(d, site, labels.boxes, v.labels !== false);
   if (site.context) addContext(d, site, v, labels);
   if (v.points) addPoints(d, site);
   return d.toString();
 }
 
-function addContours(d, site, avoid) {
-  d.layer('C-TOPO-MAJR', 30).layer('C-TOPO-MINR', 8).layer('C-TOPO-TEXT', 7);
+function addContours(d, site, avoid, labelsOn = true) {
+  d.layer('C-TOPO-MAJR', 30).layer('C-TOPO-MINR', 8);
+  if (labelsOn) d.layer('C-TOPO-TEXT', 7);
   const h = labelHeight(site);
   const taken = [...avoid]; // keep clear of parcel / flood labels
   for (const c of site.contours) {
@@ -734,7 +738,7 @@ function addContours(d, site, avoid) {
       const out = line.map(([x, y]) => [...outXY(site, x, y), c.level]);
       const closed = line.length > 3 && line[0][0] === line[line.length - 1][0] && line[0][1] === line[line.length - 1][1];
       d.polyline3d(layer, closed ? out.slice(0, -1) : out, closed);
-      if (major) {
+      if (major && labelsOn) {
         const str = formatElev(c.level, site.interval);
         let last = null;
         for (const p of labelPositions(out.map(q => [q[0], q[1]]), h * 13, h * 8)) {
@@ -767,13 +771,15 @@ function addContext(d, site, v, labels) {
   }
   const h = labelHeight(site);
   if (site.ctxInclude.p && v.parcels) {
-    d.layer('C-PROP-LINE', 6).layer('C-PROP-TEXT', 6);
+    d.layer('C-PROP-LINE', 6);
+    if (v.labels !== false) d.layer('C-PROP-TEXT', 6);
     for (const pc of site.context.parcels) {
       for (const l of pc.lines) d.polyline3d('C-PROP-LINE', l.map(([x, y, z]) => P(x, y, z)));
     }
   }
   if (site.ctxInclude.f && v.flood) {
-    d.layer('C-FLOD-ZONE', 5).layer('C-FLOD-PATT', 5).layer('C-FLOD-BFE', 4).layer('C-FLOD-TEXT', 5);
+    d.layer('C-FLOD-ZONE', 5).layer('C-FLOD-PATT', 5).layer('C-FLOD-BFE', 4);
+    if (v.labels !== false) d.layer('C-FLOD-TEXT', 5);
     for (const z of site.context.floodZones) for (const l of z.hatch3d || []) d.polyline3d('C-FLOD-PATT', l.map(([x, y, zz]) => P(x, y, zz)));
     for (const z of site.context.floodZones) {
       for (const l of z.lines) d.polyline3d('C-FLOD-ZONE', l.map(([x, y, zz]) => P(x, y, zz)));
@@ -891,7 +897,7 @@ function makeReadme(site, v = vis()) {
     '',
     'FILES',
     '-----',
-    `Layers included in the DXF and PNG (as shown in the app's Layers panel): ${LAYERS.filter(l => v[l.key] && (l.key !== 'points')).map(l => l.label).join(', ') || 'none'}${v.points ? ', Grid points (DXF only)' : ''}.`,
+    `Layers included in the DXF and PNG (as shown in the app's Layers panel): ${LAYERS.filter(l => v[l.key] && (l.key !== 'points')).map(l => l.label).join(', ') || 'none'}${v.points ? ', Grid points (DXF only)' : ''}${v.labels === false ? ' (labels off)' : ''}.`,
     '*_points.csv     X,Y,Z, comma-delimited, no header. Revit: Massing & Site > Toposolid >',
     '                 Create from Import > Specify Points File (Toposurface in Revit 2023 and',
     '                 earlier). Choose the same units as this file when prompted. Always the full terrain grid.',

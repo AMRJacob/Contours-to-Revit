@@ -1,5 +1,5 @@
 // Canvas rendering for the on-screen preview and the printable PNG contour map.
-import { labelPositions, isMajor } from './contours.js?v=0.5.4';
+import { labelPositions, isMajor } from './contours.js?v=0.5.5';
 
 /** Hillshade (0..1) for a grid; azimuth 315°, altitude 45°. */
 export function hillshade(g, zFactor = 1) {
@@ -115,7 +115,8 @@ export function drawMap(canvas, site, mode = 'preview') {
 
   // Contours
   const onImagery = site.imagery && !site.tinted;
-  const v = site.vis || { contours: true, buildings: true, roads: true, parcels: true, flood: true };
+  const v = site.vis || { contours: true, buildings: true, roads: true, parcels: true, flood: true, labels: true };
+  if (v.labels === undefined) v.labels = true;
   const none = [];
   const minorCol = onImagery ? 'rgba(255,255,255,0.85)' : 'rgba(40,30,20,0.55)';
   const majorCol = onImagery ? '#ffb347' : 'rgba(60,30,10,0.95)';
@@ -206,7 +207,7 @@ export function drawMap(canvas, site, mode = 'preview') {
   };
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
 
-  if (site.context) {
+  if (site.context && v.labels) {
     const tags = [];
     for (const z of v.flood ? site.context.floodZones || [] : none) if ((z.sfha || z.shadedX) && z.label) tags.push({ text: z.text, x: z.label.x, y: z.label.y, fg: '#cfe0ff', size: print ? 12 : 10, lead: '#93b4ff' });
     for (const pc of v.parcels ? site.context.parcels || [] : none) if (pc.label && pc.id) tags.push({ text: pc.id, x: pc.label.x, y: pc.label.y, fg: '#ffd1f5', size: print ? 10 : 9, lead: '#ff9ce8' });
@@ -242,7 +243,7 @@ export function drawMap(canvas, site, mode = 'preview') {
   const fontPx = Math.round((print ? 13 : 11) * px);
   ctx.font = `600 ${fontPx}px "IBM Plex Sans", system-ui, sans-serif`;
   const spacingUnits = (print ? 420 : 300) * px / k;
-  for (const c of v.contours ? site.contours : none) {
+  for (const c of v.contours && v.labels ? site.contours : none) {
     if (!isMajor(c.level, site.interval)) continue;
     const label = formatElev(c.level, site.interval);
     const w = ctx.measureText(label).width, h = fontPx * 1.1;
