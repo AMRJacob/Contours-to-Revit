@@ -24,7 +24,7 @@ export async function fetchBuildings([w, s, e, n]) {
       resultRecordCount: '1000',
       f: 'json',
     });
-    const r = await fetch(`${STRUCTURES}/query?${params}`);
+    const r = await fetch(`${STRUCTURES}/query?${params}`, { signal: AbortSignal.timeout(30000) });
     const j = await r.json();
     if (j.error) throw new Error(`USA Structures: ${j.error.message}`);
     for (const f of j.features || []) {
@@ -68,32 +68,38 @@ function parseWidthM(v) {
 /** OSM highways intersecting a lon/lat box. Returns [{kind:'road'|'path', type, name, widthM, widthKnown, coords:[[lon,lat],...]}]. */
 export async function fetchRoads([w, s, e, n]) {
   const q = `[out:json][timeout:25];way["highway"](${s},${w},${n},${e});out tags geom;`;
-  let lastErr;
-  for (const url of OVERPASS) {
-    try {
-      const r = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+  // Ask both public Overpass servers at once and use whichever answers first (they are often overloaded).
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 30000);
+  let j;
+  try {
+    j = await Promise.any(OVERPASS.map(async url => {
+      const r = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ac.signal });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = await r.json();
-      return (j.elements || [])
-        .filter(el => el.type === 'way' && el.geometry?.length > 1 && !SKIP_TYPES.has(el.tags.highway))
-        .map(el => {
-          const t = el.tags;
-          const kind = PATH_TYPES.has(t.highway) ? 'path' : 'road';
-          let widthM = parseWidthM(t.width);
-          const known = widthM !== null;
-          if (!known && t.lanes && kind === 'road') widthM = parseFloat(t.lanes) * 3.6;
-          if (!widthM) widthM = kind === 'path' ? 2 : (ROAD_WIDTH_M[t.highway] || 6);
-          return {
-            kind, type: t.highway, name: t.name || t.ref || '', widthM, widthKnown: known || !!t.lanes,
-            bridge: t.bridge && t.bridge !== 'no', tunnel: t.tunnel && t.tunnel !== 'no',
-            coords: el.geometry.map(g => [g.lon, g.lat]),
-          };
-        });
-    } catch (err) {
-      lastErr = err;
-    }
+      return r.json();
+    }));
+  } catch (err) {
+    const why = err.errors ? err.errors.map(x => x.name === 'AbortError' ? 'timed out' : x.message).join('; ') : err.message;
+    throw new Error(`OpenStreetMap roads unavailable (${why}). Try again in a minute.`);
+  } finally {
+    clearTimeout(timer);
+    ac.abort();
   }
-  throw new Error(`OpenStreetMap roads unavailable (${lastErr?.message || lastErr})`);
+  return (j.elements || [])
+    .filter(el => el.type === 'way' && el.geometry?.length > 1 && !SKIP_TYPES.has(el.tags.highway))
+    .map(el => {
+      const t = el.tags;
+      const kind = PATH_TYPES.has(t.highway) ? 'path' : 'road';
+      let widthM = parseWidthM(t.width);
+      const known = widthM !== null;
+      if (!known && t.lanes && kind === 'road') widthM = parseFloat(t.lanes) * 3.6;
+      if (!widthM) widthM = kind === 'path' ? 2 : (ROAD_WIDTH_M[t.highway] || 6);
+      return {
+        kind, type: t.highway, name: t.name || t.ref || '', widthM, widthKnown: known || !!t.lanes,
+        bridge: t.bridge && t.bridge !== 'no', tunnel: t.tunnel && t.tunnel !== 'no',
+        coords: el.geometry.map(g => [g.lon, g.lat]),
+      };
+    });
 }
 
 // ---------- geometry helpers (native State Plane units) ----------

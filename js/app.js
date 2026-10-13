@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.2.0';
-import { fetchElevation, sample } from './dem.js?v=0.2.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.2.0';
-import { Dxf } from './dxf.js?v=0.2.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.2.0';
-import { fetchBuildings, fetchRoads, prepareContext, triangulate } from './context.js?v=0.2.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.2.1';
+import { fetchElevation, sample } from './dem.js?v=0.2.1';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.2.1';
+import { Dxf } from './dxf.js?v=0.2.1';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.2.1';
+import { fetchBuildings, fetchRoads, prepareContext, triangulate } from './context.js?v=0.2.1';
 
-const VERSION = '0.2.0';
+const VERSION = '0.2.1';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
