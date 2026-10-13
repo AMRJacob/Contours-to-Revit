@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Contours to Revit</title>
+  <meta name="description" content="Download preliminary USGS 3DEP topography as Revit-ready CSV points and 3D DXF contours.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="lib/leaflet/leaflet.css">
+  <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+</head>
+<body>
+  <div class="app">
+    <aside class="panel" id="panel">
+      <header class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32"><path d="M3 22c5-6 9 2 14-4s9-2 12-3M3 14c5-5 9 2 14-3s9-3 12-3" /></svg>
+        </div>
+        <div>
+          <h1>Contours to Revit</h1>
+          <p class="tag">Preliminary USGS 3DEP topography &rarr; Toposolid points &amp; 3D DXF contours</p>
+        </div>
+      </header>
+
+      <section class="step" id="step-site">
+        <h2><span class="num">1</span> Site</h2>
+        <form id="search-form" class="search" autocomplete="off">
+          <input id="search" type="search" placeholder="Search an address or place" aria-label="Search an address or place">
+          <button type="submit" class="btn btn-quiet">Find</button>
+        </form>
+        <ul id="search-results" class="results" hidden></ul>
+        <button id="draw-btn" class="btn btn-block" type="button">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="5" width="14" height="10" rx="1" /></svg>
+          Draw site boundary
+        </button>
+        <p class="hint" id="draw-hint">Drag a rectangle on the map over your site. Drag its corners to adjust.</p>
+        <dl class="stats" id="site-stats" hidden>
+          <div><dt>Size</dt><dd id="st-size">—</dd></div>
+          <div><dt>Area</dt><dd id="st-area">—</dd></div>
+          <div><dt>Points</dt><dd id="st-points">—</dd></div>
+        </dl>
+        <div id="site-warning" class="warn" hidden></div>
+      </section>
+
+      <section class="step" id="step-options">
+        <h2><span class="num">2</span> Options</h2>
+        <div class="field">
+          <label>Units</label>
+          <div class="seg" role="radiogroup" id="units">
+            <label><input type="radio" name="units" value="ft" checked><span>Feet</span></label>
+            <label><input type="radio" name="units" value="m"><span>Meters</span></label>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="spacing">Point spacing</label>
+            <select id="spacing"></select>
+          </div>
+          <div class="field">
+            <label for="interval">Contour interval</label>
+            <select id="interval"></select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="zone">Coordinate system <span class="sub">NAD83 State Plane</span></label>
+          <select id="zone"></select>
+          <p class="hint" id="zone-hint">Draw a site to detect the zone.</p>
+        </div>
+        <label class="check">
+          <input type="checkbox" id="local-origin">
+          <span><strong>Use a local origin</strong> — subtract a base point from X/Y so Revit doesn't get coordinates millions of feet from its origin.</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="smooth" checked>
+          <span><strong>Smooth contours</strong> — removes lidar noise from the contour lines only; CSV/DXF points stay raw.</span>
+        </label>
+      </section>
+
+      <section class="step" id="step-generate">
+        <h2><span class="num">3</span> Generate</h2>
+        <button id="generate" class="btn btn-primary btn-block" type="button" disabled>Generate topography</button>
+        <p class="status" id="status" aria-live="polite"></p>
+      </section>
+
+      <section class="step" id="step-results" hidden>
+        <h2><span class="num">4</span> Download</h2>
+        <dl class="stats" id="result-stats">
+          <div><dt>Min elev.</dt><dd id="rs-min">—</dd></div>
+          <div><dt>Max elev.</dt><dd id="rs-max">—</dd></div>
+          <div><dt>Points</dt><dd id="rs-points">—</dd></div>
+        </dl>
+        <div class="source" id="source"></div>
+        <div class="downloads">
+          <button class="dl dl-main" data-out="csv"><span class="dl-name">Points CSV</span><span class="dl-desc">X,Y,Z for Toposolid &ldquo;Create from points file&rdquo;</span></button>
+          <button class="dl" data-out="dxf-contours"><span class="dl-name">Contours DXF</span><span class="dl-desc">3D polylines, major/minor layers, labels</span></button>
+          <button class="dl" data-out="dxf-points"><span class="dl-name">Points DXF</span><span class="dl-desc">Same grid as the CSV, as 3D points</span></button>
+          <button class="dl" data-out="png"><span class="dl-name">Contour map PNG</span><span class="dl-desc">Over aerial, with north arrow &amp; scale</span></button>
+          <button class="dl" data-out="readme"><span class="dl-name">README.txt</span><span class="dl-desc">Source, datum, zone, units, disclaimer</span></button>
+          <button class="dl dl-all" data-out="zip"><span class="dl-name">Download all (.zip)</span></button>
+        </div>
+      </section>
+
+      <footer class="foot">
+        <p><strong>Preliminary only — not survey data.</strong> Bare-earth elevations are interpolated under buildings and trees. Elevations: USGS 3DEP, NAVD88.</p>
+        <p class="credits">Imagery &copy; Esri, Maxar, Earthstar Geographics. Streets &copy; OpenStreetMap contributors. <a href="https://github.com/AMRJacob/Contours-to-Revit" target="_blank" rel="noopener">Source</a></p>
+      </footer>
+    </aside>
+
+    <main class="stage">
+      <div class="view-tabs" role="tablist">
+        <button role="tab" class="tab active" data-view="map" aria-selected="true">Map</button>
+        <button role="tab" class="tab" data-view="preview" aria-selected="false" disabled>Preview</button>
+      </div>
+      <div id="map"></div>
+      <div id="preview" class="preview" hidden>
+        <div class="preview-bar">
+          <div class="seg seg-dark" role="radiogroup">
+            <label><input type="radio" name="pv" value="aerial" checked><span>Aerial</span></label>
+            <label><input type="radio" name="pv" value="tint"><span>Elevation tint</span></label>
+          </div>
+        </div>
+        <canvas id="preview-canvas"></canvas>
+      </div>
+    </main>
+  </div>
+
+  <script src="lib/leaflet/leaflet.js"></script>
+  <script src="lib/leaflet-draw/leaflet.draw.js"></script>
+  <script src="lib/proj4.js"></script>
+  <script src="lib/geotiff.js"></script>
+  <script src="lib/jszip.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
