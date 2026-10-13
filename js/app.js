@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.5.0';
-import { fetchElevation, sample } from './dem.js?v=0.5.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.5.0';
-import { Dxf } from './dxf.js?v=0.5.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.5.0';
-import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays } from './context.js?v=0.5.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.5.1';
+import { fetchElevation, sample } from './dem.js?v=0.5.1';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.5.1';
+import { Dxf } from './dxf.js?v=0.5.1';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.5.1';
+import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays } from './context.js?v=0.5.1';
 
-const VERSION = '0.5.0';
+const VERSION = '0.5.1';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -351,6 +351,7 @@ async function generate() {
   const contours = contourLines(cgrid, levels);
 
   let context = null;
+  let floodFailed = false, parcelsFailed = false;
   let roadsSource = '';
   const contextNotes = [];
   if (!inArkansas) contextNotes.push('Parcels are only available for sites in Arkansas (statewide data from the Arkansas GIS Office).');
@@ -365,7 +366,9 @@ async function generate() {
       { buildings: bRes.status === 'fulfilled' ? bRes.value : [], roads: rRes.status === 'fulfilled' ? rRes.value.roads : [] },
       { fwd: p.fwd, box, zAt, nativePerM, zPerM });
     if (pRes.status === 'rejected') contextNotes.push(pRes.reason?.message || String(pRes.reason));
-    if (fRes.status === 'rejected') contextNotes.push(fRes.reason?.message || String(fRes.reason));
+    if (fRes.status === 'rejected') contextNotes.push(`${fRes.reason?.message || fRes.reason} — flood zones are NOT included; generate again to retry.`);
+    floodFailed = fRes.status === 'rejected';
+    parcelsFailed = pRes.status === 'rejected';
     // BFE values from FEMA are in their own unit (normally feet, NAVD88); convert to the output Z unit.
     const bfeToOut = (v, unit) => {
       const meters = /met/i.test(unit) ? v : v * 1200 / 3937;
@@ -389,7 +392,7 @@ async function generate() {
   const now = new Date();
   const site = {
     zone, units: u, toOut, zPerM, spacingOut, interval, box, pts, pStats, grid: cgrid, stats: cStats, shade,
-    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, imagery, imageryCredit, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
+    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, floodFailed, parcelsFailed, imagery, imageryCredit, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
     tinted: false,
   };
   site.meta = buildMeta(site);
@@ -491,7 +494,9 @@ function showResults(site) {
       const fz = site.context.floodZones;
       const sfha = fz.filter(z => z.sfha);
       const zones = [...new Set(fz.map(z => z.zone + (z.floodway ? ' floodway' : z.shadedX ? ' (0.2%)' : '')))].sort();
-      html += fz.length
+      html += site.floodFailed
+        ? ''
+        : fz.length
         ? `<div>${sfha.length ? '<strong style="color:var(--warn)">Site is partly in a FEMA Special Flood Hazard Area.</strong> ' : ''}Flood zones: ${escapeHtml(zones.join(', '))}${site.context.bfes.length ? ` · ${site.context.bfes.length} BFE line${site.context.bfes.length === 1 ? '' : 's'}` : ''} (FEMA NFHL)</div>`
         : '<div>No mapped FEMA flood zones on this site (NFHL) — the area may be unmapped; check the FIRM panel.</div>';
     }
@@ -546,8 +551,8 @@ function updateLayerCounts(site) {
     contours: site ? `${site.contours.length} levels` : '',
     buildings: c ? String(c.buildings.length) : '',
     roads: c ? String(c.roads.length) : '',
-    parcels: c ? (site.ctxInclude.p ? String(c.parcels.length) : 'AR only') : '',
-    flood: c ? (c.floodZones.length ? String(c.floodZones.length) : 'none') : '',
+    parcels: c ? (!site.ctxInclude.p ? 'AR only' : site.parcelsFailed ? 'failed' : String(c.parcels.length)) : '',
+    flood: c ? (site.floodFailed ? 'failed' : c.floodZones.length ? String(c.floodZones.length) : 'none') : '',
     points: site ? `${fmt(site.pts.nx * site.pts.ny - site.pStats.missing, 0)} · DXF only` : 'DXF only',
   };
   document.querySelectorAll('.layers-panel .lp-row').forEach(row => { row.querySelector('.lp-count').textContent = counts[row.dataset.key]; });
@@ -915,7 +920,7 @@ function makeReadme(site, v = vis()) {
     if (v.flood) {
       const fz = site.context.floodZones;
       const dfirms = [...new Set(fz.map(z => z.dfirm).filter(Boolean))];
-      L_(`Flood zones:          ${fz.length ? [...new Set(fz.map(z => z.text))].join('; ') : 'none mapped on this site'}`,
+      L_(`Flood zones:          ${site.floodFailed ? 'NOT INCLUDED — the FEMA service did not respond; regenerate to retry' : fz.length ? [...new Set(fz.map(z => z.text))].join('; ') : 'none mapped on this site'}`,
         '                      Source: FEMA National Flood Hazard Layer (NFHL), https://hazards.fema.gov/',
         `                      ${dfirms.length ? `FIRM database(s): ${dfirms.join(', ')}. ` : ''}Confirm against the effective FIRM panel and any LOMRs.`,
         `                      BFE lines: ${site.context.bfes.length}${site.context.bfes.length ? ` (values as published, ${site.context.bfes[0].unit || 'feet'} ${site.context.bfes[0].datum || ''}`.trimEnd() + ')' : ''}.`);

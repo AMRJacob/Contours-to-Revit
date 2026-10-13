@@ -24,8 +24,7 @@ export async function fetchBuildings([w, s, e, n]) {
       resultRecordCount: '1000',
       f: 'json',
     });
-    const r = await fetch(`${STRUCTURES}/query?${params}`, { signal: AbortSignal.timeout(30000) });
-    const j = await r.json();
+    const j = await getJson(`${STRUCTURES}/query?${params}`);
     if (j.error) throw new Error(`USA Structures: ${j.error.message}`);
     for (const f of j.features || []) {
       if (!f.geometry?.rings?.length) continue;
@@ -285,8 +284,7 @@ export async function fetchRoadsEsriOsm([w, s, e, n]) {
       spatialRel: 'esriSpatialRelIntersects', outFields: 'highway,service,name,ref,lanes,width,bridge,tunnel',
       returnGeometry: 'true', geometryPrecision: '8', resultOffset: String(offset), resultRecordCount: '2000', f: 'json',
     });
-    const r = await fetch(`${ESRI_OSM_HWY}/query?${params}`, { signal: AbortSignal.timeout(20000) });
-    const j = await r.json();
+    const j = await getJson(`${ESRI_OSM_HWY}/query?${params}`, 2);
     if (j.error) throw new Error(`OSM (Esri): ${j.error.message}`);
     for (const f of j.features || []) {
       const t = f.attributes;
@@ -332,6 +330,22 @@ export async function fetchRoadsAny(bbox) {
 // ---------- Parcels (Arkansas GIS Office, statewide CAMP parcels) ----------
 const AR_PARCELS = 'https://gis.arkansas.gov/arcgis/rest/services/FEATURESERVICES/Planning_Cadastre/FeatureServer/6';
 
+/** GET JSON with retries: public GIS servers fail intermittently (often without CORS headers). */
+async function getJson(url, tries = 3) {
+  let last;
+  for (let k = 0; k < tries; k++) {
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(25000) });
+      if (r.status >= 500) throw new Error(`HTTP ${r.status}`);
+      return await r.json();
+    } catch (err) {
+      last = err;
+      await new Promise(res => setTimeout(res, 800 * (k + 1)));
+    }
+  }
+  throw last;
+}
+
 async function arcgisQueryAll(url, [w, s, e, n], outFields, pageSize = 1000) {
   const out = [];
   let offset = 0;
@@ -341,8 +355,7 @@ async function arcgisQueryAll(url, [w, s, e, n], outFields, pageSize = 1000) {
       spatialRel: 'esriSpatialRelIntersects', outFields, returnGeometry: 'true', geometryPrecision: '8',
       resultOffset: String(offset), resultRecordCount: String(pageSize), f: 'json',
     });
-    const r = await fetch(`${url}/query?${params}`, { signal: AbortSignal.timeout(25000) });
-    const j = await r.json();
+    const j = await getJson(`${url}/query?${params}`);
     if (j.error) throw new Error(j.error.message || 'query failed');
     out.push(...(j.features || []));
     if (!j.exceededTransferLimit || !(j.features || []).length) break;
