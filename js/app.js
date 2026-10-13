@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.5.3';
-import { fetchElevation, sample } from './dem.js?v=0.5.3';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.5.3';
-import { Dxf } from './dxf.js?v=0.5.3';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.5.3';
-import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.5.3';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.5.4';
+import { fetchElevation, sample } from './dem.js?v=0.5.4';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.5.4';
+import { Dxf } from './dxf.js?v=0.5.4';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.5.4';
+import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.5.4';
 
-const VERSION = '0.5.3';
+const VERSION = '0.5.4';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -590,8 +590,8 @@ function drawContoursOnMap(site) {
   if (site.context) {
     for (const z of site.context.floodZones || []) {
       if (!z.sfha && !z.shadedX) continue;
-      L.polygon(z.rings.map(r => r.map(ll)), { renderer, color: '#3b82f6', weight: 1.5, fill: false, interactive: false }).addTo(groups.flood);
-      for (const seg of z.hatch || []) L.polyline(seg.map(ll), { renderer, color: '#3b82f6', weight: 0.5, opacity: 0.6, interactive: false }).addTo(groups.flood);
+      L.polygon(z.rings.map(r => r.map(ll)), { renderer, color: '#8ec5ff', weight: 2, fill: false, interactive: false }).addTo(groups.flood);
+      for (const seg of z.hatch || []) L.polyline(seg.map(ll), { renderer, color: '#8ec5ff', weight: 0.9, opacity: 0.85, interactive: false }).addTo(groups.flood);
     }
     for (const pc of site.context.parcels || []) {
       for (const l of pc.lines) L.polyline(l.map(ll), { renderer, color: '#ff4fd8', weight: 1.4, interactive: false }).addTo(groups.parcels);

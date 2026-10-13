@@ -1,5 +1,5 @@
 // Canvas rendering for the on-screen preview and the printable PNG contour map.
-import { labelPositions, isMajor } from './contours.js?v=0.5.3';
+import { labelPositions, isMajor } from './contours.js?v=0.5.4';
 
 /** Hillshade (0..1) for a grid; azimuth 315°, altitude 45°. */
 export function hillshade(g, zFactor = 1) {
@@ -152,8 +152,8 @@ export function drawMap(canvas, site, mode = 'preview') {
       ctx.beginPath();
       for (const seg of z.hatch || []) { ctx.moveTo(X(seg[0][0]), Y(seg[0][1])); ctx.lineTo(X(seg[1][0]), Y(seg[1][1])); }
       // Thin, semi-transparent hatch so it reads without dominating; the boundary stays solid.
-      ctx.globalAlpha = 0.7;
-      ctx.lineWidth = (z.shadedX ? 0.45 : 0.6) * px; ctx.strokeStyle = floodCol; ctx.stroke();
+      ctx.globalAlpha = 0.85;
+      ctx.lineWidth = (z.shadedX ? 0.7 : 0.9) * px; ctx.strokeStyle = floodCol; ctx.stroke();
       ctx.globalAlpha = 1;
       ctx.beginPath();
       for (const r of z.rings) { r.forEach(([x, y], i) => (i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y)))); ctx.closePath(); }
