@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.8.0';
-import { fetchElevation, sample } from './dem.js?v=0.8.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.8.0';
-import { Dxf } from './dxf.js?v=0.8.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.8.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.8.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.8.1';
+import { fetchElevation, sample } from './dem.js?v=0.8.1';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.8.1';
+import { Dxf } from './dxf.js?v=0.8.1';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.8.1';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.8.1';
 
-const VERSION = '0.8.0';
+const VERSION = '0.8.1';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -34,7 +34,15 @@ const store = {
 };
 
 // ---------- Map ----------
-const map = L.map('map', { zoomControl: true, preferCanvas: true }).setView([34.7465, -92.2896], 15);
+// Remembered per browser: last map view, site boundary and picked origin (survive a refresh).
+const session = {
+  get(k) { try { return JSON.parse(localStorage.getItem('c2r-' + k) || 'null'); } catch { return null; } },
+  set(k, v) { try { if (v === null) localStorage.removeItem('c2r-' + k); else localStorage.setItem('c2r-' + k, JSON.stringify(v)); } catch { /* ignore */ } },
+};
+const savedView = session.get('view');
+const map = L.map('map', { zoomControl: true, preferCanvas: true })
+  .setView(savedView ? [savedView.lat, savedView.lng] : [34.7465, -92.2896], savedView ? savedView.zoom : 15);
+map.on('moveend', () => { const c = map.getCenter(); session.set('view', { lat: c.lat, lng: c.lng, zoom: map.getZoom() }); });
 const aerial = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
   maxZoom: 20, maxNativeZoom: 19, attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics',
 }).addTo(map);
@@ -61,12 +69,18 @@ map.on(L.Draw.Event.CREATED, e => {
   drawn.clearLayers();
   state.rect = e.layer;
   drawn.addLayer(e.layer);
+  saveRect();
   onSiteChanged(true);
 });
-map.on(L.Draw.Event.EDITED, () => onSiteChanged(true));
+map.on(L.Draw.Event.EDITED, () => { saveRect(); onSiteChanged(true); });
+function saveRect() {
+  const b = state.rect?.getBounds();
+  session.set('rect', b ? [[b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]] : null);
+}
 map.on('draw:editmove draw:editresize', () => onSiteChanged(false));
 map.on(L.Draw.Event.DELETED, () => {
   state.rect = drawn.getLayers()[0] || null;
+  saveRect();
   onSiteChanged(true);
 });
 
@@ -1221,6 +1235,7 @@ map.on('click', e => {
   const snap = snapAt(e.containerPoint);
   const at = snap ? snap.ll : e.latlng;
   state.origin = { lat: at.lat, lon: at.lng, label: snap ? snap.label : 'Picked point (no snap)' };
+  session.set('origin', state.origin);
   $('local-origin').checked = true;
   saveSettings();
   stopPick();
@@ -1230,7 +1245,7 @@ map.on('click', e => {
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && pick.active) { stopPick(); setStatus('Origin pick cancelled.'); } });
 $('pick-origin').addEventListener('click', startPick);
-$('reset-origin').addEventListener('click', () => { state.origin = null; applyOrigin(); setStatus('Origin reset to the south-west corner of the site.'); });
+$('reset-origin').addEventListener('click', () => { state.origin = null; session.set('origin', null); applyOrigin(); setStatus('Origin reset to the south-west corner of the site.'); });
 
 // ---------- Utils ----------
 function fmt(v, dec = 0) {
@@ -1247,6 +1262,15 @@ function escapeHtml(s) {
 // ---------- Init ----------
 fillZones();
 restoreSettings();
+// Restore the last site boundary and picked origin (map view is restored when the map is created).
+state.origin = session.get('origin');
+const savedRect = session.get('rect');
+if (savedRect) {
+  const r = L.rectangle(savedRect, drawControl.options.draw.rectangle.shapeOptions);
+  drawn.addLayer(r);
+  state.rect = r;
+  onSiteChanged(true);
+}
 applyOrigin();
 updateZoneHint();
 window.c2r = { state, map, makers: MAKERS }; // for debugging in the console
