@@ -12,6 +12,22 @@ const TIERS = [
   { key: '1s', label: '1 arc-second DEM (~30 m)', meters: 30, match: t => /\b1 arc[ -]second/i.test(t) },
 ];
 
+/** fetch with retries: USGS occasionally returns transient errors (which arrive without CORS headers). */
+async function fetchRetry(url, tries = 3) {
+  let last;
+  for (let k = 0; k < tries; k++) {
+    try {
+      const r = await fetch(url);
+      if (r.status < 500) return r;
+      last = new Error(`HTTP ${r.status}`);
+    } catch (err) {
+      last = err;
+    }
+    await new Promise(res => setTimeout(res, 1000 * (k + 1)));
+  }
+  throw new Error(`USGS elevation service did not respond (${last?.message || last}). Try again in a minute.`);
+}
+
 function tierOf(item) {
   const t = item.title || item.Name || '';
   return TIERS.find(tr => tr.match(t)) || null;
@@ -37,7 +53,7 @@ export async function queryCatalog([w, s, e, n]) {
     returnGeometry: 'false',
     f: 'json',
   });
-  const r = await fetch(`${SERVICE}/query?${params}`);
+  const r = await fetchRetry(`${SERVICE}/query?${params}`);
   if (!r.ok) throw new Error(`3DEP catalog query failed (HTTP ${r.status})`);
   const j = await r.json();
   if (j.error) throw new Error(`3DEP catalog query failed: ${j.error.message}`);
@@ -74,7 +90,7 @@ async function exportRaster(bbox, w, h, lockIds) {
   if (lockIds) {
     params.set('mosaicRule', JSON.stringify({ mosaicMethod: 'esriMosaicLockRaster', lockRasterIds: lockIds }));
   }
-  const r = await fetch(`${SERVICE}/exportImage?${params}`);
+  const r = await fetchRetry(`${SERVICE}/exportImage?${params}`);
   const type = r.headers.get('content-type') || '';
   if (!r.ok || !type.includes('tiff')) {
     let msg = `HTTP ${r.status}`;
@@ -110,7 +126,12 @@ export async function fetchElevation(bbox, targetMeters, onProgress = () => {}) 
   ph = Math.max(2, Math.ceil(ph / scale));
 
   onProgress('Looking up available 3DEP datasets…');
-  const items = await queryCatalog(bbox);
+  let items = [];
+  try {
+    items = await queryCatalog(bbox);
+  } catch (err) {
+    console.warn('Catalog lookup failed; using the default mosaic', err);
+  }
 
   let comp = null;
   const contributions = [];
