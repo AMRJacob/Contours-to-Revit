@@ -1,5 +1,5 @@
 // Canvas rendering for the on-screen preview and the printable PNG contour map.
-import { labelPositions, isMajor } from './contours.js?v=0.1.4';
+import { labelPositions, isMajor } from './contours.js?v=0.2.0';
 
 /** Hillshade (0..1) for a grid; azimuth 315°, altitude 45°. */
 export function hillshade(g, zFactor = 1) {
@@ -132,6 +132,33 @@ export function drawMap(canvas, site, mode = 'preview') {
         if (pass === 'halo') strokeLine(line, w + 1.6 * px, halo);
         else strokeLine(line, w, major ? majorCol : minorCol);
       }
+    }
+  }
+
+  // Site context: road edges/centerlines, then building footprints on top.
+  if (site.context) {
+    const path = (pts, close) => {
+      ctx.beginPath();
+      pts.forEach(([x, y], i) => (i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))));
+      if (close) ctx.closePath();
+    };
+    ctx.setLineDash([]);
+    for (const r of site.context.roads) {
+      for (const e of r.edges) { path(e); ctx.lineWidth = 1.4 * px; ctx.strokeStyle = onImagery ? 'rgba(255,224,102,0.95)' : 'rgba(90,70,20,0.9)'; ctx.stroke(); }
+      path(r.center);
+      ctx.setLineDash(r.kind === 'road' ? [10 * px, 6 * px] : [3 * px, 3 * px]);
+      ctx.lineWidth = (r.kind === 'road' ? 1 : 1.2) * px;
+      ctx.strokeStyle = r.kind === 'road' ? (onImagery ? 'rgba(255,224,102,0.8)' : 'rgba(90,70,20,0.7)') : (onImagery ? 'rgba(155,231,255,0.9)' : 'rgba(20,70,110,0.8)');
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    for (const b of site.context.buildings) {
+      path(b.ring, true);
+      ctx.fillStyle = onImagery ? 'rgba(79,209,255,0.22)' : 'rgba(30,40,50,0.28)';
+      ctx.fill();
+      ctx.lineWidth = 1.8 * px;
+      ctx.strokeStyle = onImagery ? '#4fd1ff' : '#1d2a33';
+      ctx.stroke();
     }
   }
 

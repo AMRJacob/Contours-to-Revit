@@ -32,6 +32,17 @@ export class Dxf {
     this.ents.push(out.join('\r\n'));
   }
 
+  /** 3DFACE from 3 or 4 [x,y,z] corners (a triangle repeats its last corner). */
+  face3d(layer, corners) {
+    const c = corners.length === 3 ? [...corners, corners[2]] : corners;
+    const out = ['0', '3DFACE', '8', layer];
+    c.forEach(([x, y, z], i) => {
+      this._ext(x, y, z);
+      out.push(String(10 + i), f(x), String(20 + i), f(y), String(30 + i), f(z));
+    });
+    this.ents.push(out.join('\r\n'));
+  }
+
   point(layer, x, y, z) {
     this._ext(x, y, z);
     this.ents.push(['0', 'POINT', '8', layer, '10', f(x), '20', f(y), '30', f(z)].join('\r\n'));

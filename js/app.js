@@ -1,12 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.1.4';
-import { fetchElevation, sample } from './dem.js?v=0.1.4';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.1.4';
-import { Dxf } from './dxf.js?v=0.1.4';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.1.4';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.2.0';
+import { fetchElevation, sample } from './dem.js?v=0.2.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.2.0';
+import { Dxf } from './dxf.js?v=0.2.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.2.0';
+import { fetchBuildings, fetchRoads, prepareContext, triangulate } from './context.js?v=0.2.0';
 
-const VERSION = '0.1.4';
+const VERSION = '0.2.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -171,7 +172,7 @@ function updateZoneHint() {
 function saveSettings() {
   store.set({
     units: units(), spacing: $('spacing').value, interval: $('interval').value,
-    localOrigin: $('local-origin').checked, smooth: $('smooth').checked,
+    localOrigin: $('local-origin').checked, smooth: $('smooth').checked, context: $('context').checked,
     zone: $('zone').value,
   });
 }
@@ -184,13 +185,14 @@ function restoreSettings() {
   if (s.interval && [...$('interval').options].some(o => o.value === s.interval)) $('interval').value = s.interval;
   if (typeof s.localOrigin === 'boolean') $('local-origin').checked = s.localOrigin;
   if (typeof s.smooth === 'boolean') $('smooth').checked = s.smooth;
+  if (typeof s.context === 'boolean') $('context').checked = s.context;
   if (s.zone && [...$('zone').options].some(o => o.value === s.zone)) $('zone').value = s.zone;
 }
 
 document.querySelectorAll('input[name="units"]').forEach(r => r.addEventListener('change', () => {
   fillUnitOptions(); onSiteChanged(false); saveSettings(); invalidate();
 }));
-['spacing', 'interval', 'local-origin', 'smooth'].forEach(id => $(id).addEventListener('change', () => {
+['spacing', 'interval', 'local-origin', 'smooth', 'context'].forEach(id => $(id).addEventListener('change', () => {
   onSiteChanged(false); saveSettings(); invalidate();
 }));
 $('zone').addEventListener('change', () => { updateZoneHint(); onSiteChanged(false); saveSettings(); invalidate(); });
@@ -314,6 +316,8 @@ async function generate() {
   const bbox = [Math.min(...ll.map(q => q[0])) - margin, Math.min(...ll.map(q => q[1])) - margin,
     Math.max(...ll.map(q => q[0])) + margin, Math.max(...ll.map(q => q[1])) + margin];
 
+  const wantContext = $('context').checked;
+  const ctxFetch = wantContext ? Promise.allSettled([fetchBuildings(bbox), fetchRoads(bbox)]) : null;
   const dem = await fetchElevation(bbox, 1, msg => setStatus(msg));
 
   setStatus('Building point grid…');
@@ -338,6 +342,19 @@ async function generate() {
   const levels = contourLevels(cStats.min, cStats.max, interval);
   const contours = contourLines(cgrid, levels);
 
+  let context = null;
+  const contextNotes = [];
+  if (ctxFetch) {
+    setStatus('Adding buildings and roads…');
+    const [bRes, rRes] = await ctxFetch;
+    if (bRes.status === 'rejected') contextNotes.push(`Building footprints unavailable: ${bRes.reason?.message || bRes.reason}`);
+    if (rRes.status === 'rejected') contextNotes.push(`Roads unavailable: ${rRes.reason?.message || rRes.reason}`);
+    context = prepareContext(
+      { buildings: bRes.status === 'fulfilled' ? bRes.value : [], roads: rRes.status === 'fulfilled' ? rRes.value : [] },
+      { fwd: p.fwd, box, zAt, nativePerM, zPerM });
+    await tick();
+  }
+
   setStatus('Fetching aerial imagery for the map…');
   const { bitmap: imagery, credit: imageryCredit } = await fetchImagery(zone, box);
 
@@ -350,7 +367,7 @@ async function generate() {
   const now = new Date();
   const site = {
     zone, units: u, toOut, zPerM, spacingOut, interval, box, pts, pStats, grid: cgrid, stats: cStats, shade,
-    contours, imagery, imageryCredit, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
+    contours, context, contextNotes, imagery, imageryCredit, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
     tinted: false,
   };
   site.meta = buildMeta(site);
@@ -407,6 +424,7 @@ function buildMeta(site) {
       `North arrow: grid north; true north is ${fmt(Math.abs(site.convergence), 2)}° ${site.convergence >= 0 ? 'east' : 'west'} of grid north`,
       `Imagery: ${site.imagery ? site.imageryCredit : 'not available — hillshade shown'}`,
       `Generated ${site.generated.toISOString().slice(0, 10)} by Contours to Revit ${VERSION}`,
+      ...(site.context ? [`Buildings: FEMA/ORNL USA Structures (${site.context.buildings.length}); roads © OpenStreetMap contributors`] : []),
     ],
   };
 }
@@ -434,7 +452,17 @@ function showResults(site) {
     for (const it of items) html += `<li>${escapeHtml(it.title)}${it.start || it.end ? ` — collected ${escapeHtml(dateRange(it.start, it.end))}` : ''}</li>`;
     html += '</ul></details>';
   }
+  if (site.context) {
+    const nb = site.context.buildings.length;
+    const nh = site.context.buildings.filter(b => b.heightKnown).length;
+    const nr = site.context.roads.filter(r => r.kind === 'road').length;
+    const dates = [...new Set(site.context.buildings.map(b => b.imageDate).filter(Boolean))].sort();
+    html += `<div style="margin:10px 0 4px;font-weight:600;color:var(--ink)">Site context</div>`;
+    html += `<div>${nb} building footprint${nb === 1 ? '' : 's'} (USA Structures${dates.length ? `, imagery ${escapeHtml(dates[0].slice(0, 4))}${dates.length > 1 && dates.at(-1).slice(0, 4) !== dates[0].slice(0, 4) ? '–' + escapeHtml(dates.at(-1).slice(0, 4)) : ''}` : ''}), ${nh} with height data · ${nr} road segment${nr === 1 ? '' : 's'} (OpenStreetMap)</div>`;
+    for (const n of site.contextNotes) html += `<div class="warn" style="margin-top:6px">${escapeHtml(n)}</div>`;
+  }
   src.innerHTML = html;
+  document.querySelector('[data-out="dxf-context"]').hidden = !site.context;
   document.querySelector('.tab[data-view="preview"]').disabled = false;
 }
 
@@ -448,6 +476,15 @@ function drawContoursOnMap(site) {
     for (const line of c.lines) {
       const latlngs = line.map(([x, y]) => { const [lon, lat] = p.inv([x, y]); return [lat, lon]; });
       L.polyline(latlngs, { renderer, color: major ? '#ffb347' : '#ffffff', weight: major ? 2 : 0.8, opacity: major ? 0.95 : 0.7, interactive: false }).addTo(layer);
+    }
+  }
+  if (site.context) {
+    const ll = ([x, y]) => { const [lon, lat] = p.inv([x, y]); return [lat, lon]; };
+    for (const r of site.context.roads) {
+      L.polyline(r.center.map(ll), { renderer, color: r.kind === 'road' ? '#ffe066' : '#9be7ff', weight: r.kind === 'road' ? 2 : 1, dashArray: r.kind === 'road' ? null : '4 4', interactive: false }).addTo(layer);
+    }
+    for (const b of site.context.buildings) {
+      L.polygon(b.ring.map(ll), { renderer, color: '#4fd1ff', weight: 1.5, fillColor: '#4fd1ff', fillOpacity: 0.15, interactive: false }).addTo(layer);
     }
   }
   layer.addTo(map);
@@ -517,6 +554,30 @@ function makeContourDxf(site) {
         }
       }
     }
+  }
+  return d.toString();
+}
+
+function makeContextDxf(site) {
+  const d = new Dxf()
+    .layer('C-BLDG-OTLN', 4).layer('A-MASS', 9).layer('C-ROAD-CNTR', 2).layer('C-ROAD-EDGE', 7).layer('C-WALK-CNTR', 5);
+  const P = (x, y, z) => [...outXY(site, x, y), z];
+  for (const b of site.context.buildings) {
+    const ring = b.ring;
+    d.polyline3d('C-BLDG-OTLN', ring.map(([x, y]) => P(x, y, b.base)), true);
+    // Massing: vertical walls plus a flat roof, as 3D faces (base at the lowest ground point under the footprint).
+    for (let i = 0; i < ring.length; i++) {
+      const [x0, y0] = ring[i], [x1, y1] = ring[(i + 1) % ring.length];
+      d.face3d('A-MASS', [P(x0, y0, b.base), P(x1, y1, b.base), P(x1, y1, b.top), P(x0, y0, b.top)]);
+    }
+    for (const [i, j, k] of triangulate(ring)) {
+      d.face3d('A-MASS', [P(...ring[i], b.top), P(...ring[j], b.top), P(...ring[k], b.top)]);
+    }
+  }
+  for (const r of site.context.roads) {
+    const layer = r.kind === 'road' ? 'C-ROAD-CNTR' : 'C-WALK-CNTR';
+    if (r.center.length > 1) d.polyline3d(layer, r.center.map(([x, y, z]) => P(x, y, z)));
+    for (const e of r.edges) d.polyline3d('C-ROAD-EDGE', e.map(([x, y, z]) => P(x, y, z)));
   }
   return d.toString();
 }
@@ -619,10 +680,34 @@ function makeReadme(site) {
     '                 Layers: C-TOPO-MAJR (index), C-TOPO-MINR (intermediate), C-TOPO-TEXT (labels).',
     '                 Can be linked into Revit and used for Toposolid > Create from Import > Select Import Instance.',
     '*_points.dxf     AutoCAD R12 DXF. The CSV grid as 3D POINT entities on layer C-TOPO-PNTS.',
+    '*_context.dxf    AutoCAD R12 DXF of site context (when included):',
+    '                 C-BLDG-OTLN  building footprints, closed 3D polylines at the lowest ground point',
+    '                 A-MASS       building massing blocks (3DFACE walls + flat roof)',
+    '                 C-ROAD-CNTR  road centerlines draped on the terrain',
+    '                 C-ROAD-EDGE  estimated road edges (offset from centerline; see widths below)',
+    '                 C-WALK-CNTR  footpaths / trails / cycleways (centerlines)',
     '*_map.png        Printable contour map over aerial imagery, grid-north up.',
     '',
     `Map imagery: ${site.imagery ? site.imageryCredit : 'none (hillshade shown)'}.`,
     '');
+  if (site.context) {
+    const bs = site.context.buildings;
+    const dates = [...new Set(bs.map(b => b.imageDate).filter(Boolean))].sort();
+    const roads = site.context.roads.filter(r => r.kind === 'road');
+    L_('SITE CONTEXT (approximate — verify in the field)',
+      '-------------------------------------------------',
+      `Buildings:            ${bs.length} footprints from FEMA/ORNL USA Structures`,
+      '                      https://gis-fema.hub.arcgis.com/pages/usa-structures',
+      `Footprint imagery:    ${dates.length ? (dates.length > 1 ? `${dates[0]} to ${dates.at(-1)}` : dates[0]) : 'not reported'} (newer buildings may be missing)`,
+      `Heights:              ${bs.filter(b => b.heightKnown).length} of ${bs.length} from the dataset (meters; lidar-derived where`,
+      '                      available, otherwise modelled by ORNL). Missing heights use 3.5 m (one storey).',
+      '                      Massing is a flat-roofed extrusion from the LOWEST ground point under each footprint.',
+      `Roads:                ${roads.length} segments, ${site.context.roads.length - roads.length} paths, from OpenStreetMap (© OpenStreetMap contributors, ODbL)`,
+      `                      Edge lines use OSM width/lanes where tagged (${roads.filter(r => r.widthKnown).length} of ${roads.length}); otherwise a typical width`,
+      '                      by road type (e.g. residential 8 m, service 5 m). Bridges are draped on the ground surface.');
+    for (const n of site.contextNotes) L_(`Note:                 ${n}`);
+    L_('');
+  }
   return lines.join('\r\n');
 }
 
@@ -635,6 +720,7 @@ function baseName(site) {
 const MAKERS = {
   csv: s => ({ name: `${baseName(s)}_points.csv`, data: makeCsv(s), type: 'text/csv' }),
   'dxf-contours': s => ({ name: `${baseName(s)}_contours.dxf`, data: makeContourDxf(s), type: 'application/dxf' }),
+  'dxf-context': s => (s.context ? { name: `${baseName(s)}_context.dxf`, data: makeContextDxf(s), type: 'application/dxf' } : null),
   'dxf-points': s => ({ name: `${baseName(s)}_points.dxf`, data: makePointDxf(s), type: 'application/dxf' }),
   png: async s => ({ name: `${baseName(s)}_map.png`, data: await makePng(s), type: 'image/png' }),
   readme: s => ({ name: `${baseName(s)}_README.txt`, data: makeReadme(s), type: 'text/plain' }),
@@ -663,11 +749,12 @@ document.querySelectorAll('.dl').forEach(b => b.addEventListener('click', async 
       const folder = zip.folder(baseName(site));
       for (const k of Object.keys(MAKERS)) {
         const f = await MAKERS[k](site);
-        folder.file(f.name, f.data);
+        if (f) folder.file(f.name, f.data);
       }
       saveBlob(`${baseName(site)}.zip`, await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' }));
     } else {
       const f = await MAKERS[kind](site);
+      if (!f) throw new Error('nothing to export');
       saveBlob(f.name, f.data, f.type);
     }
     setStatus(`Downloaded ${label}.`);
