@@ -1,5 +1,5 @@
 // Canvas rendering for the on-screen preview and the printable PNG contour map.
-import { labelPositions, isMajor } from './contours.js?v=0.4.0';
+import { labelPositions, isMajor } from './contours.js?v=0.4.1';
 
 /** Hillshade (0..1) for a grid; azimuth 315°, altitude 45°. */
 export function hillshade(g, zFactor = 1) {
@@ -175,36 +175,79 @@ export function drawMap(canvas, site, mode = 'preview') {
     }
   }
 
-  // Parcel IDs and flood zone labels
+  // ---- Labels, placed with collision avoidance ----
+  // Priority: flood zones, then parcels (nudged to a free spot, with a leader if moved), then contour labels
+  // (slid along their contour to open space, or dropped). North arrow and scale bar areas are reserved.
+  const placed = [];
+  const hits = b => placed.some(o => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
+  const inMap = b => b.x0 >= ox && b.x1 <= ox + mapW && b.y0 >= oy && b.y1 <= oy + mapH;
+  placed.push({ x0: ox + mapW - 90 * px, x1: ox + mapW, y0: oy, y1: oy + 110 * px }); // north arrow
+  placed.push({ x0: ox, x1: ox + 260 * px, y0: oy + mapH - 52 * px, y1: oy + mapH }); // scale bar
+  // Rotated label -> axis-aligned box (pixels), with a little breathing room.
+  const boxFor = (cx, cy, w, h, angDeg = 0) => {
+    const a = angDeg * Math.PI / 180, c = Math.abs(Math.cos(a)), s2 = Math.abs(Math.sin(a));
+    const hw = (w * c + h * s2) / 2 + 3 * px, hh = (w * s2 + h * c) / 2 + 2 * px;
+    return { x0: cx - hw, x1: cx + hw, y0: cy - hh, y1: cy + hh };
+  };
+  const haloText = (text, cx, cy, fg, halo, angDeg = 0) => {
+    ctx.save();
+    ctx.translate(cx, cy);
+    if (angDeg) ctx.rotate(-angDeg * Math.PI / 180);
+    ctx.lineWidth = 3 * px; ctx.strokeStyle = halo; ctx.strokeText(text, 0, 0);
+    ctx.fillStyle = fg; ctx.fillText(text, 0, 0);
+    ctx.restore();
+  };
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+
   if (site.context) {
-    const tag = (text, x, y, fg, size) => {
-      ctx.font = `600 ${Math.round(size * px)}px "IBM Plex Sans", system-ui, sans-serif`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.lineWidth = 3 * px; ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.strokeText(text, X(x), Y(y));
-      ctx.fillStyle = fg; ctx.fillText(text, X(x), Y(y));
-    };
-    for (const pc of site.context.parcels || []) if (pc.label && pc.id) tag(pc.id, pc.label.x, pc.label.y, '#ffd1f5', print ? 10 : 9);
-    for (const z of site.context.floodZones || []) if (z.sfha || z.shadedX) tag(z.text, z.label.x, z.label.y, '#cfe0ff', print ? 12 : 10);
+    const tags = [];
+    for (const z of site.context.floodZones || []) if ((z.sfha || z.shadedX) && z.label) tags.push({ text: z.text, x: z.label.x, y: z.label.y, fg: '#cfe0ff', size: print ? 12 : 10, lead: '#93b4ff' });
+    for (const pc of site.context.parcels || []) if (pc.label && pc.id) tags.push({ text: pc.id, x: pc.label.x, y: pc.label.y, fg: '#ffd1f5', size: print ? 10 : 9, lead: '#ff9ce8' });
+    for (const t of tags) {
+      ctx.font = `600 ${Math.round(t.size * px)}px "IBM Plex Sans", system-ui, sans-serif`;
+      const w = ctx.measureText(t.text).width, h = t.size * px * 1.25;
+      const ax = X(t.x), ay = Y(t.y);
+      // Try the anchor, then rings of offsets around it (below/above first, then sideways and diagonals).
+      let spot = null;
+      const dirs = [[0, 0], [0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [-1, 1], [1, -1], [-1, -1]];
+      for (let ring = 0; ring <= 6 && !spot; ring++) {
+        for (const [dx, dy] of dirs) {
+          if (ring === 0 && (dx || dy)) continue;
+          if (ring > 0 && !dx && !dy) continue;
+          const cx = ax + dx * ring * (w * 0.6), cy = ay + dy * ring * h * 1.1;
+          const b = boxFor(cx, cy, w, h);
+          if (!hits(b) && inMap(b)) { spot = { cx, cy, b }; break; }
+        }
+      }
+      if (!spot) spot = { cx: ax, cy: ay, b: boxFor(ax, ay, w, h) }; // nowhere free: keep it at its anchor
+      if (Math.hypot(spot.cx - ax, spot.cy - ay) > h * 0.6) {
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(spot.cx, spot.cy > ay ? spot.b.y0 + 2 * px : spot.b.y1 - 2 * px);
+        ctx.lineWidth = 1.2 * px; ctx.strokeStyle = t.lead; ctx.setLineDash([3 * px, 2 * px]); ctx.stroke(); ctx.setLineDash([]);
+        ctx.beginPath(); ctx.arc(ax, ay, 2.2 * px, 0, Math.PI * 2); ctx.fillStyle = t.lead; ctx.fill();
+      }
+      haloText(t.text, spot.cx, spot.cy, t.fg, 'rgba(0,0,0,0.7)');
+      placed.push(spot.b);
+    }
   }
 
-  // Labels on major contours
+  // Contour labels on index contours: candidates every third of the spacing; keep those that fit,
+  // at least ~one spacing apart along each line.
   const fontPx = Math.round((print ? 13 : 11) * px);
   ctx.font = `600 ${fontPx}px "IBM Plex Sans", system-ui, sans-serif`;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const spacingUnits = (print ? 420 : 300) * px / k;
   for (const c of site.contours) {
     if (!isMajor(c.level, site.interval)) continue;
     const label = formatElev(c.level, site.interval);
+    const w = ctx.measureText(label).width, h = fontPx * 1.1;
     for (const line of c.lines) {
-      for (const p of labelPositions(line, spacingUnits, 60 * px / k)) {
-        ctx.save();
-        ctx.translate(X(p.x), Y(p.y));
-        ctx.rotate(-p.angle * Math.PI / 180);
-        ctx.lineWidth = 3 * px; ctx.strokeStyle = onImagery ? 'rgba(0,0,0,0.75)' : 'rgba(255,255,255,0.9)';
-        ctx.strokeText(label, 0, 0);
-        ctx.fillStyle = onImagery ? '#ffffff' : '#2a1a0a';
-        ctx.fillText(label, 0, 0);
-        ctx.restore();
+      let last = null;
+      for (const p of labelPositions(line, spacingUnits / 3, 60 * px / k)) {
+        if (last && Math.hypot(p.x - last.x, p.y - last.y) < spacingUnits * 0.85) continue;
+        const b = boxFor(X(p.x), Y(p.y), w, h, p.angle);
+        if (hits(b) || !inMap(b)) continue;
+        haloText(label, X(p.x), Y(p.y), onImagery ? '#ffffff' : '#2a1a0a', onImagery ? 'rgba(0,0,0,0.75)' : 'rgba(255,255,255,0.9)', p.angle);
+        placed.push(b);
+        last = p;
       }
     }
   }

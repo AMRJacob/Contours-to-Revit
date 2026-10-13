@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.4.0';
-import { fetchElevation, sample } from './dem.js?v=0.4.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.4.0';
-import { Dxf } from './dxf.js?v=0.4.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.4.0';
-import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays } from './context.js?v=0.4.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.4.1';
+import { fetchElevation, sample } from './dem.js?v=0.4.1';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.4.1';
+import { Dxf } from './dxf.js?v=0.4.1';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.4.1';
+import { fetchBuildings, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays } from './context.js?v=0.4.1';
 
-const VERSION = '0.4.0';
+const VERSION = '0.4.1';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -586,9 +586,67 @@ function labelHeight(site) {
   return Math.max(site.units === 'ft' ? 1 : 0.3, Math.min(ext / 120, site.units === 'ft' ? 12 : 4));
 }
 
+// ---- DXF label layout (model units), so labels from the contour and context DXFs don't pile up ----
+const textW = (str, h) => str.length * h * 0.62;
+const dxfBox = (x, y, w, h, ang = 0) => {
+  const a = ang * Math.PI / 180, c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a));
+  const hw = (w * c + h * s) / 2 + h * 0.3, hh = (w * s + h * c) / 2 + h * 0.2;
+  return { x0: x - hw, x1: x + hw, y0: y - hh, y1: y + hh };
+};
+const overlaps = (b, list) => list.some(o => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
+
+/** Positions for flood-zone, parcel and BFE labels (output units), nudged apart. Cached per site. */
+function contextLabels(site) {
+  if (site._ctxLabels) return site._ctxLabels;
+  const h = labelHeight(site);
+  const items = [], boxes = [];
+  const place = (lines, x, y, z) => {
+    // lines: [{text, size, dy}] stacked around (x, y); try the anchor, then offsets below/above/sideways.
+    const w = Math.max(...lines.map(l => textW(l.text, l.size)));
+    const hh = lines.reduce((a, l) => a + l.size * 1.4, 0);
+    const dirs = [[0, 0], [0, -1], [0, 1], [1, 0], [-1, 0], [1, -1], [-1, -1], [1, 1], [-1, 1]];
+    for (let ring = 0; ring <= 5; ring++) {
+      for (const [dx, dy] of dirs) {
+        if ((ring === 0) !== (!dx && !dy)) continue;
+        const cx = x + dx * ring * w * 0.6, cy = y + dy * ring * hh;
+        const b = dxfBox(cx, cy, w, hh);
+        if (!overlaps(b, boxes)) { boxes.push(b); items.push({ lines, x: cx, y: cy, z, ax: x, ay: y }); return; }
+      }
+    }
+    const b = dxfBox(x, y, w, hh); boxes.push(b); items.push({ lines, x, y, z, ax: x, ay: y });
+  };
+  if (site.context) {
+    if (site.ctxInclude.f) {
+      for (const z of site.context.floodZones) {
+        if (!z.label || !Number.isFinite(z.label.z)) continue;
+        const [x, y] = outXY(site, z.label.x, z.label.y);
+        place([{ text: z.text, size: h, layer: 'C-FLOD-TEXT' }], x, y, z.label.z);
+      }
+      for (const b of site.context.bfes) {
+        const mid = b.line[Math.floor(b.line.length / 2)];
+        const [x, y] = outXY(site, mid[0], mid[1]);
+        place([{ text: `BFE ${b.elev}`, size: h * 0.8, layer: 'C-FLOD-TEXT' }], x, y + h, b.elevOut);
+      }
+    }
+    if (site.ctxInclude.p) {
+      for (const pc of site.context.parcels) {
+        if (!pc.label || !Number.isFinite(pc.label.z)) continue;
+        const [x, y] = outXY(site, pc.label.x, pc.label.y);
+        const lines = [];
+        if (pc.id) lines.push({ text: pc.id, size: h * 0.8, layer: 'C-PROP-TEXT' });
+        if (pc.owner) lines.push({ text: pc.owner.slice(0, 60), size: h * 0.6, layer: 'C-PROP-TEXT' });
+        if (lines.length) place(lines, x, y, pc.label.z);
+      }
+    }
+  }
+  site._ctxLabels = { items, boxes };
+  return site._ctxLabels;
+}
+
 function makeContourDxf(site) {
   const d = new Dxf().layer('C-TOPO-MAJR', 30).layer('C-TOPO-MINR', 8).layer('C-TOPO-TEXT', 7);
   const h = labelHeight(site);
+  const taken = [...contextLabels(site).boxes]; // keep clear of parcel / flood labels in the context DXF
   for (const c of site.contours) {
     const major = isMajor(c.level, site.interval);
     const layer = major ? 'C-TOPO-MAJR' : 'C-TOPO-MINR';
@@ -597,8 +655,15 @@ function makeContourDxf(site) {
       const closed = line.length > 3 && line[0][0] === line[line.length - 1][0] && line[0][1] === line[line.length - 1][1];
       d.polyline3d(layer, closed ? out.slice(0, -1) : out, closed);
       if (major) {
-        for (const p of labelPositions(out.map(q => [q[0], q[1]]), h * 40, h * 8)) {
-          d.text('C-TOPO-TEXT', p.x, p.y, c.level, h, formatElev(c.level, site.interval), p.angle);
+        const str = formatElev(c.level, site.interval);
+        let last = null;
+        for (const p of labelPositions(out.map(q => [q[0], q[1]]), h * 13, h * 8)) {
+          if (last && Math.hypot(p.x - last.x, p.y - last.y) < h * 34) continue;
+          const b = dxfBox(p.x, p.y, textW(str, h), h, p.angle);
+          if (overlaps(b, taken)) continue;
+          d.text('C-TOPO-TEXT', p.x, p.y, c.level, h, str, p.angle);
+          taken.push(b);
+          last = p;
         }
       }
     }
@@ -627,27 +692,24 @@ function makeContextDxf(site) {
     d.layer('C-PROP-LINE', 6).layer('C-PROP-TEXT', 6);
     for (const pc of site.context.parcels) {
       for (const l of pc.lines) d.polyline3d('C-PROP-LINE', l.map(([x, y, z]) => P(x, y, z)));
-      if (pc.label && Number.isFinite(pc.label.z)) {
-        const [lx, ly] = outXY(site, pc.label.x, pc.label.y);
-        if (pc.id) d.text('C-PROP-TEXT', lx, ly + h * 0.7, pc.label.z, h * 0.8, pc.id);
-        if (pc.owner) d.text('C-PROP-TEXT', lx, ly - h * 0.7, pc.label.z, h * 0.6, pc.owner.slice(0, 60));
-      }
     }
   }
   if (site.ctxInclude.f) {
     d.layer('C-FLOD-ZONE', 5).layer('C-FLOD-BFE', 4).layer('C-FLOD-TEXT', 5);
     for (const z of site.context.floodZones) {
       for (const l of z.lines) d.polyline3d('C-FLOD-ZONE', l.map(([x, y, zz]) => P(x, y, zz)));
-      if (Number.isFinite(z.label.z)) {
-        const [lx, ly] = outXY(site, z.label.x, z.label.y);
-        d.text('C-FLOD-TEXT', lx, ly, z.label.z, h, z.text);
-      }
     }
     for (const b of site.context.bfes) {
       d.polyline3d('C-FLOD-BFE', b.line.map(([x, y, z]) => P(x, y, z)));
-      const mid = b.line[Math.floor(b.line.length / 2)];
-      const [lx, ly] = outXY(site, mid[0], mid[1]);
-      d.text('C-FLOD-TEXT', lx, ly + h, b.elevOut, h * 0.8, `BFE ${b.elev}`);
+    }
+  }
+  // Parcel / flood / BFE labels, nudged apart; a leader line marks labels moved off their anchor.
+  for (const it of contextLabels(site).items) {
+    const total = it.lines.reduce((a, l) => a + l.size * 1.4, 0);
+    let y = it.y + total / 2;
+    for (const l of it.lines) { y -= l.size * 0.7; d.text(l.layer, it.x, y, it.z, l.size, l.text); y -= l.size * 0.7; }
+    if (Math.hypot(it.x - it.ax, it.y - it.ay) > h) {
+      d.polyline3d(it.lines[0].layer, [[it.ax, it.ay, it.z], [it.x, it.y + (it.y > it.ay ? -total / 2 : total / 2), it.z]]);
     }
   }
   for (const r of site.context.roads) {
