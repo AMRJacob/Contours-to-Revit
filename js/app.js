@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.8.1';
-import { fetchElevation, sample } from './dem.js?v=0.8.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.8.1';
-import { Dxf } from './dxf.js?v=0.8.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.8.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.8.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.8.2';
+import { fetchElevation, sample } from './dem.js?v=0.8.2';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.8.2';
+import { Dxf } from './dxf.js?v=0.8.2';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.8.2';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.8.2';
 
-const VERSION = '0.8.1';
+const VERSION = '0.8.2';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -1262,6 +1262,37 @@ function escapeHtml(s) {
 // ---------- Init ----------
 fillZones();
 restoreSettings();
+// ---------- Clear all (map control) ----------
+function clearAll() {
+  if (pick.active) stopPick();
+  drawn.clearLayers();
+  state.rect = null;
+  saveRect();
+  for (const g of Object.values(state.mapGroups || {})) map.removeLayer(g);
+  state.mapGroups = {};
+  state.origin = null;
+  session.set('origin', null);
+  state.result = null;
+  $('step-results').hidden = true;
+  if (!$('preview').hidden) document.querySelector('.tab[data-view="map"]').click();
+  document.querySelector('.tab[data-view="preview"]').disabled = true;
+  updateLayerCounts(null);
+  onSiteChanged(false);
+  applyOrigin();
+  setStatus('Cleared. Draw a new site boundary to start again.');
+}
+const ClearControl = L.Control.extend({
+  options: { position: 'topleft' },
+  onAdd() {
+    const el = L.DomUtil.create('div', 'leaflet-bar clear-control');
+    el.innerHTML = '<a href="#" role="button" title="Clear site, layers and origin" aria-label="Clear all">Clear</a>';
+    L.DomEvent.disableClickPropagation(el);
+    el.querySelector('a').addEventListener('click', e => { e.preventDefault(); clearAll(); });
+    return el;
+  },
+});
+map.addControl(new ClearControl());
+
 // Restore the last site boundary and picked origin (map view is restored when the map is created).
 state.origin = session.get('origin');
 const savedRect = session.get('rect');
