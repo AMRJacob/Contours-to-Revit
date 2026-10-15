@@ -1,5 +1,5 @@
 // Coordinate systems: State Plane zone lookup and projection helpers.
-import { ZONES } from './zones.js?v=0.16.1';
+import { ZONES } from './zones.js?v=0.16.2';
 
 /* global proj4 */
 
