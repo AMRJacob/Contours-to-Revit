@@ -1,14 +1,14 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.16.0';
-import { fetchElevation, sample } from './dem.js?v=0.16.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.16.0';
-import { Dxf } from './dxf.js?v=0.16.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32 } from './design.js?v=0.16.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.16.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.16.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.16.1';
+import { fetchElevation, sample } from './dem.js?v=0.16.1';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.16.1';
+import { Dxf } from './dxf.js?v=0.16.1';
+import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32 } from './design.js?v=0.16.1';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.16.1';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.16.1';
 
-const VERSION = '0.16.0';
+const VERSION = '0.16.1';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -2439,28 +2439,32 @@ map.on('mousedown', e => {
   dzRefresh();
 });
 
+/** Move the feature (or one of its handles) being dragged so the grabbed point follows xy. */
+function dzEditMove(xy) {
+  const ed = dz.edit, f = dz.design.feature(ed.id);
+  if (!f) return;
+  const dx = xy[0] - ed.from[0], dy = xy[1] - ed.from[1];
+  if (!ed.moved && Math.hypot(dx, dy) < 1e-9) return;
+  if (!ed.moved) { dz.design.checkpoint(); ed.moved = true; }
+  const g0 = ed.geom0;
+  let geom;
+  if (ed.handle < 0) geom = { a: [g0.a[0] + dx, g0.a[1] + dy], b: [g0.b[0] + dx, g0.b[1] + dy] };
+  else if (f.type === 'pad') {
+    const cs = Design.padCorners(g0, f.p.rot);
+    geom = { a: cs[(ed.handle + 2) % 4], b: xy }; // opposite corner stays put
+  } else geom = ed.handle === 0 ? { a: xy } : { b: xy };
+  f.geom = { ...f.geom, ...geom };
+  dz.design.stale = true;
+}
+
 map.on('mousemove', e => {
   if (dz.mode !== 'design' || !dz.design || dz.pan) return;
   const xy = dzNative(e);
   dz.cursor = xy;
   if (dz.stroking) dzStrokeTo(xy);
   else if (dz.drawing) dz.drawing.b = xy;
-  else if (dz.edit) {
-    const ed = dz.edit, f = dz.design.feature(ed.id);
-    if (f) {
-      if (!ed.moved) { dz.design.checkpoint(); ed.moved = true; }
-      const dx = xy[0] - ed.from[0], dy = xy[1] - ed.from[1];
-      const g0 = ed.geom0;
-      let geom;
-      if (ed.handle < 0) geom = { a: [g0.a[0] + dx, g0.a[1] + dy], b: [g0.b[0] + dx, g0.b[1] + dy] };
-      else if (f.type === 'pad') {
-        const cs = Design.padCorners(g0, f.p.rot);
-        geom = { a: cs[(ed.handle + 2) % 4], b: xy }; // opposite corner stays put
-      } else geom = ed.handle === 0 ? { a: xy } : { b: xy };
-      f.geom = { ...f.geom, ...geom };
-      dz.design.stale = true;
-    }
-  } else if (SHAPES.includes(dz.tool) || dz.sel) {
+  else if (dz.edit) dzEditMove(xy);
+  else if (SHAPES.includes(dz.tool) || dz.sel) {
     const hit = dzHit(e.containerPoint);
     map.getContainer().classList.toggle('over-handle', !!hit && hit.handle >= 0);
     map.getContainer().classList.toggle('over-feature', !!hit && hit.handle < 0 && SHAPES.includes(dz.tool));
@@ -2472,6 +2476,11 @@ map.on('mouseout', () => { if (dz.mode === 'design') { dz.cursor = null; dzDraw(
 
 document.addEventListener('mouseup', e => {
   if (e.button !== 0) return;
+  // Shapes end exactly where the button is released (not at the last mouse-move).
+  if ((dz.drawing || dz.edit) && dz.site) {
+    const xy = dzNative(map.mouseEventToLatLng(e));
+    if (dz.drawing) dz.drawing.b = xy; else dzEditMove(xy);
+  }
   if (dz.stroking) {
     dz.stroking = false; dz.last = null;
     if (dz.design.end()) dzAfterChange();
