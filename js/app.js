@@ -1,14 +1,14 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.15.1';
-import { fetchElevation, sample } from './dem.js?v=0.15.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.15.1';
-import { Dxf } from './dxf.js?v=0.15.1';
-import { Design, contourSegments, designKey } from './design.js?v=0.15.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.15.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.15.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.16.0';
+import { fetchElevation, sample } from './dem.js?v=0.16.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.16.0';
+import { Dxf } from './dxf.js?v=0.16.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32 } from './design.js?v=0.16.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.16.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.16.0';
 
-const VERSION = '0.15.1';
+const VERSION = '0.16.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -1404,7 +1404,7 @@ function folderName(kind) {
   const p = (folder.prefix || 'site').replace(/[\\/:*?"<>|]+/g, '-');
   return { csv: `${p}_points.csv`, dxf: `${p}_existing.dxf`, png: `${p}_map.png`, readme: `${p}_README.txt`,
     jpg: `${p}_aerial.jpg`, jgw: `${p}_aerial.jgw`, ulJpg: `${p}_aerial_underlay.jpg`, ulJgw: `${p}_aerial_underlay.jgw`, revit: `${p}_revit-coordinates.txt`,
-    newDxf: `${p}_new.dxf`, newCsv: `${p}_new_points.csv` }[kind];
+    newDxf: `${p}_new.dxf`, newCsv: `${p}_new_points.csv`, design: `${p}_design.json` }[kind];
 }
 
 function updateFolderUi() {
@@ -1863,17 +1863,22 @@ $('reset-origin').addEventListener('click', () => { state.origin = null; session
 // =====================================================================================================
 // ---------- Site design: sculpt a proposed surface, live contours, earthwork, new-construction export ----------
 // =====================================================================================================
+const SHAPES = ['slope', 'wall', 'pad'];
+const BRUSHES = ['raise', 'lower', 'flatten', 'smooth'];
+const DZ_DEFAULTS = { amount: 2, size: 25, soft: 60, strength: 50, slope: 2, width: 20, wheight: 4, wthick: 1, shelf: 10, wside: 'left', wmode: 'fill', ratio: 3 };
 const dz = {
   mode: 'existing', tool: 'raise', design: null, site: null,
-  exist: null,          // existing contour segments (native) for the faded overlay
-  prop: null,           // proposed contour segments
-  raster: null,         // cut/fill canvas, one pixel per grid node (row 0 = north)
+  exist: null, prop: null, raster: null,
   lastContour: 0, raf: 0, contourVer: -1,
-  cursor: null,         // native [x, y] under the mouse
-  stroking: false, last: null, spaceDown: false,
-  params: (() => { try { return { amount: 2, size: 25, soft: 60, strength: 50, ...JSON.parse(localStorage.getItem('c2r-dz') || '{}') }; } catch { return { amount: 2, size: 25, soft: 60, strength: 50 }; } })(),
-  target: null,
+  cursor: null, stroking: false, last: null, spaceDown: false,
+  params: (() => { try { return { ...DZ_DEFAULTS, ...JSON.parse(localStorage.getItem('c2r-dz') || '{}') }; } catch { return { ...DZ_DEFAULTS }; } })(),
+  target: null, slopeStart: null, padElev: null,
   showExist: true, showCf: true,
+  sel: null,            // selected feature id
+  drawing: null,        // { kind, a, b } while dragging out a new shape
+  edit: null,           // { id, handle, from, geom0, moved } while dragging a feature or its handle
+  pan: null,            // middle-button pan
+  fieldCheckpoint: false,
 };
 const saveDzParams = () => { try { localStorage.setItem('c2r-dz', JSON.stringify(dz.params)); } catch { /* ignore */ } };
 
@@ -1892,6 +1897,16 @@ function dzAffine(site) {
   const a = (B.x - A.x) / W, bb = (B.y - A.y) / W, c = -(C.x - A.x) / H, d = -(C.y - A.y) / H;
   return { a, b: bb, c, d, e: A.x - a * b.xmin - c * b.ymax, f: A.y - bb * b.xmin - d * b.ymax, scale: Math.hypot(a, bb) };
 }
+const toScreen = (M, x, y) => [M.a * x + M.c * y + M.e, M.b * x + M.d * y + M.f];
+
+const FEAT_COLOR = { pad: '#f8fafc', wall: '#cbd5e1', slope: '#22d3ee' };
+const SEL_COLOR = '#e8913f';
+
+/** Handle points (native) of a feature, for drawing and dragging. */
+function featHandles(f) {
+  if (f.type === 'pad') return Design.padCorners(f.geom, f.p.rot);
+  return [f.geom.a, f.geom.b];
+}
 
 function dzDraw() {
   const site = dz.site, des = dz.design;
@@ -1907,18 +1922,16 @@ function dzDraw() {
   ctx.clearRect(0, 0, dzCanvas.width, dzCanvas.height);
   if (!site || !des) return;
   const M = dzAffine(site);
-  const set = () => ctx.setTransform(M.a * dpr, M.b * dpr, M.c * dpr, M.d * dpr, M.e * dpr, M.f * dpr);
-  const px = 1 / M.scale; // one screen pixel in native units
+  const native = () => ctx.setTransform(M.a * dpr, M.b * dpr, M.c * dpr, M.d * dpr, M.e * dpr, M.f * dpr);
+  const screen = () => ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const px = 1 / M.scale;
   const g = site.grid;
-  set();
-  // Cut / fill raster (node-centred pixels).
+  native();
   if (dz.showCf && dz.raster && des.changed) {
     ctx.globalAlpha = 0.6;
-    ctx.imageSmoothingEnabled = true;
-    // Raster row 0 is north: flip locally so it lands at the top (largest Y) of the grid.
     ctx.save();
     ctx.translate(g.x0 - g.s / 2, g.y0 + (g.ny - 1) * g.s + g.s / 2);
-    ctx.scale(1, -1);
+    ctx.scale(1, -1); // raster row 0 is north
     ctx.drawImage(dz.raster, 0, 0, g.nx * g.s, g.ny * g.s);
     ctx.restore();
     ctx.globalAlpha = 1;
@@ -1929,7 +1942,7 @@ function dzDraw() {
     for (let k = 0; k < arr.length; k += 4) { ctx.moveTo(arr[k], arr[k + 1]); ctx.lineTo(arr[k + 2], arr[k + 3]); }
     ctx.strokeStyle = color; ctx.lineWidth = width * px; ctx.stroke();
   };
-  ctx.lineCap = 'round';
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   if (dz.showExist && dz.exist) {
     strokeSegs(dz.exist.minor, 'rgba(200,205,210,0.35)', 0.8);
     strokeSegs(dz.exist.major, 'rgba(200,205,210,0.6)', 1.3);
@@ -1938,12 +1951,84 @@ function dzDraw() {
     strokeSegs(dz.prop.minor, 'rgba(255,255,255,0.85)', 1);
     strokeSegs(dz.prop.major, '#ffb347', 2.2);
   }
-  // Site box
   ctx.strokeStyle = 'rgba(232,145,63,0.9)'; ctx.lineWidth = 1.5 * px; ctx.setLineDash([6 * px, 4 * px]);
   ctx.strokeRect(site.box.xmin, site.box.ymin, site.box.xmax - site.box.xmin, site.box.ymax - site.box.ymin);
   ctx.setLineDash([]);
+
+  // Features, then the one being drawn.
+  const labels = [];
+  const drawFeature = (f, sel, preview) => {
+    native();
+    const col = sel ? SEL_COLOR : FEAT_COLOR[f.type];
+    if (preview) ctx.setLineDash([6 * px, 4 * px]);
+    if (f.type === 'pad') {
+      const cs = Design.padCorners(f.geom, f.p.rot);
+      ctx.beginPath(); cs.forEach((c, i) => (i ? ctx.lineTo(...c) : ctx.moveTo(...c))); ctx.closePath();
+      ctx.fillStyle = sel ? 'rgba(232,145,63,0.12)' : 'rgba(248,250,252,0.08)'; ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 4 * px; ctx.stroke();
+      ctx.strokeStyle = col; ctx.lineWidth = 2 * px; ctx.stroke();
+      const cx = cs.reduce((a, c) => a + c[0], 0) / 4, cy = cs.reduce((a, c) => a + c[1], 0) / 4;
+      const e = f.out?.elev ?? f.p.elev;
+      labels.push([cx, cy, Number.isFinite(e) ? `PAD ${e.toFixed(2)}` : 'PAD', col]);
+    } else if (f.type === 'wall') {
+      const [a, b] = [f.geom.a, f.geom.b];
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+      const ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L, sg = f.p.side === 'right' ? -1 : 1;
+      const nx = -uy * sg, ny = ux * sg;
+      ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b);
+      ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.lineWidth = Math.max(f.p.thick / site.toOut, 5 * px) + 3 * px; ctx.stroke();
+      ctx.strokeStyle = col; ctx.lineWidth = Math.max(f.p.thick / site.toOut, 5 * px); ctx.stroke();
+      // Ticks on the high side.
+      const step = 14 * px, tk = 7 * px;
+      ctx.beginPath();
+      for (let t = step / 2; t < L; t += step) { const x = a[0] + ux * t, y = a[1] + uy * t; ctx.moveTo(x + nx * 3 * px, y + ny * 3 * px); ctx.lineTo(x + nx * tk, y + ny * tk); }
+      ctx.strokeStyle = col; ctx.lineWidth = 1.5 * px; ctx.stroke();
+      const m = f.out?.ends?.[1];
+      labels.push([(a[0] + b[0]) / 2 - nx * 12 * px, (a[1] + b[1]) / 2 - ny * 12 * px, m ? `TW ${m.tw.toFixed(1)} / BW ${m.bw.toFixed(1)}` : `WALL ${f.p.height}`, col]);
+    } else {
+      const [a, b] = [f.geom.a, f.geom.b];
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+      const ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L;
+      const hw = f.p.width / 2 / site.toOut;
+      ctx.beginPath();
+      ctx.moveTo(a[0] - uy * hw, a[1] + ux * hw); ctx.lineTo(b[0] - uy * hw, b[1] + ux * hw);
+      ctx.moveTo(a[0] + uy * hw, a[1] - ux * hw); ctx.lineTo(b[0] + uy * hw, b[1] - ux * hw);
+      ctx.strokeStyle = col; ctx.globalAlpha = 0.5; ctx.lineWidth = 1 * px; ctx.stroke(); ctx.globalAlpha = 1;
+      ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b);
+      const ah = 12 * px;
+      ctx.moveTo(b[0] - ux * ah - uy * ah * 0.5, b[1] - uy * ah + ux * ah * 0.5); ctx.lineTo(...b); ctx.lineTo(b[0] - ux * ah + uy * ah * 0.5, b[1] - uy * ah - ux * ah * 0.5);
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 4.5 * px; ctx.stroke();
+      ctx.strokeStyle = col; ctx.lineWidth = 2.2 * px; ctx.stroke();
+      const o = f.out;
+      labels.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, `${(f.p.slope * 100).toFixed(f.p.slope * 100 % 1 ? 2 : 1)}%${o ? `  ${o.zA.toFixed(1)}→${o.zB.toFixed(1)}` : ''}`, col]);
+    }
+    ctx.setLineDash([]);
+    if (sel) {
+      screen();
+      for (const h of featHandles(f)) {
+        const [sx, sy] = toScreen(M, ...h);
+        ctx.fillStyle = '#fff'; ctx.strokeStyle = SEL_COLOR; ctx.lineWidth = 2;
+        ctx.fillRect(sx - 5, sy - 5, 10, 10); ctx.strokeRect(sx - 5, sy - 5, 10, 10);
+      }
+    }
+  };
+  for (const f of des.features) drawFeature(f, f.id === dz.sel, false);
+  if (dz.drawing) {
+    const d = dz.drawing;
+    drawFeature({ type: d.kind, geom: { a: d.a, b: d.b }, p: dzShapeParams(d.kind) }, false, true);
+  }
+  // Labels in screen space.
+  screen();
+  ctx.font = '600 11px "IBM Plex Mono", ui-monospace, monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const [x, y, t, col] of labels) {
+    const [sx, sy] = toScreen(M, x, y);
+    ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(11,18,21,0.85)'; ctx.strokeText(t, sx, sy);
+    ctx.fillStyle = col; ctx.fillText(t, sx, sy);
+  }
   // Brush cursor
-  if (dz.cursor && dz.tool !== 'pan' && !dz.spaceDown) {
+  native();
+  if (dz.cursor && BRUSHES.includes(dz.tool) && !dz.spaceDown && !dz.pan) {
     const R = dz.params.size / site.toOut;
     const col = { raise: '#4ade80', lower: '#f87171', flatten: '#facc15', smooth: '#e5e7eb' }[dz.tool];
     ctx.beginPath(); ctx.arc(dz.cursor[0], dz.cursor[1], R, 0, Math.PI * 2);
@@ -1975,7 +2060,7 @@ function dzUpdateRaster(full) {
   const img = ctx.createImageData(w, h);
   const sc = dzScale(), D = des.delta;
   for (let j = box.j0; j <= box.j1; j++) {
-    const row = g.ny - 1 - j - (g.ny - 1 - box.j1); // image rows count down from the top (north) of the box
+    const row = box.j1 - j; // image rows count down from the north edge of the box
     for (let i = box.i0; i <= box.i1; i++) {
       const d = D[j * g.nx + i], o = (row * w + (i - box.i0)) * 4;
       if (!d || Math.abs(d) < 0.01) { img.data[o + 3] = 0; continue; }
@@ -1992,22 +2077,25 @@ function dzLevels(grid) {
   return Number.isFinite(st.min) ? contourLevels(st.min, st.max, dz.site.interval) : [];
 }
 
-/** Recompute what changed and redraw; contours at most every ~120 ms while a stroke is running. */
+/** Recompute what changed and redraw; contours (and feature re-application) at most every ~120 ms mid-gesture. */
 function dzRefresh(force = false) {
   if (dz.raf) return;
   dz.raf = requestAnimationFrame(() => {
     dz.raf = 0;
     if (!dz.design) { dzDraw(); return; }
-    dzUpdateRaster(false);
+    const busy = dz.stroking || !!dz.edit;
     const now = performance.now();
-    if (dz.contourVer !== dz.design.version && (force || !dz.stroking || now - dz.lastContour > 120)) {
+    const due = force || !busy || now - dz.lastContour > 120;
+    if (dz.design.stale && due) dz.design.rebuild();
+    dzUpdateRaster(false);
+    if (dz.contourVer !== dz.design.version && due) {
       const pg = dz.design.grid();
       dz.prop = contourSegments(pg, dzLevels(pg), L => isMajor(L, dz.site.interval));
       dz.contourVer = dz.design.version;
       dz.lastContour = performance.now();
     }
     dzDraw();
-    if (dz.stroking || dz.contourVer !== dz.design.version) dzRefresh();
+    if (busy || dz.contourVer !== dz.design.version || dz.design.stale) dzRefresh();
   });
 }
 
@@ -2016,21 +2104,21 @@ async function dzEnsure() {
   const site = state.result;
   $('dz-empty').hidden = !!site;
   $('dz-body').hidden = !site;
-  if (!site) { dz.design = null; dz.site = null; return; }
+  if (!site) { dz.design = null; dz.site = null; dz.sel = null; return; }
   if (dz.site === site && dz.design) return;
   dz.site = site;
+  dz.sel = null;
   dz.design = new Design(site.grid);
   dz.exist = contourSegments(site.grid, dzLevels(site.grid), L => isMajor(L, site.interval));
   dz.prop = dz.exist; dz.contourVer = dz.design.version;
   dz.raster = null;
   try {
     const saved = await idb.get(designKey(site.grid, site.zone.code));
-    if (saved && dz.site === site) { dz.design.load(saved); dz.contourVer = -1; setStatus('Restored your saved design for this site.'); }
+    if (saved && dz.site === site && dz.design.load(saved)) { dz.contourVer = -1; setStatus('Restored your saved design for this site.'); }
   } catch { /* ignore */ }
   dzUpdateRaster(true);
   dzSyncUi();
-  dzEarthwork();
-  dzRefresh(true);
+  dzAfterChange(false);
 }
 
 let dzSaveTimer = 0;
@@ -2039,8 +2127,19 @@ function dzSave() {
   dzSaveTimer = setTimeout(() => {
     const des = dz.design, site = dz.site;
     if (!des || !site) return;
-    idb.set(designKey(site.grid, site.zone.code), des.changed ? des.delta : undefined).catch(() => {});
+    idb.set(designKey(site.grid, site.zone.code), des.changed ? des.serialize() : undefined).catch(() => {});
   }, 600);
+}
+
+/** After any edit: earthwork, feature list, autosave, redraw. */
+function dzAfterChange(save = true) {
+  if (!dz.design) return;
+  if (dz.sel && !dz.design.feature(dz.sel)) dz.sel = null;
+  dzEarthwork();
+  dzFeatureList();
+  if (save) dzSave();
+  dzUpdateRaster(true);
+  dzRefresh(true);
 }
 
 function dzEarthwork() {
@@ -2053,14 +2152,56 @@ function dzEarthwork() {
   $('ew-cut').textContent = vol(ew.cut);
   $('ew-fill').textContent = vol(ew.fill);
   const net = ew.fill - ew.cut;
-  $('ew-net').textContent = (net > 0 ? '+' : net < 0 ? '−' : '') + vol(Math.abs(net)).replace(/^-/, '');
+  $('ew-net').textContent = (net > 0 ? '+' : net < 0 ? '−' : '') + vol(Math.abs(net));
   $('ew-more').textContent = des.changed
-    ? `${net > 0 ? 'Import' : net < 0 ? 'Export' : 'Balanced —'} ${net ? vol(Math.abs(net)) : ''}${net ? ' needed' : ''}. Deepest cut ${fmt(ew.maxCut, 1)} ${u}, highest fill ${fmt(ew.maxFill, 1)} ${u}, over ${u === 'm' ? `${fmt(ew.area, 0)} m²` : `${fmt(ew.area / SQFT_PER_ACRE, 2)} ac`}. Preliminary — grid-based, no shrink/swell.`
-    : 'No changes yet — pick Raise, Lower or Flatten and drag on the map.';
+    ? `${net > 0 ? `Import ${vol(net)} needed` : net < 0 ? `Export ${vol(-net)} needed` : 'Balanced'}. Deepest cut ${fmt(ew.maxCut, 1)} ${u}, highest fill ${fmt(ew.maxFill, 1)} ${u}, over ${u === 'm' ? `${fmt(ew.area, 0)} m²` : `${fmt(ew.area / SQFT_PER_ACRE, 2)} ac`}. Preliminary — grid-based, no shrink/swell.`
+    : 'No changes yet — pick a tool and drag on the map.';
   $('sum-earth').textContent = des.changed ? `C ${vol(ew.cut)} · F ${vol(ew.fill)}` : 'no changes';
   $('dz-undo').disabled = !des.undo.length;
   $('dz-redo').disabled = !des.redo.length;
   $('dz-reset').disabled = !des.changed;
+}
+
+function featSummary(f) {
+  const u = dz.site.units, o = f.out;
+  if (f.type === 'pad') return o ? `${fmt(o.w, 0)} × ${fmt(o.h, 0)} ${u} at ${o.elev.toFixed(2)}${Number.isFinite(f.p.elev) ? '' : ' (ground)'} · ${f.p.ratio}:1` : 'outside the site';
+  if (f.type === 'wall') return o ? `${f.p.height} ${u} ${f.p.mode === 'cut' ? 'cut' : 'fill'} · ${fmt(o.len, 0)} ${u} long · TW ${o.ends[1].tw.toFixed(1)}` : 'outside the site';
+  return o ? `${(f.p.slope * 100).toFixed(2).replace(/\.?0+$/, '')}% · ${fmt(o.len, 0)} ${u} · ${o.zA.toFixed(1)} → ${o.zB.toFixed(1)}` : 'outside the site';
+}
+
+function dzFeatureList() {
+  const ul = $('feat-list'), des = dz.design;
+  const counts = {};
+  ul.innerHTML = des.features.map(f => {
+    counts[f.type] = (counts[f.type] || 0) + 1;
+    return `<li class="feat${f.id === dz.sel ? ' sel' : ''}" data-id="${f.id}">
+      <button type="button" class="feat-main"><span class="feat-dot ${f.type}"></span><b>${FEATURE_NAMES[f.type]} ${counts[f.type]}</b><span>${escapeHtml(featSummary(f))}</span></button>
+      <button type="button" class="feat-del" title="Remove" aria-label="Remove">×</button></li>`;
+  }).join('') || '<li class="feat-empty">None yet — use Slope, Wall or Pad.</li>';
+  $('sum-feat').textContent = des.features.length ? `${des.features.length} feature${des.features.length === 1 ? '' : 's'}` : 'none';
+  ul.querySelectorAll('.feat').forEach(li => {
+    const id = Number(li.dataset.id);
+    li.querySelector('.feat-main').addEventListener('click', () => dzSelect(id, true));
+    li.querySelector('.feat-del').addEventListener('click', () => { if (des.removeFeature(id)) { if (dz.sel === id) dz.sel = null; dzAfterChange(); } });
+  });
+}
+
+/** Select a feature: switch to its tool and show its numbers in the fields (edits then apply to it). */
+function dzSelect(id, fromList = false) {
+  dz.sel = id;
+  dz.fieldCheckpoint = false;
+  const f = id && dz.design.feature(id);
+  if (f) {
+    dz.tool = f.type;
+    if (f.type === 'pad') { dz.padElev = Number.isFinite(f.p.elev) ? f.p.elev : null; dz.params.ratio = f.p.ratio; }
+    if (f.type === 'wall') Object.assign(dz.params, { wheight: f.p.height, wthick: f.p.thick, shelf: f.p.shelf, wside: f.p.side, wmode: f.p.mode, ratio: f.p.ratio });
+    if (f.type === 'slope') { Object.assign(dz.params, { slope: +(f.p.slope * 100).toFixed(3), width: f.p.width }); dz.slopeStart = Number.isFinite(f.p.startElev) ? f.p.startElev : null; }
+    if (fromList) {
+      const [lon, lat] = projector(dz.site.zone).inv(featHandles(f)[0]);
+      if (!map.getBounds().contains([lat, lon])) map.panTo([lat, lon]);
+    }
+  }
+  dzSyncUi(); dzApplyTool(); dzFeatureList(); dzDraw();
 }
 
 // ----- Mode switching -----
@@ -2073,10 +2214,8 @@ function setMode(mode) {
   if (design && !$('preview').hidden) document.querySelector('.tab[data-view="map"]').click();
   document.querySelector('.tab[data-view="preview"]').hidden = design;
   dzCanvas.hidden = !design;
-  // The Leaflet contour layer gives way to the design canvas (existing faded + proposed).
   if (state.mapGroups?.contours) { if (design) map.removeLayer(state.mapGroups.contours); else if (visibility.contours) state.mapGroups.contours.addTo(map); }
   if (drawn) { if (design) map.removeLayer(drawn); else drawn.addTo(map); }
-  dzApplyTool();
   map.getContainer().classList.toggle('design-mode', design);
   if (design) dzEnsure().then(() => { dzApplyTool(); dzRefresh(true); });
   else { map.dragging.enable(); map.getContainer().classList.remove('sculpting'); $('dz-readout').hidden = true; }
@@ -2084,11 +2223,19 @@ function setMode(mode) {
 document.querySelectorAll('.mode').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
 
 // ----- Tools & parameters -----
+function dzShapeParams(kind) {
+  const p = dz.params, k = dz.site?.toOut || 1;
+  if (kind === 'pad') return { elev: dz.padElev, ratio: Number(p.ratio), rot: $('local-origin').checked ? align.rot : 0, k };
+  if (kind === 'wall') return { height: Number(p.wheight), thick: Number(p.wthick), shelf: Number(p.shelf), side: p.wside, mode: p.wmode, ratio: Number(p.ratio), k };
+  return { slope: Number(p.slope) / 100, startElev: dz.slopeStart, width: Number(p.width), soft: p.soft / 100, k };
+}
+
 function dzSyncUi() {
   const u = dz.site?.units || units();
   const p = dz.params;
-  $('dz-amount').value = p.amount;
-  $('dz-amount-u').textContent = $('dz-target-u').textContent = u;
+  const setv = (id, v) => { const el = $(id); if (document.activeElement !== el) el.value = v ?? ''; };
+  setv('dz-amount', p.amount);
+  document.querySelectorAll('#dz-amount-u, #dz-target-u, #dz-pelev-u, #dz-width-u').forEach(el => { el.textContent = u; });
   $('dz-size').max = u === 'm' ? 75 : 250;
   $('dz-size').min = u === 'm' ? 1 : 3;
   $('dz-size').value = p.size;
@@ -2097,39 +2244,101 @@ function dzSyncUi() {
   $('dz-soft-v').textContent = `${p.soft}%`;
   $('dz-strength').value = p.strength;
   $('dz-strength-v').textContent = `${p.strength}%`;
-  if (dz.target != null) $('dz-target').value = dz.target.toFixed(2);
+  setv('dz-target', dz.target != null ? dz.target.toFixed(2) : '');
+  setv('dz-slope', p.slope); setv('dz-width', p.width);
+  setv('dz-start', dz.slopeStart != null ? dz.slopeStart.toFixed(2) : '');
+  setv('dz-wheight', p.wheight); setv('dz-wthick', p.wthick); setv('dz-shelf', p.shelf);
+  document.querySelectorAll('input[name="wside"]').forEach(r => { r.checked = r.value === p.wside; });
+  document.querySelectorAll('input[name="wmode"]').forEach(r => { r.checked = r.value === p.wmode; });
+  $('dz-ratio').value = String(p.ratio);
+  setv('dz-pelev', dz.padElev != null ? dz.padElev.toFixed(2) : '');
+  document.querySelectorAll('#slope-chips button').forEach(b => b.classList.toggle('on', Number(b.dataset.v) === Number(p.slope)));
+  $('pad-hint').textContent = $('local-origin').checked && align.rot ? `Pads line up with your project north (${bearingText(align.rot).toLowerCase()} of grid).` : 'Pads line up with grid north (set a project north on the Existing site tab to rotate them).';
   $('cf-scale').textContent = `±${fmt(dzScale(), 1)} ${u}`;
 }
+
+const TOOL_HINTS = {
+  raise: 'Drag to raise the ground — at most the height change per stroke.',
+  lower: 'Drag to lower the ground — at most the height change per stroke.',
+  flatten: 'Drag to flatten to the target elevation. First click (or Alt+click) samples it.',
+  smooth: 'Drag to soften bumps and hard edges.',
+  slope: 'Drag from the high end to the low end of the run. Click a run to edit it.',
+  wall: 'Drag along the wall line. Ticks show the high side. Click a wall to edit it.',
+  pad: 'Drag a rectangle, then type the pad elevation. Click a pad to edit it.',
+};
 
 function dzApplyTool() {
   const t = dz.tool;
   document.querySelectorAll('.tool').forEach(b => { const on = b.dataset.tool === t; b.classList.toggle('active', on); b.setAttribute('aria-checked', String(on)); });
+  const brush = BRUSHES.includes(t);
   $('f-amount').hidden = !(t === 'raise' || t === 'lower');
   $('f-target').hidden = t !== 'flatten';
   $('f-strength').hidden = t !== 'smooth';
-  const sculpt = dz.mode === 'design' && t !== 'pan' && !dz.spaceDown && !!dz.design;
+  $('f-size').hidden = !brush;
+  $('f-soft').hidden = !(brush || t === 'slope');
+  $('f-slope').hidden = t !== 'slope';
+  $('f-wall').hidden = t !== 'wall';
+  $('f-pad').hidden = t !== 'pad';
+  $('f-ratio').hidden = !(t === 'wall' || t === 'pad');
+  const selF = dz.sel && dz.design?.feature(dz.sel);
+  $('tool-hint').innerHTML = selF && selF.type === t
+    ? `<strong>Editing ${FEATURE_NAMES[t]} — changes apply to it.</strong> Drag its handles or body to move it. <kbd>Esc</kbd> to stop editing.`
+    : TOOL_HINTS[t];
+  const sculpt = dz.mode === 'design' && !dz.spaceDown && !!dz.design;
   if (sculpt) map.dragging.disable(); else map.dragging.enable();
   map.getContainer().classList.toggle('sculpting', sculpt);
   const u = dz.site?.units || 'ft';
-  $('sum-tool').textContent = { pan: 'pan', raise: `raise ${dz.params.amount} ${u}`, lower: `lower ${dz.params.amount} ${u}`, flatten: dz.target != null ? `flatten to ${dz.target.toFixed(1)}` : 'flatten', smooth: 'smooth' }[t] + ` · r ${dz.params.size}`;
+  $('sum-tool').textContent = {
+    raise: `raise ${dz.params.amount} ${u}`, lower: `lower ${dz.params.amount} ${u}`,
+    flatten: dz.target != null ? `flatten to ${dz.target.toFixed(1)}` : 'flatten', smooth: 'smooth',
+    slope: `slope ${dz.params.slope}%`, wall: `wall ${dz.params.wheight} ${u}`, pad: dz.padElev != null ? `pad at ${dz.padElev.toFixed(1)}` : 'pad',
+  }[t];
   dzDraw();
 }
-document.querySelectorAll('.tool').forEach(b => b.addEventListener('click', () => { dz.tool = b.dataset.tool; dzApplyTool(); }));
-const dzParam = (id, key, num = true) => $(id).addEventListener('input', e => {
-  const v = num ? Number(e.target.value) : e.target.value;
-  if (num && !Number.isFinite(v)) return;
-  dz.params[key] = v; saveDzParams(); dzSyncUi(); dzApplyTool();
+document.querySelectorAll('.tool').forEach(b => b.addEventListener('click', () => {
+  if (dz.sel && dz.design?.feature(dz.sel)?.type !== b.dataset.tool) dz.sel = null;
+  dz.tool = b.dataset.tool;
+  dzApplyTool(); dzFeatureList();
+}));
+
+/** Field edits: update the selected feature live (one undo step per editing session), else set defaults. */
+function dzFieldsChanged() {
+  saveDzParams();
+  const f = dz.sel && dz.design?.feature(dz.sel);
+  if (f && f.type === dz.tool) {
+    if (!dz.fieldCheckpoint) { dz.design.checkpoint(); dz.fieldCheckpoint = true; }
+    const p = dzShapeParams(f.type);
+    if (f.type === 'pad') p.rot = f.p.rot; // keep the pad's own orientation
+    dz.design.updateFeature(f.id, { p });
+    dzAfterChange();
+  }
+  dzSyncUi(); dzApplyTool();
+}
+const numParam = (id, key) => $(id).addEventListener('input', e => {
+  const v = Number(e.target.value);
+  if (e.target.value === '' || !Number.isFinite(v)) return;
+  dz.params[key] = v; dzFieldsChanged();
 });
-dzParam('dz-amount', 'amount'); dzParam('dz-size', 'size'); dzParam('dz-soft', 'soft'); dzParam('dz-strength', 'strength');
-$('dz-target').addEventListener('change', e => { const v = Number(e.target.value); dz.target = e.target.value === '' || !Number.isFinite(v) ? null : v; dzApplyTool(); });
+numParam('dz-amount', 'amount'); numParam('dz-size', 'size'); numParam('dz-soft', 'soft'); numParam('dz-strength', 'strength');
+numParam('dz-slope', 'slope'); numParam('dz-width', 'width'); numParam('dz-wheight', 'wheight'); numParam('dz-wthick', 'wthick'); numParam('dz-shelf', 'shelf');
+const optNum = (id, key) => $(id).addEventListener('input', e => {
+  const v = Number(e.target.value);
+  dz[key] = e.target.value === '' || !Number.isFinite(v) ? null : v;
+  dzFieldsChanged();
+});
+optNum('dz-target', 'target'); optNum('dz-start', 'slopeStart'); optNum('dz-pelev', 'padElev');
+$('dz-ratio').addEventListener('change', e => { dz.params.ratio = Number(e.target.value); dzFieldsChanged(); });
+document.querySelectorAll('input[name="wside"]').forEach(r => r.addEventListener('change', () => { dz.params.wside = r.value; dzFieldsChanged(); }));
+document.querySelectorAll('input[name="wmode"]').forEach(r => r.addEventListener('change', () => { dz.params.wmode = r.value; dzFieldsChanged(); }));
+document.querySelectorAll('#slope-chips button').forEach(b => b.addEventListener('click', () => { dz.params.slope = Number(b.dataset.v); dzFieldsChanged(); }));
+document.querySelectorAll('#dz-body input, #dz-body select').forEach(el => el.addEventListener('blur', () => { dz.fieldCheckpoint = false; }));
 $('dz-show-exist').addEventListener('change', e => { dz.showExist = e.target.checked; dzDraw(); });
 $('dz-show-cf').addEventListener('change', e => { dz.showCf = e.target.checked; dzDraw(); });
-$('dz-undo').addEventListener('click', () => { if (dz.design?.doUndo()) dzAfterEdit(); });
-$('dz-redo').addEventListener('click', () => { if (dz.design?.doRedo()) dzAfterEdit(); });
-$('dz-reset').addEventListener('click', () => { if (dz.design?.reset()) { dzAfterEdit(); setStatus('Design reset — Undo brings it back.'); } });
-function dzAfterEdit() { dzUpdateRaster(true); dzEarthwork(); dzSave(); dzRefresh(true); }
+$('dz-undo').addEventListener('click', () => { if (dz.design?.doUndo()) dzAfterChange(); });
+$('dz-redo').addEventListener('click', () => { if (dz.design?.doRedo()) dzAfterChange(); });
+$('dz-reset').addEventListener('click', () => { if (dz.design?.reset()) { dz.sel = null; dzAfterChange(); setStatus('Design reset — Undo brings it back.'); } });
 
-// ----- Brush input on the map -----
+// ----- Mouse on the map -----
 function dzNative(e) {
   const ll = e.latlng || map.mouseEventToLatLng(e);
   return projector(dz.site.zone).fwd([ll.lng, ll.lat]);
@@ -2140,8 +2349,13 @@ function dzReadout(xy) {
   const ex = des.existingAt(xy[0], xy[1]), pr = des.proposedAt(xy[0], xy[1]);
   if (!Number.isFinite(ex)) { el.hidden = true; return; }
   const d = pr - ex;
+  let extra = '';
+  if (dz.drawing) {
+    const L = Math.hypot(dz.drawing.b[0] - dz.drawing.a[0], dz.drawing.b[1] - dz.drawing.a[1]) * dz.site.toOut;
+    extra = dz.drawing.kind === 'pad' ? (() => { const cs = Design.padCorners({ a: dz.drawing.a, b: dz.drawing.b }, dzShapeParams('pad').rot); return ` · ${fmt(Math.hypot(cs[1][0] - cs[0][0], cs[1][1] - cs[0][1]) * dz.site.toOut, 0)} × ${fmt(Math.hypot(cs[3][0] - cs[0][0], cs[3][1] - cs[0][1]) * dz.site.toOut, 0)} ${u}`; })() : ` · ${fmt(L, 0)} ${u}`;
+  }
   el.hidden = false;
-  el.innerHTML = `Existing <b>${ex.toFixed(2)}</b> · Proposed <b>${pr.toFixed(2)}</b> · ${Math.abs(d) < 0.01 ? 'no change' : `<span class="${d > 0 ? 'fill' : 'cut'}">${d > 0 ? 'Fill +' : 'Cut −'}${Math.abs(d).toFixed(2)} ${u}</span>`}`;
+  el.innerHTML = `Existing <b>${ex.toFixed(2)}</b> · Proposed <b>${pr.toFixed(2)}</b> · ${Math.abs(d) < 0.01 ? 'no change' : `<span class="${d > 0 ? 'fill' : 'cut'}">${d > 0 ? 'Fill +' : 'Cut −'}${Math.abs(d).toFixed(2)}</span>`}${extra}`;
 }
 function dzStrokeTo(xy) {
   const R = dz.params.size / dz.site.toOut;
@@ -2152,43 +2366,147 @@ function dzStrokeTo(xy) {
   for (let k = dz.last ? 1 : 0; k <= n; k++) dz.design.dab(x0 + (xy[0] - x0) * k / n, y0 + (xy[1] - y0) * k / n);
   dz.last = xy;
 }
+
+/** Hit-test features near a container point: a handle of the selected feature first, then any feature body. */
+function dzHit(cp) {
+  const des = dz.design, M = dzAffine(dz.site);
+  const sel = dz.sel && des.feature(dz.sel);
+  if (sel) {
+    const hs = featHandles(sel);
+    for (let i = 0; i < hs.length; i++) { const [sx, sy] = toScreen(M, ...hs[i]); if (Math.hypot(sx - cp.x, sy - cp.y) < 9) return { f: sel, handle: i }; }
+  }
+  for (let n = des.features.length - 1; n >= 0; n--) {
+    const f = des.features[n];
+    const pts = (f.type === 'pad' ? Design.padCorners(f.geom, f.p.rot) : [f.geom.a, f.geom.b]).map(q => toScreen(M, ...q));
+    if (f.type === 'pad') {
+      let inside = false;
+      for (let i = 0, j = 3; i < 4; j = i++) {
+        const [xi, yi] = pts[i], [xj, yj] = pts[j];
+        if ((yi > cp.y) !== (yj > cp.y) && cp.x < (xj - xi) * (cp.y - yi) / (yj - yi) + xi) inside = !inside;
+      }
+      if (inside) return { f, handle: -1 };
+    } else {
+      const [[ax, ay], [bx, by]] = pts;
+      const L2 = (bx - ax) ** 2 + (by - ay) ** 2;
+      const t = L2 ? Math.max(0, Math.min(1, ((cp.x - ax) * (bx - ax) + (cp.y - ay) * (by - ay)) / L2)) : 0;
+      if (Math.hypot(ax + t * (bx - ax) - cp.x, ay + t * (by - ay) - cp.y) < 8) return { f, handle: -1 };
+    }
+  }
+  return null;
+}
+
+// Middle-button (wheel-click) drag pans the map in every tool.
+map.getContainer().addEventListener('mousedown', e => {
+  if (e.button !== 1) return;
+  e.preventDefault();
+  dz.pan = { x: e.clientX, y: e.clientY };
+  map.getContainer().classList.add('panning');
+}, true);
+document.addEventListener('mousemove', e => {
+  if (!dz.pan) return;
+  map.panBy([dz.pan.x - e.clientX, dz.pan.y - e.clientY], { animate: false });
+  dz.pan = { x: e.clientX, y: e.clientY };
+});
+document.addEventListener('mouseup', e => { if (e.button === 1 && dz.pan) { dz.pan = null; map.getContainer().classList.remove('panning'); } });
+map.getContainer().addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
+
 map.on('mousedown', e => {
-  if (dz.mode !== 'design' || !dz.design || dz.tool === 'pan' || dz.spaceDown || e.originalEvent.button !== 0) return;
+  if (dz.mode !== 'design' || !dz.design || dz.spaceDown || e.originalEvent.button !== 0) return;
   const xy = dzNative(e);
+  const shapeTool = SHAPES.includes(dz.tool);
+  // Features: drag a handle of the selected one, or (with a shape tool) select / move one.
+  const hit = (shapeTool || dz.sel) ? dzHit(e.containerPoint) : null;
+  if (hit && (shapeTool || hit.handle >= 0)) {
+    if (dz.sel !== hit.f.id) dzSelect(hit.f.id);
+    dz.edit = { id: hit.f.id, handle: hit.handle, from: xy, geom0: JSON.parse(JSON.stringify(hit.f.geom)), moved: false };
+    return;
+  }
+  if (shapeTool) {
+    if (dz.sel) { dz.sel = null; dzApplyTool(); dzFeatureList(); }
+    dz.drawing = { kind: dz.tool, a: xy, b: xy };
+    dzDraw();
+    return;
+  }
+  if (dz.sel) { dz.sel = null; dzApplyTool(); dzFeatureList(); }
   if (dz.tool === 'flatten' && (e.originalEvent.altKey || dz.target == null)) {
     const z = dz.design.proposedAt(xy[0], xy[1]);
     if (Number.isFinite(z)) { dz.target = Math.round(z * 100) / 100; dzSyncUi(); dzApplyTool(); setStatus(`Flatten target set to ${dz.target.toFixed(2)} ${dz.site.units}${e.originalEvent.altKey ? '' : ' (sampled here — Alt+click to sample again)'}.`); }
     if (e.originalEvent.altKey) return;
   }
-  const u = dz.site.toOut;
-  dz.design.begin(dz.tool, { amount: dz.params.amount, target: dz.target, soft: dz.params.soft / 100, radius: dz.params.size / u, strength: dz.params.strength / 100 });
+  dz.design.begin(dz.tool, { amount: dz.params.amount, target: dz.target, soft: dz.params.soft / 100, radius: dz.params.size / dz.site.toOut, strength: dz.params.strength / 100 });
   dz.stroking = true; dz.last = null;
   dzStrokeTo(xy);
   dzRefresh();
 });
+
 map.on('mousemove', e => {
-  if (dz.mode !== 'design' || !dz.design) return;
+  if (dz.mode !== 'design' || !dz.design || dz.pan) return;
   const xy = dzNative(e);
   dz.cursor = xy;
-  dzReadout(xy);
   if (dz.stroking) dzStrokeTo(xy);
+  else if (dz.drawing) dz.drawing.b = xy;
+  else if (dz.edit) {
+    const ed = dz.edit, f = dz.design.feature(ed.id);
+    if (f) {
+      if (!ed.moved) { dz.design.checkpoint(); ed.moved = true; }
+      const dx = xy[0] - ed.from[0], dy = xy[1] - ed.from[1];
+      const g0 = ed.geom0;
+      let geom;
+      if (ed.handle < 0) geom = { a: [g0.a[0] + dx, g0.a[1] + dy], b: [g0.b[0] + dx, g0.b[1] + dy] };
+      else if (f.type === 'pad') {
+        const cs = Design.padCorners(g0, f.p.rot);
+        geom = { a: cs[(ed.handle + 2) % 4], b: xy }; // opposite corner stays put
+      } else geom = ed.handle === 0 ? { a: xy } : { b: xy };
+      f.geom = { ...f.geom, ...geom };
+      dz.design.stale = true;
+    }
+  } else if (SHAPES.includes(dz.tool) || dz.sel) {
+    const hit = dzHit(e.containerPoint);
+    map.getContainer().classList.toggle('over-handle', !!hit && hit.handle >= 0);
+    map.getContainer().classList.toggle('over-feature', !!hit && hit.handle < 0 && SHAPES.includes(dz.tool));
+  }
+  dzReadout(xy);
   dzRefresh();
 });
 map.on('mouseout', () => { if (dz.mode === 'design') { dz.cursor = null; dzDraw(); } });
-document.addEventListener('mouseup', () => {
-  if (!dz.stroking) return;
-  dz.stroking = false; dz.last = null;
-  if (dz.design.end()) dzAfterEdit();
+
+document.addEventListener('mouseup', e => {
+  if (e.button !== 0) return;
+  if (dz.stroking) {
+    dz.stroking = false; dz.last = null;
+    if (dz.design.end()) dzAfterChange();
+  } else if (dz.drawing) {
+    const d = dz.drawing;
+    dz.drawing = null;
+    const L = Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]);
+    if (L < dz.site.grid.s * 2) { dzDraw(); return; }
+    if (d.kind === 'pad' && d.a[0] !== d.b[0]) {
+      const cs = Design.padCorners({ a: d.a, b: d.b }, dzShapeParams('pad').rot);
+      if (Math.hypot(cs[1][0] - cs[0][0], cs[1][1] - cs[0][1]) < dz.site.grid.s || Math.hypot(cs[3][0] - cs[0][0], cs[3][1] - cs[0][1]) < dz.site.grid.s) { dzDraw(); return; }
+    }
+    const f = dz.design.addFeature(d.kind, { a: d.a, b: d.b }, dzShapeParams(d.kind));
+    dzSelect(f.id);
+    dzAfterChange();
+    if (d.kind === 'pad' && !Number.isFinite(f.p.elev)) { setStatus(`Pad set to the ground at its centre (${f.out?.elev?.toFixed(2)}). Type an elevation to change it.`); $('dz-pelev').focus(); }
+  } else if (dz.edit) {
+    const moved = dz.edit.moved;
+    dz.edit = null;
+    if (moved) { dz.design.rebuild(); dzAfterChange(); }
+  }
 });
+
 map.on('move zoom resize viewreset', () => { if (dz.mode === 'design') dzDraw(); });
 map.on('zoomstart', () => { if (dz.mode === 'design') dzCanvas.style.visibility = 'hidden'; });
 map.on('zoomend', () => { dzCanvas.style.visibility = ''; if (dz.mode === 'design') dzDraw(); });
-const typing = e => /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName) && e.target.type !== 'range' && e.target.type !== 'checkbox';
+const typing = e => /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName) && e.target.type !== 'range' && e.target.type !== 'checkbox' && e.target.type !== 'radio';
 document.addEventListener('keydown', e => {
-  if (dz.mode !== 'design' || typing(e)) return;
+  if (dz.mode !== 'design') return;
+  if (e.key === 'Escape') { if (dz.drawing) { dz.drawing = null; dzDraw(); } else if (dz.sel) { dz.sel = null; dzApplyTool(); dzFeatureList(); } if (typing(e)) e.target.blur(); return; }
+  if (typing(e)) { if (e.key === 'Enter') e.target.blur(); return; }
   if (e.code === 'Space' && !dz.spaceDown) { dz.spaceDown = true; dzApplyTool(); e.preventDefault(); return; }
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); if (e.shiftKey ? dz.design?.doRedo() : dz.design?.doUndo()) dzAfterEdit(); return; }
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); if (dz.design?.doRedo()) dzAfterEdit(); return; }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && dz.sel) { e.preventDefault(); if (dz.design.removeFeature(dz.sel)) { dz.sel = null; dzApplyTool(); dzAfterChange(); } return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); if (e.shiftKey ? dz.design?.doRedo() : dz.design?.doUndo()) dzAfterChange(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); if (dz.design?.doRedo()) dzAfterChange(); return; }
   if (e.key === '[' || e.key === ']') {
     const p = dz.params, mn = Number($('dz-size').min), mx = Number($('dz-size').max);
     p.size = Math.max(mn, Math.min(mx, Math.round(p.size * (e.key === ']' ? 1.2 : 1 / 1.2)) || mn));
@@ -2197,8 +2515,65 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('keyup', e => { if (e.code === 'Space' && dz.spaceDown) { dz.spaceDown = false; dzApplyTool(); } });
 
+// ----- Design files: save / open (.json), into the project folder when one is chosen -----
+function dzFileData() {
+  const site = dz.site, des = dz.design, b = state.rect.getBounds();
+  return JSON.stringify({
+    app: 'contours-to-revit', kind: 'site-design', version: 2, saved: new Date().toISOString(), tool: VERSION,
+    key: designKey(site.grid, site.zone.code),
+    site: { rect: [[b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]], zone: site.zone.code, units: site.units, spacing: site.spacingOut, interval: site.interval },
+    grid: { x0: site.grid.x0, y0: site.grid.y0, s: site.grid.s, nx: site.grid.nx, ny: site.grid.ny },
+    features: des.serialize().features, brush: f32ToB64(des.brush),
+  });
+}
+$('dz-save').addEventListener('click', async () => {
+  if (!dz.design) return;
+  let toFolder = false;
+  try { toFolder = await folderReady(); } catch { toFolder = false; }
+  const data = dzFileData();
+  try {
+    if (toFolder) { const name = await writeToFolder('design', data, 'application/json'); setStatus(`Design saved to “${folder.handle.name}”: ${name}.`); }
+    else { saveBlob(`${baseName(dz.site)}_design.json`, data, 'application/json'); setStatus('Design file downloaded.'); }
+  } catch (err) { setStatus(`Couldn't save the design: ${err.message}`, true); }
+});
+$('dz-open').addEventListener('click', () => $('dz-file').click());
+$('dz-file').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  let d;
+  try { d = JSON.parse(await file.text()); } catch { setStatus('That file isn\'t a design file.', true); return; }
+  if (d?.kind !== 'site-design' || !d.brush) { setStatus('That file isn\'t a Contours to Revit design.', true); return; }
+  const saved = { v: 2, brush: b64ToF32(d.brush), features: d.features || [] };
+  if (dz.site && d.key === designKey(dz.site.grid, dz.site.zone.code)) {
+    dz.design.checkpoint();
+    dz.design.load(saved);
+    dz.sel = null;
+    dzAfterChange();
+    setStatus(`Opened “${file.name}”.`);
+    return;
+  }
+  // Different (or no) site: keep the design for that site, put its boundary and settings back, and ask to generate.
+  await idb.set(d.key, saved);
+  const s = d.site || {};
+  if (s.units) { const r = document.querySelector(`input[name="units"][value="${s.units}"]`); if (r) { r.checked = true; fillUnitOptions(); } }
+  if (s.spacing != null) $('spacing').value = String(s.spacing);
+  if (s.interval != null) $('interval').value = String(s.interval);
+  if (s.zone) $('zone').value = String(s.zone);
+  saveSettings();
+  if (s.rect) {
+    drawn.clearLayers();
+    state.rect = L.rectangle(s.rect, drawControl.options.draw.rectangle.shapeOptions);
+    drawn.addLayer(state.rect);
+    saveRect();
+    map.fitBounds(state.rect.getBounds(), { padding: [30, 30] });
+    onSiteChanged(true);
+  }
+  setMode('existing');
+  setStatus(`“${file.name}” is for a different site — its boundary and settings are restored. Click Generate; the design opens in Site design.`);
+});
+
 // ----- New-construction exports -----
-/** Proposed grid with NaN edges clamped, for sampling at arbitrary points. */
 function dzDeltaAt(x, y) {
   const g = dz.site.grid, des = dz.design;
   const cx = Math.min(Math.max(x, g.x0), g.x0 + (g.nx - 1) * g.s - 1e-6), cy = Math.min(Math.max(y, g.y0), g.y0 + (g.ny - 1) * g.s - 1e-6);
@@ -2211,28 +2586,60 @@ function makeNewDxf(site, v) {
   if (!des || dz.site !== site) throw new Error('open the Site design tab first');
   const d = new Dxf(site.units, datumOf(site));
   const pg = des.grid();
-  const levels = dzLevels(pg);
-  const prop = contourLines(pg, levels);
+  const prop = contourLines(pg, dzLevels(pg));
   addContours(d, site, [], v.labels !== false, prop, { majr: 'C-TOPO-PROP-MAJR', minr: 'C-TOPO-PROP-MINR', text: 'C-TOPO-PROP-TEXT', cMaj: 30, cMin: 7, cTxt: 7 });
   if ($('dz-dxf-exist').checked) addContours(d, site, [], false, site.contours, { majr: 'C-TOPO-EXST-MAJR', minr: 'C-TOPO-EXST-MINR', text: 'C-TOPO-EXST-TEXT', cMaj: 252, cMin: 253, cTxt: 252 });
-  // Limits of grading: where the change is at least 0.05 (output units), traced on |delta|, draped on the proposed surface.
+  const h = labelHeight(site), g = site.grid;
+  const P = (x, y, z) => [...outXY(site, x, y), z];
+  const zAt = (x, y) => { const z = des.proposedAt(x, y); return Number.isFinite(z) ? z : site.pStats.min; };
   if (des.changed) {
-    const mag = { ...site.grid, z: des.delta.map(Math.abs) };
+    // Limits of grading where the change is at least 0.05 (output units), draped on the proposed surface.
+    const mag = { ...g, z: des.delta.map(Math.abs) };
     d.layer('C-GRAD-LIMT', 1);
-    for (const c of contourLines(mag, [0.05])) for (const line of c.lines) {
-      d.polyline3d('C-GRAD-LIMT', line.map(([x, y]) => [...outXY(site, x, y), des.proposedAt(x, y) || site.pStats.min]));
-    }
-    // Cut / fill tags at the deepest and highest points.
-    let iMax = -1, iMin = -1;
-    des.delta.forEach((dv, k) => { if (iMax < 0 || dv > des.delta[iMax]) iMax = k; if (iMin < 0 || dv < des.delta[iMin]) iMin = k; });
-    const h = labelHeight(site), g = site.grid;
+    for (const c of contourLines(mag, [0.05])) for (const line of c.lines) d.polyline3d('C-GRAD-LIMT', line.map(([x, y]) => P(x, y, zAt(x, y))));
+    let iMax = 0, iMin = 0;
+    des.delta.forEach((dv, k) => { if (dv > des.delta[iMax]) iMax = k; if (dv < des.delta[iMin]) iMin = k; });
     d.layer('C-GRAD-TEXT', 1);
     for (const [k, word] of [[iMax, 'FILL'], [iMin, 'CUT']]) {
       const dv = des.delta[k];
       if (Math.abs(dv) < 0.05) continue;
       const x = g.x0 + (k % g.nx) * g.s, y = g.y0 + Math.floor(k / g.nx) * g.s;
-      const [ox, oy] = outXY(site, x, y);
-      d.text('C-GRAD-TEXT', ox, oy, des.z[k], h * 0.8, `MAX ${word} ${Math.abs(dv).toFixed(2)}`);
+      d.text('C-GRAD-TEXT', ...P(x, y, des.z[k]), h * 0.8, `MAX ${word} ${Math.abs(dv).toFixed(2)}`);
+    }
+  }
+  // Features
+  for (const f of des.features) {
+    const o = f.out;
+    if (!o) continue;
+    if (f.type === 'pad') {
+      d.layer('C-PAD', 4).layer('C-PAD-TEXT', 4);
+      d.polyline3d('C-PAD', o.corners.map(([x, y]) => P(x, y, o.elev)), true);
+      const cx = o.corners.reduce((a, c) => a + c[0], 0) / 4, cy = o.corners.reduce((a, c) => a + c[1], 0) / 4;
+      const t = `PAD EL ${o.elev.toFixed(2)}`;
+      d.text('C-PAD-TEXT', ...P(cx, cy, o.elev), h, t);
+    } else if (f.type === 'wall') {
+      d.layer('C-WALL', 7).layer('C-WALL-TEXT', 7);
+      const [a, b] = [f.geom.a, f.geom.b];
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+      const ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L, hw = f.p.thick / 2 / site.toOut;
+      const [ta, tb] = [o.ends[0].tw, o.ends[2].tw];
+      const ring = [[a[0] - uy * hw, a[1] + ux * hw, ta], [b[0] - uy * hw, b[1] + ux * hw, tb], [b[0] + uy * hw, b[1] - ux * hw, tb], [a[0] + uy * hw, a[1] - ux * hw, ta]];
+      d.polyline3d('C-WALL', ring.map(([x, y, z]) => P(x, y, z)), true);
+      const m = o.ends[1], mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+      const ang = Math.atan2(...(() => { const [p1, p2] = [outXY(site, ...a), outXY(site, ...b)]; return [p2[1] - p1[1], p2[0] - p1[0]]; })()) * 180 / Math.PI;
+      const up = ang > 90 || ang < -90 ? ang + 180 : ang;
+      d.text('C-WALL-TEXT', ...P(mx, my, m.tw), h * 0.7, `TW ${m.tw.toFixed(2)} / BW ${m.bw.toFixed(2)}  (${f.p.height}' ${f.p.mode === 'cut' ? 'CUT' : 'FILL'} WALL, ${f.p.thick}' THK)`, up);
+    } else {
+      d.layer('C-GRAD-ARRW', 5).layer('C-GRAD-ARRW-TEXT', 5);
+      const [a, b] = [f.geom.a, f.geom.b];
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+      const ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L, ah = h * 1.5 / site.toOut;
+      d.polyline3d('C-GRAD-ARRW', [P(...a, o.zA), P(...b, o.zB)]);
+      d.polyline3d('C-GRAD-ARRW', [P(b[0] - ux * ah - uy * ah * 0.5, b[1] - uy * ah + ux * ah * 0.5, o.zB), P(...b, o.zB), P(b[0] - ux * ah + uy * ah * 0.5, b[1] - uy * ah - ux * ah * 0.5, o.zB)]);
+      const [p1, p2] = [outXY(site, ...a), outXY(site, ...b)];
+      let ang = Math.atan2(p2[1] - p1[1], p2[0] - p1[0]) * 180 / Math.PI;
+      if (ang > 90 || ang < -90) ang += 180;
+      d.text('C-GRAD-ARRW-TEXT', ...P((a[0] + b[0]) / 2 - uy * h / site.toOut, (a[1] + b[1]) / 2 + ux * h / site.toOut, (o.zA + o.zB) / 2), h * 0.7, `${(f.p.slope * 100).toFixed(2).replace(/\.?0+$/, '')}%`, ang);
     }
   }
   return d.toString();

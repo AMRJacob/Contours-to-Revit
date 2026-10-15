@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.15.1">
+  <link rel="stylesheet" href="css/app.css?v=0.16.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -216,12 +216,15 @@
             <summary><span class="num">1</span><span class="st-title">Grading tools</span><span class="st-sum" id="sum-tool"></span></summary>
             <div class="step-body">
               <div class="tool-grid" role="radiogroup" aria-label="Grading tool">
-                <button type="button" class="tool" data-tool="pan" title="Pan the map (or hold Space with any tool)"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg><span>Pan</span></button>
-                <button type="button" class="tool" data-tool="raise" title="Raise ground (fill)"><svg viewBox="0 0 24 24"><path d="M3 19c4 0 5-8 9-8s5 8 9 8"/><path d="M12 8V2M9 5l3-3 3 3"/></svg><span>Raise</span></button>
-                <button type="button" class="tool" data-tool="lower" title="Lower ground (cut)"><svg viewBox="0 0 24 24"><path d="M3 9c4 0 5 8 9 8s5-8 9-8"/><path d="M12 2v6M9 5l3 3 3-3"/></svg><span>Lower</span></button>
-                <button type="button" class="tool" data-tool="flatten" title="Flatten to a target elevation (pads)"><svg viewBox="0 0 24 24"><path d="M3 18c3 0 4-4 6-4h6c2 0 3 4 6 4"/><path d="M8 10h8"/></svg><span>Flatten</span></button>
-                <button type="button" class="tool" data-tool="smooth" title="Smooth bumps and hard edges"><svg viewBox="0 0 24 24"><path d="M3 15c2-4 4-4 6 0s4 4 6 0 4-4 6 0" opacity=".45"/><path d="M3 12c3-1.5 6-1.5 9 0s6 1.5 9 0"/></svg><span>Smooth</span></button>
+                <button type="button" class="tool" data-tool="raise" title="Raise ground (fill) — brush"><svg viewBox="0 0 24 24"><path d="M3 19c4 0 5-8 9-8s5 8 9 8"/><path d="M12 8V2M9 5l3-3 3 3"/></svg><span>Raise</span></button>
+                <button type="button" class="tool" data-tool="lower" title="Lower ground (cut) — brush"><svg viewBox="0 0 24 24"><path d="M3 9c4 0 5 8 9 8s5-8 9-8"/><path d="M12 2v6M9 5l3 3 3-3"/></svg><span>Lower</span></button>
+                <button type="button" class="tool" data-tool="flatten" title="Flatten to a target elevation — brush"><svg viewBox="0 0 24 24"><path d="M3 18c3 0 4-4 6-4h6c2 0 3 4 6 4"/><path d="M8 10h8"/></svg><span>Flatten</span></button>
+                <button type="button" class="tool" data-tool="smooth" title="Smooth bumps and hard edges — brush"><svg viewBox="0 0 24 24"><path d="M3 15c2-4 4-4 6 0s4 4 6 0 4-4 6 0" opacity=".45"/><path d="M3 12c3-1.5 6-1.5 9 0s6 1.5 9 0"/></svg><span>Smooth</span></button>
+                <button type="button" class="tool" data-tool="slope" title="Grade a run at a set slope — drag from the high end to the low end"><svg viewBox="0 0 24 24"><path d="M3 7l18 10"/><path d="M15 17h6v-4" /><path d="M3 20h18" opacity=".45"/></svg><span>Slope</span></button>
+                <button type="button" class="tool" data-tool="wall" title="Retaining wall — drag along the wall line"><svg viewBox="0 0 24 24"><path d="M10 4h4v16h-4z"/><path d="M14 8h7M3 16h7" opacity=".6"/></svg><span>Wall</span></button>
+                <button type="button" class="tool" data-tool="pad" title="Building pad — drag a rectangle, then type its elevation"><svg viewBox="0 0 24 24"><path d="M6 9h12v6H6z"/><path d="M2 19l4-4M22 19l-4-4M2 5l4 4M22 5l-4 4" opacity=".6"/></svg><span>Pad</span></button>
               </div>
+              <p class="hint tool-hint" id="tool-hint"></p>
               <div class="field" id="f-amount">
                 <label for="dz-amount">Height change <span class="sub">per stroke</span></label>
                 <div class="align-row">
@@ -238,15 +241,56 @@
                 <label for="dz-strength">Strength <output id="dz-strength-v">50%</output></label>
                 <input type="range" id="dz-strength" min="5" max="100" value="50">
               </div>
-              <div class="field">
+              <div id="f-slope" hidden>
+                <div class="field">
+                  <label for="dz-slope">Target slope <span class="sub">downhill from where you start</span></label>
+                  <div class="align-row">
+                    <input type="number" id="dz-slope" step="0.1" value="2" inputmode="decimal"><span class="unit">%</span>
+                  </div>
+                  <div class="chips" id="slope-chips">
+                    <button type="button" data-v="1">1% min. drain</button><button type="button" data-v="2">2% paving</button><button type="button" data-v="5">5% accessible walk</button><button type="button" data-v="8.33">8.33% ramp</button>
+                  </div>
+                </div>
+                <div class="field-row">
+                  <div class="field"><label for="dz-start">Start elevation</label><input type="number" id="dz-start" step="0.01" placeholder="ground" inputmode="decimal"></div>
+                  <div class="field"><label for="dz-width">Width <span class="sub" id="dz-width-u">ft</span></label><input type="number" id="dz-width" step="1" min="1" value="20" inputmode="decimal"></div>
+                </div>
+              </div>
+              <div id="f-wall" hidden>
+                <div class="field-row">
+                  <div class="field"><label for="dz-wheight">Wall height</label><input type="number" id="dz-wheight" step="0.5" min="0.5" value="4" inputmode="decimal"></div>
+                  <div class="field"><label for="dz-wthick">Thickness</label><input type="number" id="dz-wthick" step="0.25" min="0.25" value="1" inputmode="decimal"></div>
+                  <div class="field"><label for="dz-shelf">Level behind</label><input type="number" id="dz-shelf" step="1" min="0" value="10" inputmode="decimal"></div>
+                </div>
+                <div class="field-row">
+                  <div class="field"><label>High side <span class="sub">facing along the line</span></label>
+                    <div class="seg seg-sm" role="radiogroup"><label><input type="radio" name="wside" value="left" checked><span>Left</span></label><label><input type="radio" name="wside" value="right"><span>Right</span></label></div>
+                  </div>
+                  <div class="field"><label>Wall makes</label>
+                    <div class="seg seg-sm" role="radiogroup"><label><input type="radio" name="wmode" value="fill" checked><span>Fill behind</span></label><label><input type="radio" name="wmode" value="cut"><span>Cut in front</span></label></div>
+                  </div>
+                </div>
+              </div>
+              <div id="f-pad" hidden>
+                <div class="field">
+                  <label for="dz-pelev">Pad elevation <span class="sub">blank = ground at the pad's centre</span></label>
+                  <div class="align-row"><input type="number" id="dz-pelev" step="0.1" placeholder="ground" inputmode="decimal"><span class="unit" id="dz-pelev-u">ft</span></div>
+                  <p class="hint" id="pad-hint"></p>
+                </div>
+              </div>
+              <div class="field" id="f-ratio" hidden>
+                <label for="dz-ratio">Side slopes to existing grade</label>
+                <select id="dz-ratio"><option value="2">2:1 (steep, 50%)</option><option value="3" selected>3:1 (33%, mowable)</option><option value="4">4:1 (25%, gentle)</option></select>
+              </div>
+              <div class="field" id="f-size">
                 <label for="dz-size">Brush size <span class="sub">radius</span> <output id="dz-size-v">25 ft</output></label>
                 <input type="range" id="dz-size" min="3" max="250" value="25">
               </div>
-              <div class="field">
+              <div class="field" id="f-soft">
                 <label for="dz-soft">Edge softness <output id="dz-soft-v">60%</output></label>
                 <input type="range" id="dz-soft" min="0" max="100" value="60">
               </div>
-              <p class="hint">Drag on the map to sculpt. Each stroke moves the ground by at most the height change; stroke again to go further. <kbd>[</kbd> <kbd>]</kbd> brush size · hold <kbd>Space</kbd> to pan · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo.</p>
+              <p class="hint">Wheel-click and drag to pan (or hold <kbd>Space</kbd>) · <kbd>[</kbd> <kbd>]</kbd> brush size · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo · <kbd>Esc</kbd> finishes the shape you're editing.</p>
             </div>
           </details>
           <details class="step" open>
@@ -269,13 +313,26 @@
             </div>
           </details>
           <details class="step" open>
-            <summary><span class="num">3</span><span class="st-title">Export new construction</span><span class="st-sum"></span></summary>
+            <summary><span class="num">3</span><span class="st-title">Features</span><span class="st-sum" id="sum-feat"></span></summary>
+            <div class="step-body">
+              <ul class="feat-list" id="feat-list"></ul>
+              <p class="hint" id="feat-hint">Pads, walls and slope runs stay editable: click one on the map (with a Slope, Wall or Pad tool) or in this list, change its numbers, or drag its handles. <kbd>Del</kbd> removes it.</p>
+            </div>
+          </details>
+          <details class="step" open>
+            <summary><span class="num">4</span><span class="st-title">Save &amp; export</span><span class="st-sum"></span></summary>
             <div class="step-body">
               <div class="downloads">
                 <div class="dl-grid">
                   <button class="dl" data-out="newDxf"><span class="dl-name">New DXF</span><span class="dl-desc">Proposed contours, grading limits</span></button>
                   <button class="dl" data-out="newCsv"><span class="dl-name">New points CSV</span><span class="dl-desc">Proposed Toposolid</span></button>
                 </div>
+                <div class="align-row design-file">
+                  <button type="button" class="btn" id="dz-save">Save design</button>
+                  <button type="button" class="btn" id="dz-open">Open design…</button>
+                  <input type="file" id="dz-file" accept=".json,application/json" hidden>
+                </div>
+                <p class="hint" id="dz-save-hint">Your design also saves automatically in this browser for this site.</p>
                 <label class="check"><input type="checkbox" id="dz-dxf-exist" checked><span>Include existing contours in the new DXF (grey layers)</span></label>
                 <p class="hint">Same origin, project north, datum and project folder as the Existing site tab. In Revit, link the new DXF next to the existing one, or build a second Toposolid from the CSV and set its phase to New Construction.</p>
               </div>
@@ -318,6 +375,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.15.1"></script>
+  <script type="module" src="js/app.js?v=0.16.0"></script>
 </body>
 </html>

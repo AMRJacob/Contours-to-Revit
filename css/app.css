@@ -259,7 +259,7 @@ input[type="search"]:focus, select:focus { outline: 2px solid var(--accent); out
 .leaflet-container.sculpting, .leaflet-container.sculpting .leaflet-interactive { cursor: crosshair !important; }
 .dz-empty { margin: 16px 20px; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 8px; font-size: 13px; color: var(--ink-2); }
 .dz-empty p { margin: 0; }
-.tool-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-bottom: 12px; }
+.tool-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 6px; }
 .tool { font: inherit; font-size: 11.5px; font-weight: 600; color: var(--ink-2); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 2px 6px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 3px; }
 .tool svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .tool:hover { border-color: var(--ink-3); }
@@ -284,3 +284,34 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .dz-readout .fill { color: #16a34a; font-weight: 600; }
 /* While designing, site context steps back so grading reads clearly. */
 .leaflet-container.design-mode .leaflet-overlay-pane { opacity: 0.3; }
+
+.tool[data-tool="slope"].active { background: #0891b2; border-color: #0891b2; color: #fff; }
+.tool[data-tool="wall"].active, .tool[data-tool="pad"].active { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+.tool-hint { margin: 0 0 12px; min-height: 2.6em; }
+.tool-hint strong { color: var(--accent-ink); }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.chips button { font: inherit; font-size: 11.5px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink-2); cursor: pointer; }
+.chips button:hover { border-color: var(--ink-3); }
+.chips button.on { background: #0891b2; border-color: #0891b2; color: #fff; }
+.seg-sm span { padding: 5px 9px; font-size: 12px; }
+.field-row .field input[type=number] { font: inherit; font-family: var(--mono); font-size: 13px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; width: 100%; }
+.field-row .field input[type=number]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+#dz-body select { font-size: 13px; }
+.feat-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.feat { display: flex; align-items: stretch; border: 1px solid var(--line); border-radius: 6px; background: var(--card); overflow: hidden; }
+.feat.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.feat-main { all: unset; flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 7px 10px; cursor: pointer; font-size: 12.5px; }
+.feat-main b { font-weight: 600; flex: none; }
+.feat-main span:last-child { color: var(--ink-3); font-family: var(--mono); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.feat-main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.feat-dot { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.feat-dot.pad { background: #e2e8f0; border: 1px solid #64748b; }
+.feat-dot.wall { background: #475569; }
+.feat-dot.slope { background: #22d3ee; border-radius: 50%; }
+.feat-del { all: unset; cursor: pointer; padding: 0 11px; color: var(--ink-3); font-size: 16px; border-left: 1px solid var(--line); }
+.feat-del:hover { color: #dc2626; }
+.feat-empty { font-size: 12.5px; color: var(--ink-3); padding: 4px 0; }
+.design-file { margin: 6px 0 2px; }
+.leaflet-container.sculpting.over-handle { cursor: move !important; }
+.leaflet-container.sculpting.over-feature { cursor: pointer !important; }
+.leaflet-container.panning, .leaflet-container.panning * { cursor: grabbing !important; }
