@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.9.1';
-import { fetchElevation, sample } from './dem.js?v=0.9.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.9.1';
-import { Dxf } from './dxf.js?v=0.9.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.9.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.9.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.9.2';
+import { fetchElevation, sample } from './dem.js?v=0.9.2';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.9.2';
+import { Dxf } from './dxf.js?v=0.9.2';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.9.2';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.9.2';
 
-const VERSION = '0.9.1';
+const VERSION = '0.9.2';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -505,17 +505,17 @@ async function fetchAerialExport(site) {
 }
 
 // ---------- Underlay processing (desaturate + wash toward white) ----------
-const UL_DEFAULT = { sat: 50, wash: 45 };
-const ulSettings = (() => { try { return { ...UL_DEFAULT, ...JSON.parse(localStorage.getItem('c2r-underlay') || '{}') }; } catch { return { ...UL_DEFAULT }; } })();
+// Colour >100% boosts saturation to offset the wash (USGS imagery is already muted).
+const UL_DEFAULT = { sat: 110, wash: 40 };
+const ulSettings = (() => { try { return { ...UL_DEFAULT, ...JSON.parse(localStorage.getItem('c2r-underlay2') || '{}') }; } catch { return { ...UL_DEFAULT }; } })();
 
 /** In-place: keep `sat` of the colour (0..1 around luminance), then blend `wash` (0..1) toward white. */
 function underlayPixels(data, sat, wash) {
   for (let i = 0; i < data.length; i += 4) {
     const r = data[i], g = data[i + 1], b = data[i + 2];
     const y = 0.299 * r + 0.587 * g + 0.114 * b;
-    data[i] = 255 - (255 - (y + (r - y) * sat)) * (1 - wash);
-    data[i + 1] = 255 - (255 - (y + (g - y) * sat)) * (1 - wash);
-    data[i + 2] = 255 - (255 - (y + (b - y) * sat)) * (1 - wash);
+    const c = v => 255 - (255 - Math.max(0, Math.min(255, y + (v - y) * sat))) * (1 - wash);
+    data[i] = c(r); data[i + 1] = c(g); data[i + 2] = c(b);
   }
 }
 
@@ -555,14 +555,14 @@ for (const [id, key] of [['ul-sat', 'sat'], ['ul-wash', 'wash']]) {
   $(id).value = ulSettings[key];
   $(id).addEventListener('input', e => {
     ulSettings[key] = Number(e.target.value);
-    try { localStorage.setItem('c2r-underlay', JSON.stringify(ulSettings)); } catch { /* ignore */ }
+    try { localStorage.setItem('c2r-underlay2', JSON.stringify(ulSettings)); } catch { /* ignore */ }
     drawUnderlayThumb();
   });
 }
 $('ul-reset').addEventListener('click', () => {
   Object.assign(ulSettings, UL_DEFAULT);
   $('ul-sat').value = ulSettings.sat; $('ul-wash').value = ulSettings.wash;
-  try { localStorage.removeItem('c2r-underlay'); } catch { /* ignore */ }
+  try { localStorage.removeItem('c2r-underlay2'); } catch { /* ignore */ }
   drawUnderlayThumb();
 });
 
