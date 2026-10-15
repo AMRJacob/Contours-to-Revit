@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.13.0">
+  <link rel="stylesheet" href="css/app.css?v=0.14.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -26,110 +26,168 @@
         </div>
       </header>
 
-      <section class="step" id="step-site">
-        <h2><span class="num">1</span> Site</h2>
-        <form id="search-form" class="search" autocomplete="off">
-          <input id="search" type="search" placeholder="Search an address or place" aria-label="Search an address or place">
-          <button type="submit" class="btn btn-quiet">Find</button>
-        </form>
-        <ul id="search-results" class="results" hidden></ul>
-        <button id="draw-btn" class="btn btn-block" type="button">
-          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="5" width="14" height="10" rx="1" /></svg>
-          Draw site boundary
-        </button>
-        <p class="hint" id="draw-hint">Drag a rectangle on the map over your site. Drag its corners to adjust.</p>
-        <dl class="stats" id="site-stats" hidden>
-          <div><dt>Size</dt><dd id="st-size">—</dd></div>
-          <div><dt>Area</dt><dd id="st-area">—</dd></div>
-          <div><dt>Points</dt><dd id="st-points">—</dd></div>
-        </dl>
-        <div id="site-warning" class="warn" hidden></div>
-      </section>
+      <nav class="mode-tabs" role="tablist" aria-label="Mode">
+        <button role="tab" class="mode active" aria-selected="true">Existing site</button>
+        <button role="tab" class="mode" aria-selected="false" disabled title="Grading, paving, walls and pads — coming next">Site design <span class="soon">soon</span></button>
+      </nav>
 
-      <section class="step" id="step-options">
-        <h2><span class="num">2</span> Options</h2>
-        <div class="field">
-          <label>Units</label>
-          <div class="seg" role="radiogroup" id="units">
-            <label><input type="radio" name="units" value="ft" checked><span>Feet</span></label>
-            <label><input type="radio" name="units" value="m"><span>Meters</span></label>
-          </div>
-        </div>
-        <div class="field-row">
-          <div class="field">
-            <label for="spacing">Point spacing</label>
-            <select id="spacing"></select>
-          </div>
-          <div class="field">
-            <label for="interval">Contour interval</label>
-            <select id="interval"></select>
-          </div>
-        </div>
-        <div class="field">
-          <label for="zone">Coordinate system <span class="sub">NAD83 State Plane</span></label>
-          <select id="zone"></select>
-          <p class="hint" id="zone-hint">Draw a site to detect the zone.</p>
-        </div>
-        <label class="check">
-          <input type="checkbox" id="local-origin">
-          <span><strong>Use a local origin</strong> — subtract a base point from X/Y so Revit doesn't get coordinates millions of feet from its origin.</span>
-        </label>
-        <div class="origin-row">
-          <button id="pick-origin" class="btn" type="button">
-            <svg viewBox="0 0 20 20" aria-hidden="true" style="stroke-dasharray:none"><circle cx="10" cy="10" r="4"/><path d="M10 1v5M10 14v5M1 10h5M14 10h5"/></svg>
-            Pick on map
+      <details class="step" id="step-site" open>
+        <summary><span class="num">1</span><span class="st-title">Site</span><span class="st-sum" id="sum-site">Draw a boundary</span></summary>
+        <div class="step-body">
+          <form id="search-form" class="search" autocomplete="off">
+            <input id="search" type="search" placeholder="Search an address or place" aria-label="Search an address or place">
+            <button type="submit" class="btn btn-quiet">Find</button>
+          </form>
+          <ul id="search-results" class="results" hidden></ul>
+          <button id="draw-btn" class="btn btn-block" type="button">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="5" width="14" height="10" rx="1" /></svg>
+            Draw site boundary
           </button>
-          <button id="reset-origin" class="btn btn-quiet" type="button" hidden>Use SW corner</button>
+          <p class="hint" id="draw-hint">Drag a rectangle on the map over your site. Drag its corners to adjust.</p>
+          <dl class="stats" id="site-stats" hidden>
+            <div><dt>Size</dt><dd id="st-size">—</dd></div>
+            <div><dt>Area</dt><dd id="st-area">—</dd></div>
+            <div><dt>Points</dt><dd id="st-points">—</dd></div>
+          </dl>
+          <div id="site-warning" class="warn" hidden></div>
         </div>
-        <p class="hint" id="origin-hint">Origin: south-west corner of the site, rounded to 100.</p>
-        <p class="hint">Buildings, roads, parcels (Arkansas) and FEMA flood zones are gathered automatically. Turn layers on and off in the map's <strong>Layers</strong> panel — the preview, PNG and DXF include only what's shown.</p>
-        <label class="check">
-          <input type="checkbox" id="smooth" checked>
-          <span><strong>Smooth contours</strong> — removes lidar noise from the contour lines only; CSV/DXF points stay raw.</span>
-        </label>
-      </section>
+      </details>
 
-      <section class="step" id="step-generate">
-        <h2><span class="num">3</span> Generate</h2>
-        <button id="generate" class="btn btn-primary btn-block" type="button" disabled>Generate topography</button>
-        <p class="status" id="status" aria-live="polite"></p>
-      </section>
-
-      <section class="step" id="step-results" hidden>
-        <h2><span class="num">4</span> Download</h2>
-        <dl class="stats" id="result-stats">
-          <div><dt>Min elev.</dt><dd id="rs-min">—</dd></div>
-          <div><dt>Max elev.</dt><dd id="rs-max">—</dd></div>
-          <div><dt>Points</dt><dd id="rs-points">—</dd></div>
-        </dl>
-        <div class="source" id="source"></div>
-        <div class="downloads">
-          <button class="dl dl-main" data-out="csv"><span class="dl-name">CSV</span><span class="dl-desc">Terrain points (X,Y,Z) for Toposolid &ldquo;Create from points file&rdquo;</span></button>
-          <button class="dl" data-out="dxf"><span class="dl-name">DXF</span><span class="dl-desc">All layers shown on the map, one file, each on its own CAD layer</span></button>
-          <p class="hint dl-note" id="dxf-units-note">In Revit, set <strong>Import units: Feet</strong> when linking the DXF (don't use Auto-Detect).</p>
-          <button class="dl" data-out="png"><span class="dl-name">PNG</span><span class="dl-desc">Printable map of the shown layers, north arrow &amp; scale</span></button>
-          <button class="dl" data-out="jpg"><span class="dl-name">Aerial JPG</span><span class="dl-desc">Original + underlay version of the exact site extent, with world files, for Revit Insert &gt; Image</span></button>
-          <div class="field aerial-res">
-            <label for="aerial-res">Aerial resolution</label>
-            <select id="aerial-res"></select>
-          </div>
-          <div class="underlay">
-            <canvas id="underlay-thumb" width="120" height="90" aria-label="Underlay preview"></canvas>
-            <div class="underlay-ctl">
-              <div class="ul-title">Underlay image</div>
-              <label>Color <input type="range" id="ul-sat" min="0" max="150" value="110"><output id="ul-sat-v">110%</output></label>
-              <label>Washout <input type="range" id="ul-wash" min="0" max="80" value="40"><output id="ul-wash-v">40%</output></label>
-              <button type="button" class="ul-reset" id="ul-reset">Reset</button>
+      <details class="step" id="step-options" open>
+        <summary><span class="num">2</span><span class="st-title">Topography</span><span class="st-sum" id="sum-topo"></span></summary>
+        <div class="step-body">
+          <div class="field-row">
+            <div class="field field-units">
+              <label>Units</label>
+              <div class="seg" role="radiogroup" id="units">
+                <label><input type="radio" name="units" value="ft" checked><span>Feet</span></label>
+                <label><input type="radio" name="units" value="m"><span>Meters</span></label>
+              </div>
+            </div>
+            <div class="field">
+              <label for="spacing">Points every</label>
+              <select id="spacing"></select>
+            </div>
+            <div class="field">
+              <label for="interval">Contours every</label>
+              <select id="interval"></select>
             </div>
           </div>
-          <button class="dl" data-out="readme"><span class="dl-name">README</span><span class="dl-desc">Sources, datum, zone, units, disclaimer</span></button>
-          <button class="dl dl-all" data-out="zip"><span class="dl-name">Download all (.zip)</span></button>
+          <label class="check">
+            <input type="checkbox" id="smooth" checked>
+            <span><strong>Smooth contours</strong> — removes lidar noise from the lines; points stay raw.</span>
+          </label>
+          <details class="sub-details">
+            <summary>Coordinate system</summary>
+            <div class="field">
+              <label for="zone" class="sr-only">Coordinate system</label>
+              <select id="zone"></select>
+              <p class="hint" id="zone-hint">Draw a site to detect the zone.</p>
+            </div>
+          </details>
+          <p class="hint">Buildings, roads, parcels (Arkansas) and FEMA flood zones come along automatically — choose what's included in the map's <strong>Layers</strong> panel.</p>
         </div>
-      </section>
+      </details>
 
-      <section class="step" id="step-data">
-        <details>
-          <summary><h2 style="display:inline-flex;margin:0"><span class="num">⚙</span> Hosted map data</h2></summary>
+      <details class="step" id="step-place" open>
+        <summary><span class="num">3</span><span class="st-title">Place in Revit</span><span class="st-sum" id="sum-place"></span></summary>
+        <div class="step-body">
+          <label class="check check-first">
+            <input type="checkbox" id="local-origin">
+            <span><strong>Local origin</strong> — (0,0) at a point you choose, so Revit isn't millions of feet from its origin.</span>
+          </label>
+          <div class="origin-row">
+            <button id="pick-origin" class="btn" type="button">
+              <svg viewBox="0 0 20 20" aria-hidden="true" style="stroke-dasharray:none"><circle cx="10" cy="10" r="4"/><path d="M10 1v5M10 14v5M1 10h5M14 10h5"/></svg>
+              Pick origin
+            </button>
+            <button id="reset-origin" class="btn btn-quiet" type="button" hidden>Use SW corner</button>
+          </div>
+          <p class="hint" id="origin-hint">Origin: south-west corner of the site, rounded to 100.</p>
+          <div class="align-box" id="align-box">
+            <div class="field">
+              <label for="rot-deg">Project north <span class="sub">° clockwise from grid north</span></label>
+              <div class="align-row">
+                <input type="number" id="rot-deg" step="0.01" value="0" inputmode="decimal">
+                <button id="pick-dir" class="btn" type="button" title="Click a second point along the direction that should point up in Revit">Pick direction</button>
+                <button id="rot-90" class="btn btn-quiet" type="button" title="Turn project north 90° clockwise">+90°</button>
+                <button id="rot-0" class="btn btn-quiet" type="button" title="No rotation (grid north up)">0</button>
+              </div>
+              <p class="hint" id="rot-hint"></p>
+            </div>
+            <div class="field">
+              <label for="datum">Elevation datum <span class="sub">subtracted from Z</span></label>
+              <div class="align-row">
+                <input type="number" id="datum" step="0.01" placeholder="none" inputmode="decimal">
+                <button id="datum-ground" class="btn btn-quiet" type="button" title="Use the ground elevation at the origin">Ground at origin</button>
+              </div>
+              <p class="hint" id="datum-hint"></p>
+            </div>
+          </div>
+          <div class="revit-card" id="revit-card">
+            <div class="rc-head"><span>Revit coordinates</span><button type="button" class="btn btn-quiet btn-xs" id="revit-copy">Copy</button></div>
+            <div id="revit-card-body"></div>
+          </div>
+        </div>
+      </details>
+
+      <details class="step" id="step-results" open hidden>
+        <summary><span class="num">4</span><span class="st-title">Export</span><span class="st-sum" id="sum-export"></span></summary>
+        <div class="step-body">
+          <dl class="stats" id="result-stats">
+            <div><dt>Min elev.</dt><dd id="rs-min">—</dd></div>
+            <div><dt>Max elev.</dt><dd id="rs-max">—</dd></div>
+            <div><dt>Points</dt><dd id="rs-points">—</dd></div>
+          </dl>
+          <details class="sub-details">
+            <summary>Data sources</summary>
+            <div class="source" id="source"></div>
+          </details>
+          <div class="folder-box" id="folder-box">
+            <div class="folder-title">Save to</div>
+            <div class="align-row">
+              <button type="button" class="btn" id="folder-pick">Choose folder…</button>
+              <button type="button" class="btn btn-quiet" id="folder-off" hidden>Use Downloads</button>
+            </div>
+            <div class="field folder-prefix" id="folder-prefix-row" hidden>
+              <label for="folder-prefix">File name prefix</label>
+              <input type="text" id="folder-prefix" value="site" spellcheck="false">
+            </div>
+            <p class="hint" id="folder-hint"></p>
+          </div>
+          <div class="downloads">
+            <button class="dl dl-all" data-out="zip"><span class="dl-name">Download all</span><span class="dl-desc">Every file below, plus the Revit coordinates</span></button>
+            <div class="dl-grid">
+              <button class="dl" data-out="dxf"><span class="dl-name">DXF</span><span class="dl-desc">Shown layers, one CAD file</span></button>
+              <button class="dl" data-out="csv"><span class="dl-name">CSV points</span><span class="dl-desc">Toposolid from points file</span></button>
+              <button class="dl" data-out="jpg"><span class="dl-name">Aerial</span><span class="dl-desc">JPG + underlay, world files</span></button>
+              <button class="dl" data-out="png"><span class="dl-name">PNG map</span><span class="dl-desc">Printable, north &amp; scale</span></button>
+            </div>
+            <p class="hint dl-note" id="dxf-units-note">In Revit, set <strong>Import units: Feet</strong> when linking the DXF (don't use Auto-Detect).</p>
+            <details class="sub-details">
+              <summary>Aerial options</summary>
+              <div class="field aerial-res">
+                <label for="aerial-res">Resolution</label>
+                <select id="aerial-res"></select>
+              </div>
+              <div class="underlay">
+                <canvas id="underlay-thumb" width="120" height="90" aria-label="Underlay preview"></canvas>
+                <div class="underlay-ctl">
+                  <div class="ul-title">Underlay image</div>
+                  <label>Color <input type="range" id="ul-sat" min="0" max="150" value="110"><output id="ul-sat-v">110%</output></label>
+                  <label>Washout <input type="range" id="ul-wash" min="0" max="80" value="40"><output id="ul-wash-v">40%</output></label>
+                  <button type="button" class="ul-reset" id="ul-reset">Reset</button>
+                </div>
+              </div>
+            </details>
+            <button class="dl-link" data-out="readme">README only</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="step" id="step-data">
+        <summary><span class="num">⚙</span><span class="st-title">Hosted map data</span><span class="st-sum"></span></summary>
+        <div class="step-body">
           <p class="hint">Parking lots, sidewalks and street surfaces come from OpenStreetMap data this site hosts for the states below (refreshed weekly). Elsewhere the app asks the public OpenStreetMap servers, which can be busy.</p>
           <ul id="hosted-states" class="hosted"><li>Loading…</li></ul>
           <div class="admin-only" hidden>
@@ -146,13 +204,17 @@
             <a class="btn btn-block" id="edit-states" href="https://github.com/AMRJacob/Contours-to-Revit/edit/main/context-states.txt" target="_blank" rel="noopener">Add / remove states (GitHub)</a>
             <p class="hint">Add a state's name (e.g. <code>oklahoma</code>, <code>new-mexico</code>) on its own line, or delete a line to free the space. Saving rebuilds the data in a few minutes.</p>
           </div>
-        </details>
-      </section>
+        </div>
+      </details>
 
       <footer class="foot">
         <p><strong>Preliminary only — not survey data.</strong> Bare-earth elevations are interpolated under buildings and trees. Elevations: USGS 3DEP, NAVD88.</p>
         <p class="credits">Map imagery &copy; Esri, Maxar, Earthstar Geographics; export imagery USGS The National Map. Streets &amp; roads &copy; OpenStreetMap contributors. Buildings: FEMA/ORNL USA Structures. <a href="https://github.com/AMRJacob/Contours-to-Revit" target="_blank" rel="noopener">Source</a></p>
       </footer>
+      <div class="action-bar" id="step-generate">
+        <p class="status" id="status" aria-live="polite"></p>
+        <button id="generate" class="btn btn-primary btn-block" type="button" disabled>Generate topography</button>
+      </div>
     </aside>
 
     <main class="stage">
@@ -178,6 +240,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.13.0"></script>
+  <script type="module" src="js/app.js?v=0.14.0"></script>
 </body>
 </html>

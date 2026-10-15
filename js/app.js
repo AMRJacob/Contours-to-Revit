@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.13.0';
-import { fetchElevation, sample } from './dem.js?v=0.13.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.13.0';
-import { Dxf } from './dxf.js?v=0.13.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.13.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.13.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.14.0';
+import { fetchElevation, sample } from './dem.js?v=0.14.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.14.0';
+import { Dxf } from './dxf.js?v=0.14.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.14.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.14.0';
 
-const VERSION = '0.13.0';
+const VERSION = '0.14.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -211,6 +211,11 @@ $('local-origin').addEventListener('change', () => { saveSettings(); applyOrigin
 }));
 $('zone').addEventListener('change', () => { updateZoneHint(); onSiteChanged(false); saveSettings(); invalidate(); });
 
+function updateTopoSummary() {
+  const t = OPTIONS[units()].tick;
+  $('sum-topo').textContent = `pts ${$('spacing').value}${t} · contours ${$('interval').value}${t}`;
+}
+
 function invalidate() {
   if (state.result) setStatus('Options changed — generate again to update the downloads.');
 }
@@ -236,6 +241,9 @@ let detectSeq = 0;
 async function onSiteChanged(redetect) {
   const has = !!state.rect;
   $('site-stats').hidden = !has;
+  $('step-site').classList.toggle('done', has);
+  if (!has) $('sum-site').textContent = 'Draw a boundary';
+  updateTopoSummary();
   $('generate').disabled = !has;
   $('site-warning').hidden = true;
   if (!has) { updateZoneHint(); return; }
@@ -265,6 +273,7 @@ async function onSiteChanged(redetect) {
   const sqft = (box.xmax - box.xmin) * (box.ymax - box.ymin) * (zone.unit === 'ft' ? 1 : (1200 / 3937 / 0.3048) ** 2);
   const acres = sqft / SQFT_PER_ACRE;
   $('st-size').textContent = `${fmt(wOut, 0)} × ${fmt(hOut, 0)} ${u}`;
+  $('sum-site').textContent = `${fmt(wOut, 0)} × ${fmt(hOut, 0)} ${u} · ${fmt(acres, acres < 10 ? 2 : 1)} ac`;
   $('st-area').textContent = `${fmt(acres, acres < 10 ? 2 : 1)} ac`;
   $('st-points').textContent = fmt(nPts, 0);
   const warns = [];
@@ -498,7 +507,7 @@ const AERIAL_SOURCES = [
  * Cached per generated site and resolution. Returns { blob, w, h, credit, ftPerPx }.
  */
 async function fetchAerialExport(site) {
-  if (site._aerial && site._aerial.res === aerialRes) return site._aerial;
+  if (site._aerial && site._aerial.res === aerialRes && site._aerial.rot === (site.rot || 0)) return site._aerial;
   const { zone, box } = site;
   const toReq = zone.note ? 1 / zoneUnitsPerMeter(zone) : 1;
   const w = box.xmax - box.xmin, h = box.ymax - box.ymin;
@@ -543,15 +552,52 @@ async function fetchAerialExport(site) {
     const queue = jobs.slice();
     await Promise.all(Array.from({ length: Math.min(4, queue.length) }, async () => { while (ok && queue.length) await one(queue.shift()); }));
     if (!ok) { fails.push(src.credit); continue; }
+    let out = canvas, OW = W, OH = H;
+    if (site.rot) {
+      setStatus('Turning aerial to project north…');
+      out = rotateToProject(site, canvas, W, H);
+      OW = out.width; OH = out.height;
+      canvas.width = canvas.height = 0;
+    }
     setStatus('Saving aerial JPG…');
-    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.92));
-    canvas.width = canvas.height = 0;
+    const blob = await new Promise(res => out.toBlob(res, 'image/jpeg', 0.92));
+    out.width = out.height = 0;
     if (!blob) throw new Error('image too large for this browser — choose a coarser aerial resolution');
-    site._aerial = { blob, w: W, h: H, credit: src.credit, ftPerPx: wFt / W, res: aerialRes };
-    setStatus(`Aerial: ${fmt(W, 0)} × ${fmt(H, 0)} px, ${(wFt / W).toFixed(2)} ft/px.`);
+    site._aerial = { blob, w: OW, h: OH, credit: src.credit, ftPerPx: wFt / W, res: aerialRes, rot: site.rot || 0 };
+    setStatus(`Aerial: ${fmt(OW, 0)} × ${fmt(OH, 0)} px, ${(wFt / W).toFixed(2)} ft/px${site.rot ? ', turned to project north' : ''}.`);
     return site._aerial;
   }
   throw new Error('aerial imagery service did not respond');
+}
+
+/**
+ * Redraw a grid-north-up site image (W x H px covering site.box) so project north is up, on a white canvas
+ * exactly covering aerialExtent(site). Each source pixel is mapped with one affine transform, so the result
+ * lines up with the DXF frame and world file to the pixel.
+ */
+function rotateToProject(site, src, W, H) {
+  const e = aerialExtent(site);
+  const b = site.box, t = site.toOut;
+  const sx = (b.xmax - b.xmin) * t / W, sy = (b.ymax - b.ymin) * t / H; // output units per source pixel
+  let px = Math.min(sx, sy);
+  let OW = Math.ceil(e.w / px), OH = Math.ceil(e.h / px);
+  const cap = AERIAL_MAX_PX * 1.6;
+  if (OW * OH > cap) { const k = Math.sqrt(OW * OH / cap); OW = Math.ceil(OW / k); OH = Math.ceil(OH / k); }
+  const pX = e.w / OW, pY = e.h / OH;
+  const r = site.rot * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+  const bx0 = b.xmin * t - site.base[0], by1 = b.ymax * t - site.base[1]; // pre-rotation NW corner
+  const out = document.createElement('canvas');
+  out.width = OW; out.height = OH;
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, OW, OH);
+  ctx.imageSmoothingQuality = 'high';
+  // Source pixel (i, j) -> output pixel: see outXY for the rotation, rows count down from the north edge.
+  ctx.setTransform(c * sx / pX, -s * sx / pY, s * sy / pX, c * sy / pY,
+    (c * bx0 - s * by1 - e.x0) / pX, (e.y1 - s * bx0 - c * by1) / pY);
+  ctx.drawImage(src, 0, 0);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  return out;
 }
 
 {
@@ -627,8 +673,11 @@ $('ul-reset').addEventListener('click', () => {
 
 /** Image extents in output coordinates (same frame as the CSV/DXF, after any local origin). */
 function aerialExtent(site) {
-  const [x0, y0] = outXY(site, site.box.xmin, site.box.ymin);
-  const [x1, y1] = outXY(site, site.box.xmax, site.box.ymax);
+  // With a rotation the image is turned to project north, so its frame is the box around the rotated site.
+  const b = site.box;
+  const cs = [[b.xmin, b.ymin], [b.xmax, b.ymin], [b.xmax, b.ymax], [b.xmin, b.ymax]].map(([x, y]) => outXY(site, x, y));
+  const x0 = Math.min(...cs.map(q => q[0])), x1 = Math.max(...cs.map(q => q[0]));
+  const y0 = Math.min(...cs.map(q => q[1])), y1 = Math.max(...cs.map(q => q[1]));
   return { x0, y0, x1, y1, w: x1 - x0, h: y1 - y0 };
 }
 
@@ -859,9 +908,18 @@ document.querySelectorAll('input[name="pv"]').forEach(r => r.addEventListener('c
 window.addEventListener('resize', () => { if (!$('preview').hidden) renderPreview(); });
 
 // ---------- Outputs ----------
+/**
+ * Native zone XY -> output XY: scale to output units, subtract the local origin, then rotate about it so the
+ * building's project-north bearing (site.rot, ° clockwise from grid north) points straight up (+Y).
+ */
 function outXY(site, x, y) {
-  return [x * site.toOut - site.base[0], y * site.toOut - site.base[1]];
+  const X = x * site.toOut - site.base[0], Y = y * site.toOut - site.base[1];
+  if (!site.rot) return [X, Y];
+  const r = site.rot * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+  return [X * c - Y * s, X * s + Y * c];
 }
+/** Elevation datum subtracted from every output Z (0 = real NAVD88 elevations). */
+const datumOf = site => site.datum || 0;
 
 function makeCsv(site) {
   const { pts } = site;
@@ -871,7 +929,7 @@ function makeCsv(site) {
       const zv = pts.z[j * pts.nx + i];
       if (Number.isNaN(zv)) continue;
       const [x, y] = outXY(site, pts.x0 + i * pts.s, pts.y0 + j * pts.s);
-      rows.push(`${x.toFixed(3)},${y.toFixed(3)},${zv.toFixed(3)}`);
+      rows.push(`${x.toFixed(3)},${y.toFixed(3)},${(zv - datumOf(site)).toFixed(3)}`);
     }
   }
   return rows.join('\r\n') + '\r\n';
@@ -949,7 +1007,7 @@ function contextLabels(site, v) {
 
 /** One DXF with every layer currently shown in the map's Layers panel. */
 function makeDxf(site, v) {
-  const d = new Dxf(site.units);
+  const d = new Dxf(site.units, datumOf(site));
   const labels = contextLabels(site, v);
   if (v.contours) addContours(d, site, labels.boxes, v.labels !== false);
   if (site.context) addContext(d, site, v, labels);
@@ -981,7 +1039,25 @@ function makeDxf(site, v) {
       d.text('C-ORIG', r * 2.2 + textW('LOCAL ORIGIN 0,0', h) / 2, r * 0.9, z, h, 'LOCAL ORIGIN 0,0');
       const t2 = `= E ${site.base[0].toFixed(3)} N ${site.base[1].toFixed(3)} (EPSG:${site.zone.code})`;
       d.text('C-ORIG', r * 2.2 + textW(t2, h * 0.7) / 2, -r * 0.4, z, h * 0.7, t2);
+      const lines = [];
+      if (site.rot) lines.push(`PROJECT NORTH (UP) = ${bearingText(site.rot)} OF GRID NORTH`);
+      if (datumOf(site)) lines.push(`Z = ELEVATION - ${datumOf(site).toFixed(2)} (DATUM = 0)`);
+      lines.forEach((t, i) => d.text('C-ORIG', r * 2.2 + textW(t, h * 0.7) / 2, -r * 0.4 - h * 1.2 * (i + 1), z, h * 0.7, t));
     }
+    // North arrows from the origin: grid north (survey / State Plane) and true north, in this file's frame.
+    d.layer('C-ORIG-NRTH', 1);
+    const len = r * 6;
+    const arrow = (bearing, label) => {
+      const a = (bearing - (site.rot || 0)) * Math.PI / 180; // bearing in the grid frame -> drawing frame
+      const ux = Math.sin(a), uy = Math.cos(a), px = -uy, py = ux;
+      const tip = [ux * len, uy * len];
+      d.polyline3d('C-ORIG-NRTH', [[ux * r, uy * r, z], [tip[0], tip[1], z]]);
+      d.polyline3d('C-ORIG-NRTH', [[tip[0] - ux * r + px * r * 0.4, tip[1] - uy * r + py * r * 0.4, z], [tip[0], tip[1], z],
+        [tip[0] - ux * r - px * r * 0.4, tip[1] - uy * r - py * r * 0.4, z]]);
+      if (v.labels !== false) d.text('C-ORIG-NRTH', tip[0] + ux * h * 1.5, tip[1] + uy * h * 1.5, z, h * 0.7, label, -((bearing - (site.rot || 0))));
+    };
+    arrow(0, 'GRID N');
+    if (Math.abs(site.convergence) > 0.01) arrow(site.convergence, 'TRUE N');
   }
   return d.toString();
 }
@@ -1168,6 +1244,16 @@ function makeReadme(site, v = vis()) {
   } else {
     L_('Local origin:         none — X/Y are true State Plane coordinates.');
   }
+  if (site.rot) {
+    L_(`ROTATION:             X/Y are ROTATED about the local origin so project north points up (+Y).`,
+      `                      Project north = ${bearingText(site.rot, 4)} of grid north (${site.rot.toFixed(4)}° clockwise).`,
+      '                      The aerial JPG is turned the same way; layer C-ORIG-NRTH shows grid and true north.');
+  }
+  if (datumOf(site)) {
+    L_(`ELEVATION DATUM:      ${datumOf(site).toFixed(3)} ${u} SUBTRACTED from every Z (CSV and DXF). Z = 0 is elevation ${datumOf(site).toFixed(2)}.`);
+  }
+  const rtx = revitText(site);
+  if (rtx) L_('', ...rtx.split('\r\n'), '');
   L_(`Grid north vs true:   true north is ${Math.abs(site.convergence).toFixed(3)}° ${site.convergence >= 0 ? 'east' : 'west'} of grid north at the site centre.`,
     '',
     'SITE',
@@ -1202,7 +1288,7 @@ function makeReadme(site, v = vis()) {
     ...(() => {
       const e = aerialExtent(site), uu = u === 'm' ? 'm' : 'ft', img = site._aerial;
       return [
-        '*_aerial.jpg     Clean aerial photo of the site box, grid-north up, no linework' + (img ? ` (${img.w} x ${img.h} px, ${img.ftPerPx.toFixed(2)} ft/px; ${img.credit})` : '') + '.',
+        `*_aerial.jpg     Clean aerial photo of the site box, ${site.rot ? 'turned so project north is up (white corners)' : 'grid-north up'}, no linework` + (img ? ` (${img.w} x ${img.h} px, ${img.ftPerPx.toFixed(2)} ft/px; ${img.credit})` : '') + '.',
         '*_aerial.jgw     World file: places the JPG automatically in AutoCAD / Civil 3D / GIS (same coordinates as the DXF).',
         `*_aerial_underlay.jpg / .jgw   Same image processed as a drawing underlay: ${ulSettings.sat}% colour, ${ulSettings.wash}% washed toward white.`,
         `                 Image extent: ${e.w.toFixed(3)} x ${e.h.toFixed(3)} ${uu}`,
@@ -1213,7 +1299,7 @@ function makeReadme(site, v = vis()) {
         `                   3. Properties: check Lock Proportions, set Width = ${e.w.toFixed(3)} ${uu}.`,
         '                   4. Move the image by its lower-left corner onto the frame\'s lower-left corner (or use the',
         '                      coordinates above). Set Draw Layer = Background to keep it under the model.',
-        '                 Grid north is up; if your project north is rotated, rotate the image with the model.',
+        site.rot ? '                 The image is already turned to project north — no rotation needed in Revit.' : '                 Grid north is up; set a project north in the app to get a pre-turned image.',
       ];
     })(),
     '',
@@ -1298,6 +1384,78 @@ const MAKERS = {
   ulJgw: async (s, v) => { const a = await fetchAerialExport(s); return { name: `${baseName(s)}_aerial_underlay.jgw`, data: makeWorldFile(s, a), type: 'text/plain' }; },
 };
 
+// ---------- Project folder: overwrite fixed file names so Revit links can simply Reload ----------
+// Chromium browsers (Chrome, Edge) only. The folder handle is kept in IndexedDB; the browser asks again for
+// permission in each new session, on the first download click.
+const FOLDER_OK = 'showDirectoryPicker' in window;
+const idb = {
+  open() { return new Promise((res, rej) => { const r = indexedDB.open('c2r', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); },
+  async get(k) { const db = await this.open(); return new Promise(res => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => res(undefined); }); },
+  async set(k, v) { const db = await this.open(); return new Promise(res => { const t = db.transaction('kv', 'readwrite'); if (v === undefined) t.objectStore('kv').delete(k); else t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = res; }); },
+};
+const folder = { handle: null, prefix: (() => { try { return localStorage.getItem('c2r-prefix') || 'site'; } catch { return 'site'; } })() };
+
+/** Fixed names in the project folder, by output kind. */
+function folderName(kind) {
+  const p = (folder.prefix || 'site').replace(/[\\/:*?"<>|]+/g, '-');
+  return { csv: `${p}_points.csv`, dxf: `${p}_existing.dxf`, png: `${p}_map.png`, readme: `${p}_README.txt`,
+    jpg: `${p}_aerial.jpg`, jgw: `${p}_aerial.jgw`, ulJpg: `${p}_aerial_underlay.jpg`, ulJgw: `${p}_aerial_underlay.jgw`, revit: `${p}_revit-coordinates.txt` }[kind];
+}
+
+function updateFolderUi() {
+  const box = $('folder-box');
+  if (!FOLDER_OK) {
+    $('folder-hint').textContent = 'Saving into a fixed project folder needs Chrome or Edge. In this browser, files go to your Downloads folder.';
+    $('folder-pick').hidden = true; $('folder-off').hidden = true; $('folder-prefix-row').hidden = true;
+    $('sum-export').textContent = '→ Downloads';
+    return;
+  }
+  box.classList.toggle('on', !!folder.handle);
+  $('sum-export').textContent = folder.handle ? `→ ${folder.handle.name}` : '→ Downloads';
+  $('folder-pick').textContent = folder.handle ? `📁 ${folder.handle.name}` : 'Choose folder…';
+  $('folder-off').hidden = !folder.handle;
+  $('folder-prefix-row').hidden = !folder.handle;
+  $('folder-hint').innerHTML = folder.handle
+    ? `Downloads replace <code>${escapeHtml(folderName('dxf'))}</code>, <code>${escapeHtml(folderName('jpg'))}</code> and the rest in this folder. In Revit, link them from here once; after a change, download again and click <strong>Reload</strong> in Manage Links.`
+    : 'Choose a folder and downloads are saved there with fixed names, replacing the previous version. Link them in Revit once; after a change, download again and use Reload in Manage Links.';
+}
+
+$('folder-pick').addEventListener('click', async () => {
+  try {
+    folder.handle = await window.showDirectoryPicker({ id: 'c2r-project', mode: 'readwrite' });
+    await idb.set('folder', folder.handle);
+    updateFolderUi();
+    setStatus(`Downloads will be saved into “${folder.handle.name}”.`);
+  } catch (err) { if (err?.name !== 'AbortError') setStatus(`Couldn't use that folder: ${err.message}`, true); }
+});
+$('folder-off').addEventListener('click', async () => { folder.handle = null; await idb.set('folder', undefined); updateFolderUi(); setStatus('Back to normal downloads.'); });
+$('folder-prefix').value = folder.prefix;
+$('folder-prefix').addEventListener('change', e => {
+  folder.prefix = e.target.value.trim() || 'site';
+  e.target.value = folder.prefix;
+  try { localStorage.setItem('c2r-prefix', folder.prefix); } catch { /* ignore */ }
+  updateFolderUi();
+});
+if (FOLDER_OK) idb.get('folder').then(h => { if (h) { folder.handle = h; updateFolderUi(); } }).catch(() => {});
+updateFolderUi();
+
+/** Ask for write access to the project folder (needs the click that started the download). */
+async function folderReady() {
+  if (!folder.handle) return false;
+  const opts = { mode: 'readwrite' };
+  if ((await folder.handle.queryPermission(opts)) === 'granted') return true;
+  return (await folder.handle.requestPermission(opts)) === 'granted';
+}
+
+async function writeToFolder(kind, data, type) {
+  const name = folderName(kind);
+  const fh = await folder.handle.getFileHandle(name, { create: true });
+  const w = await fh.createWritable();
+  await w.write(data instanceof Blob ? data : new Blob([data], { type }));
+  await w.close();
+  return name;
+}
+
 function saveBlob(name, data, type) {
   const blob = data instanceof Blob ? data : new Blob([data], { type });
   const a = document.createElement('a');
@@ -1308,22 +1466,41 @@ function saveBlob(name, data, type) {
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
-document.querySelectorAll('.dl').forEach(b => b.addEventListener('click', async () => {
+document.querySelectorAll('.dl, .dl-link').forEach(b => b.addEventListener('click', async () => {
   const site = state.result;
   if (!site) return;
   const kind = b.dataset.out;
-  const label = b.querySelector('.dl-name').textContent;
+  const label = (b.querySelector('.dl-name') || b).textContent.replace(/ only$/, '');
   const v = vis();
+  // Permission must be asked while the click still counts as a user gesture, so before any other work.
+  let toFolder = false;
+  try { toFolder = await folderReady(); } catch { toFolder = false; }
+  if (folder.handle && !toFolder) setStatus('No permission for the project folder — using normal downloads.', true);
   setStatus(`Preparing ${label}…`);
   await tick();
   try {
+    if (toFolder) {
+      const kinds = kind === 'zip' ? ['csv', 'dxf', 'png', 'jpg', 'jgw', 'ulJpg', 'ulJgw', 'readme']
+        : kind === 'jpg' ? ['jpg', 'jgw', 'ulJpg', 'ulJgw'] : [kind];
+      const written = [];
+      for (const k of kinds) {
+        const f = await MAKERS[k](site, v);
+        if (f) written.push(await writeToFolder(k, f.data, f.type));
+      }
+      const rt = revitText(site);
+      if (rt && (kind === 'dxf' || kind === 'zip')) written.push(await writeToFolder('revit', rt, 'text/plain'));
+      setStatus(`Saved to “${folder.handle.name}”: ${written.join(', ')}.${kind === 'dxf' || kind === 'jpg' || kind === 'zip' ? ' In Revit: Manage Links › Reload.' : ''}`);
+      return;
+    }
     if (kind === 'zip') {
       const zip = new JSZip();
-      const folder = zip.folder(baseName(site));
+      const zdir = zip.folder(baseName(site));
       for (const k of ['csv', 'dxf', 'png', 'jpg', 'jgw', 'ulJpg', 'ulJgw', 'readme']) {
         const f = await MAKERS[k](site, v);
-        if (f) folder.file(f.name, f.data);
+        if (f) zdir.file(f.name, f.data);
       }
+      const rt = revitText(site);
+      if (rt) zdir.file(`${baseName(site)}_revit-coordinates.txt`, rt);
       saveBlob(`${baseName(site)}.zip`, await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' }));
     } else {
       const f = await MAKERS[kind](site, v);
@@ -1356,6 +1533,48 @@ function baseFor(zone, toOut, pts) {
   return [Math.floor(pts.x0 * toOut / 100) * 100, Math.floor(pts.y0 * toOut / 100) * 100];
 }
 
+// ---------- Building alignment: project-north rotation + elevation datum ----------
+// rot: bearing of the building's "up" direction, ° clockwise from grid north. datum: Z subtracted (output units).
+const align = { rot: 0, datum: null, northRef: 'grid', ...(session.get('align') || {}) };
+const saveAlign = () => session.set('align', align);
+const normDeg = a => { let x = ((a % 360) + 540) % 360 - 180; if (Object.is(x, -0) || Math.abs(x) < 1e-9) x = 0; return x; };
+/** "12.50° EAST" / "3.00° WEST" — clockwise positive. */
+function bearingText(a, dec = 2) {
+  const x = normDeg(a);
+  return x === 0 ? '0°' : `${Math.abs(x).toFixed(dec)}° ${x > 0 ? 'EAST' : 'WEST'}`;
+}
+
+function setRot(a, why) {
+  align.rot = Math.round(normDeg(Number(a) || 0) * 1e4) / 1e4;
+  saveAlign();
+  $('rot-deg').value = String(align.rot);
+  applyOrigin();
+  if (why) setStatus(why);
+}
+$('rot-deg').addEventListener('change', e => setRot(e.target.value, 'Project north updated — downloads use it, no need to generate again.'));
+$('rot-90').addEventListener('click', () => setRot(align.rot + 90, 'Project north turned 90°.'));
+$('rot-0').addEventListener('click', () => setRot(0, 'Rotation cleared — grid north is up.'));
+$('datum').addEventListener('change', e => {
+  const v = e.target.value.trim();
+  align.datum = v === '' || !Number.isFinite(Number(v)) ? null : Number(v);
+  saveAlign(); applyOrigin();
+});
+$('datum-ground').addEventListener('click', () => {
+  const site = state.result;
+  const z = site && originGround(site);
+  if (!Number.isFinite(z)) { setStatus('Generate first so the ground elevation at the origin is known.', true); return; }
+  align.datum = Math.round(z * 100) / 100;
+  $('datum').value = align.datum.toFixed(2);
+  saveAlign(); applyOrigin();
+  setStatus(`Datum set to the ground at the origin: ${align.datum.toFixed(2)} ${site.units}.`);
+});
+/** Ground elevation (output units) at the local origin, from the DEM. */
+function originGround(site) {
+  if (!site.originNative) return NaN;
+  const [lon, lat] = projector(site.zone).inv(site.originNative);
+  return sample(site.dem, lon, lat) * site.zPerM;
+}
+
 function applyOrigin() {
   const on = $('local-origin').checked;
   $('reset-origin').hidden = !state.origin;
@@ -1364,7 +1583,23 @@ function applyOrigin() {
     site.base = baseFor(site.zone, site.toOut, site.pts);
     site.originPicked = !!state.origin && on;
     site.originNative = on ? [site.base[0] / site.toOut, site.base[1] / site.toOut] : null;
+    site.rot = on ? align.rot : 0;       // rotating about true State Plane (0,0) would be meaningless
+    site.datum = align.datum;
   }
+  $('align-box').classList.toggle('disabled', !on);
+  $('rot-hint').textContent = !on
+    ? 'Turn on the local origin to rotate — the files rotate about it.'
+    : align.rot
+    ? `Project north (up in Revit) is ${bearingText(align.rot).toLowerCase()} of grid north. Files are turned so it points up.`
+    : '0 = grid north up. Pick the origin on a building corner, then pick a point along a wall or grid line that should run straight up in your Revit plan.';
+  $('datum-hint').textContent = align.datum != null
+    ? `Z in the files = elevation − ${align.datum.toFixed(2)}. That elevation becomes 0 (Level 1).`
+    : 'Enter the finished floor elevation (e.g. 512.50) to make it 0 in the files, so Level 1 can stay at 0′.';
+  updateRevitCard();
+  drawNorthIndicator();
+  $('sum-place').textContent = !on ? 'State Plane coordinates'
+    : [state.origin ? 'origin picked' : 'SW corner', align.rot ? `PN ${bearingText(align.rot, 1).replace('EAST', 'E').replace('WEST', 'W')}` : '', align.datum != null ? `datum ${align.datum.toFixed(2)}` : ''].filter(Boolean).join(' · ');
+  $('step-place').classList.toggle('done', on && !!state.origin);
   const u = site ? site.units : units();
   if (!on) $('origin-hint').textContent = 'Off — X/Y are true State Plane coordinates.';
   else if (state.origin) {
@@ -1388,7 +1623,104 @@ function applyOrigin() {
   if (!$('preview').hidden) renderPreview();
 }
 
-const pick = { active: false, corners: [], segs: [], hover: null, dot: null };
+// ---------- Revit coordinates card ----------
+/** Values for Revit's Manage > Coordinates > Specify Coordinates at Point, picked at the local origin. */
+function revitValues(site) {
+  if (!site || !site.originNative) return null;
+  const u = site.units === 'm' ? 'm' : 'ft';
+  const toward = align.northRef === 'true' ? (site.convergence || 0) : 0; // "true north" Revit should use, as a grid bearing
+  const ang = normDeg(toward - (site.rot || 0));                          // from project north to that north, clockwise +
+  return {
+    u, ns: site.base[1], ew: site.base[0],
+    elev: datumOf(site),
+    ang, angText: ang === 0 ? '0.00°' : `${Math.abs(ang).toFixed(2)}° ${ang > 0 ? 'East' : 'West'}`,
+    ground: originGround(site),
+    label: site.originPicked && state.origin ? state.origin.label : 'South-west corner of the site (not a building point — pick one on the map)',
+  };
+}
+
+function revitSteps(rv) {
+  return [
+    `Model the building with this reference point at Revit's internal origin${rv.elev ? `, and Level 1 at 0′ (= ${rv.elev.toFixed(2)} real)` : ' — files keep real elevations, so set Level 1 to its real elevation'}.`,
+    `Insert › Link CAD › the DXF: Positioning "Auto – Origin to Origin", Import units ${rv.u === 'm' ? 'Meters' : 'Feet'}.`,
+    'Manage › Coordinates › Specify Coordinates at Point › click the reference point › enter the values above.',
+    'When placement changes: update origin / north here, download into the project folder again, then Manage Links › Reload and repeat step 3.',
+  ];
+}
+
+function updateRevitCard() {
+  const body = $('revit-card-body');
+  if (!body) return;
+  const site = state.result;
+  const rv = revitValues(site);
+  $('revit-copy').hidden = !rv;
+  if (!rv) {
+    body.innerHTML = `<p class="hint">${site ? 'Turn on <strong>Use a local origin</strong> (and pick it on a building corner) to get the values for Revit.' : 'Generate to see the values.'}</p>`;
+    return;
+  }
+  const n = (v, d = 3) => fmt(v, d);
+  body.innerHTML = `
+    <p class="rc-ref">At: <strong>${escapeHtml(rv.label)}</strong></p>
+    <dl class="rc-vals">
+      <div><dt>North/South</dt><dd>${n(rv.ns)} ${rv.u}</dd></div>
+      <div><dt>East/West</dt><dd>${n(rv.ew)} ${rv.u}</dd></div>
+      <div><dt>Elevation</dt><dd>${n(rv.elev, 2)} ${rv.u}</dd></div>
+      <div><dt>Angle to ${align.northRef === 'true' ? 'true' : 'grid'} north</dt><dd>${rv.angText}</dd></div>
+    </dl>
+    <div class="rc-north seg" role="radiogroup" aria-label="North used in Revit">
+      <label><input type="radio" name="north-ref" value="grid" ${align.northRef !== 'true' ? 'checked' : ''}><span>Grid north <small>(survey)</small></span></label>
+      <label><input type="radio" name="north-ref" value="true" ${align.northRef === 'true' ? 'checked' : ''}><span>True north</span></label>
+    </div>
+    <p class="hint">${align.northRef === 'true'
+      ? `True north is ${n(Math.abs(site.convergence), 2)}° ${site.convergence >= 0 ? 'east' : 'west'} of grid north here.`
+      : 'Civil and survey drawings in State Plane use grid north.'}${Number.isFinite(rv.ground) ? ` Ground at the reference point: ${n(rv.ground, 2)} ${rv.u}.` : ''}</p>
+    <ol class="rc-steps">${revitSteps(rv).map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ol>`;
+  body.querySelectorAll('input[name="north-ref"]').forEach(r => r.addEventListener('change', e => {
+    align.northRef = e.target.value; saveAlign(); updateRevitCard();
+  }));
+}
+
+function revitText(site) {
+  const rv = revitValues(site);
+  if (!rv) return '';
+  return [
+    'REVIT — Manage > Coordinates > Specify Coordinates at Point',
+    `Reference point: ${rv.label}`,
+    `  North/South: ${rv.ns.toFixed(3)} ${rv.u}`,
+    `  East/West:   ${rv.ew.toFixed(3)} ${rv.u}`,
+    `  Elevation:   ${rv.elev.toFixed(2)} ${rv.u}`,
+    `  Angle from Project North to ${align.northRef === 'true' ? 'True' : 'Grid'} North: ${rv.angText}`,
+    `  (NAD83 State Plane ${site.zone.name}, EPSG:${site.zone.code}; ${align.northRef === 'true' ? 'true north' : 'grid north — matches State Plane survey/civil drawings'})`,
+    ...revitSteps(rv).map((t, i) => `${i + 1}. ${t}`),
+  ].join('\r\n');
+}
+
+$('revit-copy').addEventListener('click', async () => {
+  const t = revitText(state.result);
+  if (!t) return;
+  try { await navigator.clipboard.writeText(t); setStatus('Revit values copied.'); } catch { setStatus('Couldn\'t copy — select the values by hand.', true); }
+});
+
+// Project-north indicator on the map: an arrow from the origin in the building's "up" direction.
+let northMarker = null;
+function originLatLng() {
+  if (state.origin) return L.latLng(state.origin.lat, state.origin.lon);
+  const site = state.result;
+  if (site?.originNative) { const [lon, lat] = projector(site.zone).inv(site.originNative); return L.latLng(lat, lon); }
+  return null;
+}
+function drawNorthIndicator() {
+  if (northMarker) { map.removeLayer(northMarker); northMarker = null; }
+  const ll = originLatLng();
+  if (!ll || !$('local-origin').checked || !align.rot) return;
+  // Screen up is true north; true north is `conv` east of grid north, so the bearing on screen is rot - conv.
+  const conv = state.result?.convergence || 0;
+  const ang = align.rot - conv;
+  northMarker = L.marker(ll, { interactive: false, keyboard: false, icon: L.divIcon({ className: 'pn-icon', iconSize: [120, 120], iconAnchor: [60, 60],
+    html: `<svg width="120" height="120" viewBox="0 0 120 120" style="transform:rotate(${ang}deg)"><path d="M60 52V8" stroke="#fff" stroke-width="4"/><path d="M60 52V8" stroke="#38bdf8" stroke-width="2"/><path d="M52 18L60 4L68 18Z" fill="#38bdf8" stroke="#fff" stroke-width="1.2"/><text x="72" y="16" font-size="11" font-weight="700" fill="#38bdf8" stroke="#0b1215" stroke-width="3" paint-order="stroke">PN</text></svg>` }) }).addTo(map);
+}
+
+const pick = { active: false, mode: 'origin', corners: [], segs: [], hover: null, dot: null, guide: null };
 
 /** Snap targets from the visible layers of the last result, in lat/lon. */
 function buildSnapTargets() {
@@ -1438,14 +1770,22 @@ function snapAt(cp) {
   return best;
 }
 
-function startPick() {
-  if (pick.active) return stopPick();
+function startPick(mode = 'origin') {
+  if (pick.active) { const same = pick.mode === mode; stopPick(); if (same) return; }
+  if (mode === 'dir' && !(originLatLng() && $('local-origin').checked)) {
+    setStatus('Set a local origin first (Pick on map) — project north is measured from it.', true);
+    return;
+  }
   if (!$('preview').hidden) document.querySelector('.tab[data-view="map"]').click();
   pick.active = true;
+  pick.mode = mode;
   buildSnapTargets();
   map.getContainer().classList.add('picking');
-  $('pick-origin').classList.add('active');
-  setStatus(pick.corners.length || pick.segs.length
+  $(mode === 'dir' ? 'pick-dir' : 'pick-origin').classList.add('active');
+  const snaps = pick.corners.length || pick.segs.length;
+  setStatus(mode === 'dir'
+    ? 'Click a second point along the wall or grid line that should point UP in Revit (e.g. the next corner along the building). Esc to cancel.'
+    : snaps
     ? 'Click the map to set the origin — snaps to corners and lines of the shown layers. Esc to cancel.'
     : 'Click the map to set the origin (generate first to snap to buildings, parcels and roads). Esc to cancel.');
 }
@@ -1454,7 +1794,21 @@ function stopPick() {
   pick.active = false;
   map.getContainer().classList.remove('picking');
   $('pick-origin').classList.remove('active');
+  $('pick-dir').classList.remove('active');
   if (pick.dot) { map.removeLayer(pick.dot); pick.dot = null; }
+  if (pick.guide) { map.removeLayer(pick.guide); pick.guide = null; }
+}
+
+/** Grid bearing (° clockwise from grid north) from the origin to a lat/lon, in the site's zone. */
+function gridBearingTo(ll) {
+  const o = originLatLng();
+  const c = state.rect?.getBounds().getCenter();
+  const zone = state.result?.zone || selectedZone() || (c && fallbackZoneFor(c.lng, c.lat));
+  if (!o || !zone) return null;
+  const p = projector(zone);
+  const a = p.fwd([o.lng, o.lat]), b = p.fwd([ll.lng, ll.lat]);
+  if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 1e-6) return null;
+  return Math.atan2(b[0] - a[0], b[1] - a[1]) * 180 / Math.PI;
 }
 
 map.on('mousemove', e => {
@@ -1465,13 +1819,28 @@ map.on('mousemove', e => {
   if (!pick.dot) pick.dot = L.circleMarker(at, { radius: 6, color: '#e8913f', weight: 2, fillColor: '#fff', fillOpacity: 0.9, interactive: false }).addTo(map);
   pick.dot.setLatLng(at);
   pick.dot.unbindTooltip();
-  if (snap) pick.dot.bindTooltip(snap.label, { permanent: true, direction: 'right', offset: [8, 0], className: 'snap-tip' }).openTooltip();
+  let tip = snap ? snap.label : '';
+  if (pick.mode === 'dir') {
+    const o = originLatLng();
+    if (!pick.guide) pick.guide = L.polyline([o, at], { color: '#38bdf8', weight: 2, dashArray: '6 4', interactive: false }).addTo(map);
+    pick.guide.setLatLngs([o, at]);
+    const brg = gridBearingTo(at);
+    if (brg != null) tip = `Project north ${bearingText(brg).toLowerCase()} of grid${tip ? ' · ' + tip : ''}`;
+  }
+  if (tip) pick.dot.bindTooltip(tip, { permanent: true, direction: 'right', offset: [8, 0], className: 'snap-tip' }).openTooltip();
 });
 
 map.on('click', e => {
   if (!pick.active) return;
   const snap = snapAt(e.containerPoint);
   const at = snap ? snap.ll : e.latlng;
+  if (pick.mode === 'dir') {
+    const brg = gridBearingTo(at);
+    stopPick();
+    if (brg == null) { setStatus('That point is on the origin — pick a point farther along the building.', true); return; }
+    setRot(brg, `Project north set to ${bearingText(brg).toLowerCase()} of grid north. Downloads are turned so it points up.`);
+    return;
+  }
   state.origin = { lat: at.lat, lon: at.lng, label: snap ? snap.label : 'Picked point (no snap)' };
   session.set('origin', state.origin);
   $('local-origin').checked = true;
@@ -1482,7 +1851,8 @@ map.on('click', e => {
 });
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && pick.active) { stopPick(); setStatus('Origin pick cancelled.'); } });
-$('pick-origin').addEventListener('click', startPick);
+$('pick-origin').addEventListener('click', () => startPick('origin'));
+$('pick-dir').addEventListener('click', () => startPick('dir'));
 $('reset-origin').addEventListener('click', () => { state.origin = null; session.set('origin', null); applyOrigin(); setStatus('Origin reset to the south-west corner of the site.'); });
 
 // ---------- Utils ----------
@@ -1510,6 +1880,8 @@ function clearAll() {
   state.mapGroups = {};
   state.origin = null;
   session.set('origin', null);
+  align.rot = 0; align.datum = null; saveAlign();
+  $('rot-deg').value = '0'; $('datum').value = '';
   state.result = null;
   $('step-results').hidden = true;
   if (!$('preview').hidden) document.querySelector('.tab[data-view="map"]').click();
@@ -1637,6 +2009,9 @@ if (savedRect) {
   state.rect = r;
   onSiteChanged(true);
 }
+$('rot-deg').value = String(align.rot || 0);
+$('datum').value = align.datum != null ? String(align.datum) : '';
+updateTopoSummary();
 applyOrigin();
 updateZoneHint();
 window.c2r = { state, map, makers: MAKERS }; // for debugging in the console

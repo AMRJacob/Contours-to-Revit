@@ -5,8 +5,9 @@ const f = v => (Math.round(v * 10000) / 10000).toString();
 
 export class Dxf {
   /** units: 'ft' | 'm' — written as $INSUNITS/$MEASUREMENT so CAD/Revit "Auto-Detect" picks the right scale. */
-  constructor(units = 'ft') {
+  constructor(units = 'ft', zOff = 0) {
     this.units = units;
+    this.zOff = zOff || 0; // elevation datum subtracted from every Z
     this.layers = new Map();
     this.ents = [];
     this.min = [Infinity, Infinity, Infinity];
@@ -26,7 +27,8 @@ export class Dxf {
   /** 3D polyline: pts = [[x,y,z], ...]. Z is stored on every vertex (true 3D geometry). */
   polyline3d(layer, pts, closed = false) {
     const out = ['0', 'POLYLINE', '8', layer, '66', '1', '10', '0', '20', '0', '30', '0', '70', String(8 | (closed ? 1 : 0))];
-    for (const [x, y, z] of pts) {
+    for (const [x, y, z0] of pts) {
+      const z = z0 - this.zOff;
       this._ext(x, y, z);
       out.push('0', 'VERTEX', '8', layer, '10', f(x), '20', f(y), '30', f(z), '70', '32');
     }
@@ -38,20 +40,23 @@ export class Dxf {
   face3d(layer, corners) {
     const c = corners.length === 3 ? [...corners, corners[2]] : corners;
     const out = ['0', '3DFACE', '8', layer];
-    c.forEach(([x, y, z], i) => {
+    c.forEach(([x, y, z0], i) => {
+      const z = z0 - this.zOff;
       this._ext(x, y, z);
       out.push(String(10 + i), f(x), String(20 + i), f(y), String(30 + i), f(z));
     });
     this.ents.push(out.join('\r\n'));
   }
 
-  point(layer, x, y, z) {
+  point(layer, x, y, z0) {
+    const z = z0 - this.zOff;
     this._ext(x, y, z);
     this.ents.push(['0', 'POINT', '8', layer, '10', f(x), '20', f(y), '30', f(z)].join('\r\n'));
   }
 
   /** Text centred (middle) on x,y,z, rotated `angle` degrees. */
-  text(layer, x, y, z, height, str, angle = 0) {
+  text(layer, x, y, z0, height, str, angle = 0) {
+    const z = z0 - this.zOff;
     this._ext(x, y, z);
     this.ents.push(['0', 'TEXT', '8', layer, '10', f(x), '20', f(y), '30', f(z), '40', f(height), '1', str,
       '50', f(angle), '72', '4', '11', f(x), '21', f(y), '31', f(z)].join('\r\n'));
