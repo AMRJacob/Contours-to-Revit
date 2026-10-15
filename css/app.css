@@ -264,7 +264,7 @@ input[type="search"]:focus, select:focus { outline: 2px solid var(--accent); out
 .tool svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .tool:hover { border-color: var(--ink-3); }
 .tool.active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
-.tool[data-tool="raise"].active { background: #2563eb; border-color: #2563eb; color: #fff; }
+.tool[data-tool="raise"].active { background: #16a34a; border-color: #16a34a; color: #fff; }
 .tool[data-tool="lower"].active { background: #dc2626; border-color: #dc2626; color: #fff; }
 .tool[data-tool="flatten"].active { background: #ca8a04; border-color: #ca8a04; color: #fff; }
 .tool:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -276,9 +276,11 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .ew-actions { margin: 10px 0 4px; }
 .ew-actions .btn:disabled { opacity: .4; }
 .cf-legend { display: flex; align-items: center; gap: 6px; margin: 8px 0 0 24px; font-size: 11.5px; color: var(--ink-3); }
-.cf-legend i { flex: 1; max-width: 140px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, #e64632, rgba(230,70,50,.25) 45%, transparent 50%, rgba(50,120,235,.25) 55%, #3278eb); border: 1px solid var(--line); }
+.cf-legend i { flex: 1; max-width: 140px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, #e64632, rgba(230,70,50,.25) 45%, transparent 50%, rgba(34,197,94,.25) 55%, #22c55e); border: 1px solid var(--line); }
 .cf-legend small { font-family: var(--mono); margin-left: 4px; }
 .dz-readout { margin: 0; font-size: 12.5px; font-family: var(--mono); color: var(--ink-2); }
 .dz-readout b { color: var(--ink); font-weight: 500; }
 .dz-readout .cut { color: #dc2626; font-weight: 600; }
-.dz-readout .fill { color: #2563eb; font-weight: 600; }
+.dz-readout .fill { color: #16a34a; font-weight: 600; }
+/* While designing, site context steps back so grading reads clearly. */
+.leaflet-container.design-mode .leaflet-overlay-pane { opacity: 0.3; }

@@ -1,14 +1,14 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.15.0';
-import { fetchElevation, sample } from './dem.js?v=0.15.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.15.0';
-import { Dxf } from './dxf.js?v=0.15.0';
-import { Design, contourSegments, designKey } from './design.js?v=0.15.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.15.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.15.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.15.1';
+import { fetchElevation, sample } from './dem.js?v=0.15.1';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.15.1';
+import { Dxf } from './dxf.js?v=0.15.1';
+import { Design, contourSegments, designKey } from './design.js?v=0.15.1';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.15.1';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.15.1';
 
-const VERSION = '0.15.0';
+const VERSION = '0.15.1';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -1945,7 +1945,7 @@ function dzDraw() {
   // Brush cursor
   if (dz.cursor && dz.tool !== 'pan' && !dz.spaceDown) {
     const R = dz.params.size / site.toOut;
-    const col = { raise: '#60a5fa', lower: '#f87171', flatten: '#facc15', smooth: '#e5e7eb' }[dz.tool];
+    const col = { raise: '#4ade80', lower: '#f87171', flatten: '#facc15', smooth: '#e5e7eb' }[dz.tool];
     ctx.beginPath(); ctx.arc(dz.cursor[0], dz.cursor[1], R, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 3.5 * px; ctx.stroke();
     ctx.strokeStyle = col; ctx.lineWidth = 1.8 * px; ctx.stroke();
@@ -1980,7 +1980,7 @@ function dzUpdateRaster(full) {
       const d = D[j * g.nx + i], o = (row * w + (i - box.i0)) * 4;
       if (!d || Math.abs(d) < 0.01) { img.data[o + 3] = 0; continue; }
       const t = Math.min(1, Math.abs(d) / sc);
-      if (d < 0) { img.data[o] = 230; img.data[o + 1] = 70; img.data[o + 2] = 50; } else { img.data[o] = 50; img.data[o + 1] = 120; img.data[o + 2] = 235; }
+      if (d < 0) { img.data[o] = 239; img.data[o + 1] = 68; img.data[o + 2] = 68; } else { img.data[o] = 34; img.data[o + 1] = 197; img.data[o + 2] = 94; }
       img.data[o + 3] = Math.round(70 + 185 * t);
     }
   }
@@ -2077,7 +2077,8 @@ function setMode(mode) {
   if (state.mapGroups?.contours) { if (design) map.removeLayer(state.mapGroups.contours); else if (visibility.contours) state.mapGroups.contours.addTo(map); }
   if (drawn) { if (design) map.removeLayer(drawn); else drawn.addTo(map); }
   dzApplyTool();
-  if (design) dzEnsure().then(() => dzRefresh(true));
+  map.getContainer().classList.toggle('design-mode', design);
+  if (design) dzEnsure().then(() => { dzApplyTool(); dzRefresh(true); });
   else { map.dragging.enable(); map.getContainer().classList.remove('sculpting'); $('dz-readout').hidden = true; }
 }
 document.querySelectorAll('.mode').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
@@ -2413,4 +2414,4 @@ $('datum').value = align.datum != null ? String(align.datum) : '';
 updateTopoSummary();
 applyOrigin();
 updateZoneHint();
-window.c2r = { state, map, makers: MAKERS }; // for debugging in the console
+window.c2r = { state, map, makers: MAKERS, dz }; // for debugging in the console
