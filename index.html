@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.14.0">
+  <link rel="stylesheet" href="css/app.css?v=0.15.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -27,11 +27,11 @@
       </header>
 
       <nav class="mode-tabs" role="tablist" aria-label="Mode">
-        <button role="tab" class="mode active" aria-selected="true">Existing site</button>
-        <button role="tab" class="mode" aria-selected="false" disabled title="Grading, paving, walls and pads — coming next">Site design <span class="soon">soon</span></button>
+        <button role="tab" class="mode active" data-mode="existing" aria-selected="true">Existing site</button>
+        <button role="tab" class="mode" data-mode="design" aria-selected="false" title="Sculpt the proposed grades and export new-construction contours">Site design</button>
       </nav>
 
-      <details class="step" id="step-site" open>
+      <details class="step existing-only" id="step-site" open>
         <summary><span class="num">1</span><span class="st-title">Site</span><span class="st-sum" id="sum-site">Draw a boundary</span></summary>
         <div class="step-body">
           <form id="search-form" class="search" autocomplete="off">
@@ -53,7 +53,7 @@
         </div>
       </details>
 
-      <details class="step" id="step-options" open>
+      <details class="step existing-only" id="step-options" open>
         <summary><span class="num">2</span><span class="st-title">Topography</span><span class="st-sum" id="sum-topo"></span></summary>
         <div class="step-body">
           <div class="field-row">
@@ -89,7 +89,7 @@
         </div>
       </details>
 
-      <details class="step" id="step-place" open>
+      <details class="step existing-only" id="step-place" open>
         <summary><span class="num">3</span><span class="st-title">Place in Revit</span><span class="st-sum" id="sum-place"></span></summary>
         <div class="step-body">
           <label class="check check-first">
@@ -131,7 +131,7 @@
         </div>
       </details>
 
-      <details class="step" id="step-results" open hidden>
+      <details class="step existing-only" id="step-results" open hidden>
         <summary><span class="num">4</span><span class="st-title">Export</span><span class="st-sum" id="sum-export"></span></summary>
         <div class="step-body">
           <dl class="stats" id="result-stats">
@@ -185,7 +185,7 @@
         </div>
       </details>
 
-      <details class="step" id="step-data">
+      <details class="step existing-only" id="step-data">
         <summary><span class="num">⚙</span><span class="st-title">Hosted map data</span><span class="st-sum"></span></summary>
         <div class="step-body">
           <p class="hint">Parking lots, sidewalks and street surfaces come from OpenStreetMap data this site hosts for the states below (refreshed weekly). Elsewhere the app asks the public OpenStreetMap servers, which can be busy.</p>
@@ -207,13 +207,91 @@
         </div>
       </details>
 
+      <section class="design-only" id="design-panel">
+        <div class="dz-empty" id="dz-empty">
+          <p><strong>Generate the existing site first.</strong> The design starts from that surface — switch to <em>Existing site</em>, draw a boundary and click Generate.</p>
+        </div>
+        <div id="dz-body" hidden>
+          <details class="step" open>
+            <summary><span class="num">1</span><span class="st-title">Grading tools</span><span class="st-sum" id="sum-tool"></span></summary>
+            <div class="step-body">
+              <div class="tool-grid" role="radiogroup" aria-label="Grading tool">
+                <button type="button" class="tool" data-tool="pan" title="Pan the map (or hold Space with any tool)"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg><span>Pan</span></button>
+                <button type="button" class="tool" data-tool="raise" title="Raise ground (fill)"><svg viewBox="0 0 24 24"><path d="M3 19c4 0 5-8 9-8s5 8 9 8"/><path d="M12 8V2M9 5l3-3 3 3"/></svg><span>Raise</span></button>
+                <button type="button" class="tool" data-tool="lower" title="Lower ground (cut)"><svg viewBox="0 0 24 24"><path d="M3 9c4 0 5 8 9 8s5-8 9-8"/><path d="M12 2v6M9 5l3 3 3-3"/></svg><span>Lower</span></button>
+                <button type="button" class="tool" data-tool="flatten" title="Flatten to a target elevation (pads)"><svg viewBox="0 0 24 24"><path d="M3 18c3 0 4-4 6-4h6c2 0 3 4 6 4"/><path d="M8 10h8"/></svg><span>Flatten</span></button>
+                <button type="button" class="tool" data-tool="smooth" title="Smooth bumps and hard edges"><svg viewBox="0 0 24 24"><path d="M3 15c2-4 4-4 6 0s4 4 6 0 4-4 6 0" opacity=".45"/><path d="M3 12c3-1.5 6-1.5 9 0s6 1.5 9 0"/></svg><span>Smooth</span></button>
+              </div>
+              <div class="field" id="f-amount">
+                <label for="dz-amount">Height change <span class="sub">per stroke</span></label>
+                <div class="align-row">
+                  <input type="number" id="dz-amount" step="0.1" min="0" value="2" inputmode="decimal"><span class="unit" id="dz-amount-u">ft</span>
+                </div>
+              </div>
+              <div class="field" id="f-target" hidden>
+                <label for="dz-target">Target elevation <span class="sub">Alt+click the map to sample</span></label>
+                <div class="align-row">
+                  <input type="number" id="dz-target" step="0.1" inputmode="decimal"><span class="unit" id="dz-target-u">ft</span>
+                </div>
+              </div>
+              <div class="field" id="f-strength" hidden>
+                <label for="dz-strength">Strength <output id="dz-strength-v">50%</output></label>
+                <input type="range" id="dz-strength" min="5" max="100" value="50">
+              </div>
+              <div class="field">
+                <label for="dz-size">Brush size <span class="sub">radius</span> <output id="dz-size-v">25 ft</output></label>
+                <input type="range" id="dz-size" min="3" max="250" value="25">
+              </div>
+              <div class="field">
+                <label for="dz-soft">Edge softness <output id="dz-soft-v">60%</output></label>
+                <input type="range" id="dz-soft" min="0" max="100" value="60">
+              </div>
+              <p class="hint">Drag on the map to sculpt. Each stroke moves the ground by at most the height change; stroke again to go further. <kbd>[</kbd> <kbd>]</kbd> brush size · hold <kbd>Space</kbd> to pan · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo.</p>
+            </div>
+          </details>
+          <details class="step" open>
+            <summary><span class="num">2</span><span class="st-title">Earthwork</span><span class="st-sum" id="sum-earth"></span></summary>
+            <div class="step-body">
+              <dl class="stats stats-earth">
+                <div><dt>Cut</dt><dd id="ew-cut">0</dd></div>
+                <div><dt>Fill</dt><dd id="ew-fill">0</dd></div>
+                <div><dt>Net</dt><dd id="ew-net">0</dd></div>
+              </dl>
+              <p class="hint" id="ew-more">No changes yet.</p>
+              <div class="align-row ew-actions">
+                <button type="button" class="btn" id="dz-undo" title="Undo (Ctrl+Z)">Undo</button>
+                <button type="button" class="btn" id="dz-redo" title="Redo (Ctrl+Y)">Redo</button>
+                <button type="button" class="btn btn-quiet" id="dz-reset">Reset design</button>
+              </div>
+              <label class="check"><input type="checkbox" id="dz-show-exist" checked><span>Show existing contours (grey)</span></label>
+              <label class="check"><input type="checkbox" id="dz-show-cf" checked><span>Show cut / fill colors</span></label>
+              <div class="cf-legend" aria-hidden="true"><span>Cut</span><i></i><span>Fill</span><small id="cf-scale">±5 ft</small></div>
+            </div>
+          </details>
+          <details class="step" open>
+            <summary><span class="num">3</span><span class="st-title">Export new construction</span><span class="st-sum"></span></summary>
+            <div class="step-body">
+              <div class="downloads">
+                <div class="dl-grid">
+                  <button class="dl" data-out="newDxf"><span class="dl-name">New DXF</span><span class="dl-desc">Proposed contours, grading limits</span></button>
+                  <button class="dl" data-out="newCsv"><span class="dl-name">New points CSV</span><span class="dl-desc">Proposed Toposolid</span></button>
+                </div>
+                <label class="check"><input type="checkbox" id="dz-dxf-exist" checked><span>Include existing contours in the new DXF (grey layers)</span></label>
+                <p class="hint">Same origin, project north, datum and project folder as the Existing site tab. In Revit, link the new DXF next to the existing one, or build a second Toposolid from the CSV and set its phase to New Construction.</p>
+              </div>
+            </div>
+          </details>
+        </div>
+      </section>
+
       <footer class="foot">
         <p><strong>Preliminary only — not survey data.</strong> Bare-earth elevations are interpolated under buildings and trees. Elevations: USGS 3DEP, NAVD88.</p>
         <p class="credits">Map imagery &copy; Esri, Maxar, Earthstar Geographics; export imagery USGS The National Map. Streets &amp; roads &copy; OpenStreetMap contributors. Buildings: FEMA/ORNL USA Structures. <a href="https://github.com/AMRJacob/Contours-to-Revit" target="_blank" rel="noopener">Source</a></p>
       </footer>
       <div class="action-bar" id="step-generate">
         <p class="status" id="status" aria-live="polite"></p>
-        <button id="generate" class="btn btn-primary btn-block" type="button" disabled>Generate topography</button>
+        <p class="dz-readout design-only" id="dz-readout" hidden></p>
+        <button id="generate" class="btn btn-primary btn-block existing-only" type="button" disabled>Generate topography</button>
       </div>
     </aside>
 
@@ -240,6 +318,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.14.0"></script>
+  <script type="module" src="js/app.js?v=0.15.0"></script>
 </body>
 </html>

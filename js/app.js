@@ -1,13 +1,14 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.14.0';
-import { fetchElevation, sample } from './dem.js?v=0.14.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.14.0';
-import { Dxf } from './dxf.js?v=0.14.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.14.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.14.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.15.0';
+import { fetchElevation, sample } from './dem.js?v=0.15.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.15.0';
+import { Dxf } from './dxf.js?v=0.15.0';
+import { Design, contourSegments, designKey } from './design.js?v=0.15.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.15.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.15.0';
 
-const VERSION = '0.14.0';
+const VERSION = '0.15.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -447,6 +448,7 @@ async function generate() {
 
   showResults(site);
   drawContoursOnMap(site);
+  if ($('panel').classList.contains('mode-design')) dzEnsure();
   applyOrigin();
   drawUnderlayThumb();
   renderPreview();
@@ -831,7 +833,8 @@ function updateLayerCounts(site) {
 
 function applyVisibility() {
   for (const [key, group] of Object.entries(state.mapGroups || {})) {
-    if (visibility[key]) group.addTo(map); else map.removeLayer(group);
+    const designOwns = key === 'contours' && $('panel').classList.contains('mode-design');
+    if (visibility[key] && !designOwns) group.addTo(map); else map.removeLayer(group);
   }
   if (!$('preview').hidden) renderPreview();
 }
@@ -1062,14 +1065,15 @@ function makeDxf(site, v) {
   return d.toString();
 }
 
-function addContours(d, site, avoid, labelsOn = true) {
-  d.layer('C-TOPO-MAJR', 30).layer('C-TOPO-MINR', 8);
-  if (labelsOn) d.layer('C-TOPO-TEXT', 7);
+const TOPO_LAYERS = { majr: 'C-TOPO-MAJR', minr: 'C-TOPO-MINR', text: 'C-TOPO-TEXT', cMaj: 30, cMin: 8, cTxt: 7 };
+function addContours(d, site, avoid, labelsOn = true, contours = site.contours, L = TOPO_LAYERS) {
+  d.layer(L.majr, L.cMaj).layer(L.minr, L.cMin);
+  if (labelsOn) d.layer(L.text, L.cTxt);
   const h = labelHeight(site);
   const taken = [...avoid]; // keep clear of parcel / flood labels
-  for (const c of site.contours) {
+  for (const c of contours) {
     const major = isMajor(c.level, site.interval);
-    const layer = major ? 'C-TOPO-MAJR' : 'C-TOPO-MINR';
+    const layer = major ? L.majr : L.minr;
     for (const line of c.lines) {
       const out = line.map(([x, y]) => [...outXY(site, x, y), c.level]);
       const closed = line.length > 3 && line[0][0] === line[line.length - 1][0] && line[0][1] === line[line.length - 1][1];
@@ -1081,7 +1085,7 @@ function addContours(d, site, avoid, labelsOn = true) {
           if (last && Math.hypot(p.x - last.x, p.y - last.y) < h * 34) continue;
           const b = dxfBox(p.x, p.y, textW(str, h), h, p.angle);
           if (overlaps(b, taken)) continue;
-          d.text('C-TOPO-TEXT', p.x, p.y, c.level, h, str, p.angle);
+          d.text(L.text, p.x, p.y, c.level, h, str, p.angle);
           taken.push(b);
           last = p;
         }
@@ -1399,7 +1403,8 @@ const folder = { handle: null, prefix: (() => { try { return localStorage.getIte
 function folderName(kind) {
   const p = (folder.prefix || 'site').replace(/[\\/:*?"<>|]+/g, '-');
   return { csv: `${p}_points.csv`, dxf: `${p}_existing.dxf`, png: `${p}_map.png`, readme: `${p}_README.txt`,
-    jpg: `${p}_aerial.jpg`, jgw: `${p}_aerial.jgw`, ulJpg: `${p}_aerial_underlay.jpg`, ulJgw: `${p}_aerial_underlay.jgw`, revit: `${p}_revit-coordinates.txt` }[kind];
+    jpg: `${p}_aerial.jpg`, jgw: `${p}_aerial.jgw`, ulJpg: `${p}_aerial_underlay.jpg`, ulJgw: `${p}_aerial_underlay.jgw`, revit: `${p}_revit-coordinates.txt`,
+    newDxf: `${p}_new.dxf`, newCsv: `${p}_new_points.csv` }[kind];
 }
 
 function updateFolderUi() {
@@ -1855,6 +1860,399 @@ $('pick-origin').addEventListener('click', () => startPick('origin'));
 $('pick-dir').addEventListener('click', () => startPick('dir'));
 $('reset-origin').addEventListener('click', () => { state.origin = null; session.set('origin', null); applyOrigin(); setStatus('Origin reset to the south-west corner of the site.'); });
 
+// =====================================================================================================
+// ---------- Site design: sculpt a proposed surface, live contours, earthwork, new-construction export ----------
+// =====================================================================================================
+const dz = {
+  mode: 'existing', tool: 'raise', design: null, site: null,
+  exist: null,          // existing contour segments (native) for the faded overlay
+  prop: null,           // proposed contour segments
+  raster: null,         // cut/fill canvas, one pixel per grid node (row 0 = north)
+  lastContour: 0, raf: 0, contourVer: -1,
+  cursor: null,         // native [x, y] under the mouse
+  stroking: false, last: null, spaceDown: false,
+  params: (() => { try { return { amount: 2, size: 25, soft: 60, strength: 50, ...JSON.parse(localStorage.getItem('c2r-dz') || '{}') }; } catch { return { amount: 2, size: 25, soft: 60, strength: 50 }; } })(),
+  target: null,
+  showExist: true, showCf: true,
+};
+const saveDzParams = () => { try { localStorage.setItem('c2r-dz', JSON.stringify(dz.params)); } catch { /* ignore */ } };
+
+// ----- Canvas layer drawn straight onto the map (fast enough to redraw on every brush dab and pan) -----
+const dzCanvas = document.createElement('canvas');
+dzCanvas.className = 'design-canvas';
+dzCanvas.hidden = true;
+map.getContainer().appendChild(dzCanvas);
+
+/** Affine native(State Plane) -> container pixels, from three projected corners of the site box. */
+function dzAffine(site) {
+  const p = projector(site.zone), b = site.box;
+  const pt = (x, y) => { const [lon, lat] = p.inv([x, y]); return map.latLngToContainerPoint([lat, lon]); };
+  const A = pt(b.xmin, b.ymax), B = pt(b.xmax, b.ymax), C = pt(b.xmin, b.ymin);
+  const W = b.xmax - b.xmin, H = b.ymax - b.ymin;
+  const a = (B.x - A.x) / W, bb = (B.y - A.y) / W, c = -(C.x - A.x) / H, d = -(C.y - A.y) / H;
+  return { a, b: bb, c, d, e: A.x - a * b.xmin - c * b.ymax, f: A.y - bb * b.xmin - d * b.ymax, scale: Math.hypot(a, bb) };
+}
+
+function dzDraw() {
+  const site = dz.site, des = dz.design;
+  const cont = map.getContainer();
+  const dpr = window.devicePixelRatio || 1;
+  const W = cont.clientWidth, H = cont.clientHeight;
+  if (dzCanvas.width !== Math.round(W * dpr) || dzCanvas.height !== Math.round(H * dpr)) {
+    dzCanvas.width = Math.round(W * dpr); dzCanvas.height = Math.round(H * dpr);
+    dzCanvas.style.width = W + 'px'; dzCanvas.style.height = H + 'px';
+  }
+  const ctx = dzCanvas.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, dzCanvas.width, dzCanvas.height);
+  if (!site || !des) return;
+  const M = dzAffine(site);
+  const set = () => ctx.setTransform(M.a * dpr, M.b * dpr, M.c * dpr, M.d * dpr, M.e * dpr, M.f * dpr);
+  const px = 1 / M.scale; // one screen pixel in native units
+  const g = site.grid;
+  set();
+  // Cut / fill raster (node-centred pixels).
+  if (dz.showCf && dz.raster && des.changed) {
+    ctx.globalAlpha = 0.6;
+    ctx.imageSmoothingEnabled = true;
+    // Raster row 0 is north: flip locally so it lands at the top (largest Y) of the grid.
+    ctx.save();
+    ctx.translate(g.x0 - g.s / 2, g.y0 + (g.ny - 1) * g.s + g.s / 2);
+    ctx.scale(1, -1);
+    ctx.drawImage(dz.raster, 0, 0, g.nx * g.s, g.ny * g.s);
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+  const strokeSegs = (arr, color, width) => {
+    if (!arr?.length) return;
+    ctx.beginPath();
+    for (let k = 0; k < arr.length; k += 4) { ctx.moveTo(arr[k], arr[k + 1]); ctx.lineTo(arr[k + 2], arr[k + 3]); }
+    ctx.strokeStyle = color; ctx.lineWidth = width * px; ctx.stroke();
+  };
+  ctx.lineCap = 'round';
+  if (dz.showExist && dz.exist) {
+    strokeSegs(dz.exist.minor, 'rgba(200,205,210,0.35)', 0.8);
+    strokeSegs(dz.exist.major, 'rgba(200,205,210,0.6)', 1.3);
+  }
+  if (dz.prop) {
+    strokeSegs(dz.prop.minor, 'rgba(255,255,255,0.85)', 1);
+    strokeSegs(dz.prop.major, '#ffb347', 2.2);
+  }
+  // Site box
+  ctx.strokeStyle = 'rgba(232,145,63,0.9)'; ctx.lineWidth = 1.5 * px; ctx.setLineDash([6 * px, 4 * px]);
+  ctx.strokeRect(site.box.xmin, site.box.ymin, site.box.xmax - site.box.xmin, site.box.ymax - site.box.ymin);
+  ctx.setLineDash([]);
+  // Brush cursor
+  if (dz.cursor && dz.tool !== 'pan' && !dz.spaceDown) {
+    const R = dz.params.size / site.toOut;
+    const col = { raise: '#60a5fa', lower: '#f87171', flatten: '#facc15', smooth: '#e5e7eb' }[dz.tool];
+    ctx.beginPath(); ctx.arc(dz.cursor[0], dz.cursor[1], R, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 3.5 * px; ctx.stroke();
+    ctx.strokeStyle = col; ctx.lineWidth = 1.8 * px; ctx.stroke();
+    const hard = R * (1 - Math.max(0.02, dz.params.soft / 100));
+    if (dz.tool !== 'smooth' && hard > 2 * px) {
+      ctx.beginPath(); ctx.arc(dz.cursor[0], dz.cursor[1], hard, 0, Math.PI * 2);
+      ctx.setLineDash([4 * px, 4 * px]); ctx.strokeStyle = col; ctx.lineWidth = 1 * px; ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+}
+
+/** Colour scale for cut / fill: full colour at ±scale (output units). */
+function dzScale() { return Math.max(dz.site?.units === 'm' ? 1.5 : 5, (dz.params.amount || 0)); }
+
+function dzUpdateRaster(full) {
+  const des = dz.design, g = dz.site.grid;
+  if (!dz.raster || dz.raster.width !== g.nx || dz.raster.height !== g.ny) {
+    dz.raster = document.createElement('canvas');
+    dz.raster.width = g.nx; dz.raster.height = g.ny;
+    full = true;
+  }
+  const box = full ? { i0: 0, j0: 0, i1: g.nx - 1, j1: g.ny - 1 } : des.dirty;
+  des.dirty = null;
+  if (!box) return;
+  const ctx = dz.raster.getContext('2d');
+  const w = box.i1 - box.i0 + 1, h = box.j1 - box.j0 + 1;
+  const img = ctx.createImageData(w, h);
+  const sc = dzScale(), D = des.delta;
+  for (let j = box.j0; j <= box.j1; j++) {
+    const row = g.ny - 1 - j - (g.ny - 1 - box.j1); // image rows count down from the top (north) of the box
+    for (let i = box.i0; i <= box.i1; i++) {
+      const d = D[j * g.nx + i], o = (row * w + (i - box.i0)) * 4;
+      if (!d || Math.abs(d) < 0.01) { img.data[o + 3] = 0; continue; }
+      const t = Math.min(1, Math.abs(d) / sc);
+      if (d < 0) { img.data[o] = 230; img.data[o + 1] = 70; img.data[o + 2] = 50; } else { img.data[o] = 50; img.data[o + 1] = 120; img.data[o + 2] = 235; }
+      img.data[o + 3] = Math.round(70 + 185 * t);
+    }
+  }
+  ctx.putImageData(img, box.i0, g.ny - 1 - box.j1);
+}
+
+function dzLevels(grid) {
+  const st = gridStats(grid);
+  return Number.isFinite(st.min) ? contourLevels(st.min, st.max, dz.site.interval) : [];
+}
+
+/** Recompute what changed and redraw; contours at most every ~120 ms while a stroke is running. */
+function dzRefresh(force = false) {
+  if (dz.raf) return;
+  dz.raf = requestAnimationFrame(() => {
+    dz.raf = 0;
+    if (!dz.design) { dzDraw(); return; }
+    dzUpdateRaster(false);
+    const now = performance.now();
+    if (dz.contourVer !== dz.design.version && (force || !dz.stroking || now - dz.lastContour > 120)) {
+      const pg = dz.design.grid();
+      dz.prop = contourSegments(pg, dzLevels(pg), L => isMajor(L, dz.site.interval));
+      dz.contourVer = dz.design.version;
+      dz.lastContour = performance.now();
+    }
+    dzDraw();
+    if (dz.stroking || dz.contourVer !== dz.design.version) dzRefresh();
+  });
+}
+
+// ----- Design lifecycle -----
+async function dzEnsure() {
+  const site = state.result;
+  $('dz-empty').hidden = !!site;
+  $('dz-body').hidden = !site;
+  if (!site) { dz.design = null; dz.site = null; return; }
+  if (dz.site === site && dz.design) return;
+  dz.site = site;
+  dz.design = new Design(site.grid);
+  dz.exist = contourSegments(site.grid, dzLevels(site.grid), L => isMajor(L, site.interval));
+  dz.prop = dz.exist; dz.contourVer = dz.design.version;
+  dz.raster = null;
+  try {
+    const saved = await idb.get(designKey(site.grid, site.zone.code));
+    if (saved && dz.site === site) { dz.design.load(saved); dz.contourVer = -1; setStatus('Restored your saved design for this site.'); }
+  } catch { /* ignore */ }
+  dzUpdateRaster(true);
+  dzSyncUi();
+  dzEarthwork();
+  dzRefresh(true);
+}
+
+let dzSaveTimer = 0;
+function dzSave() {
+  clearTimeout(dzSaveTimer);
+  dzSaveTimer = setTimeout(() => {
+    const des = dz.design, site = dz.site;
+    if (!des || !site) return;
+    idb.set(designKey(site.grid, site.zone.code), des.changed ? des.delta : undefined).catch(() => {});
+  }, 600);
+}
+
+function dzEarthwork() {
+  const des = dz.design, site = dz.site;
+  if (!des || !site) return;
+  const u = site.units;
+  const cell = (site.grid.s * site.toOut) ** 2;
+  const ew = des.earthwork(cell);
+  const vol = v => u === 'm' ? `${fmt(v, 0)} m³` : `${fmt(v / 27, 0)} yd³`;
+  $('ew-cut').textContent = vol(ew.cut);
+  $('ew-fill').textContent = vol(ew.fill);
+  const net = ew.fill - ew.cut;
+  $('ew-net').textContent = (net > 0 ? '+' : net < 0 ? '−' : '') + vol(Math.abs(net)).replace(/^-/, '');
+  $('ew-more').textContent = des.changed
+    ? `${net > 0 ? 'Import' : net < 0 ? 'Export' : 'Balanced —'} ${net ? vol(Math.abs(net)) : ''}${net ? ' needed' : ''}. Deepest cut ${fmt(ew.maxCut, 1)} ${u}, highest fill ${fmt(ew.maxFill, 1)} ${u}, over ${u === 'm' ? `${fmt(ew.area, 0)} m²` : `${fmt(ew.area / SQFT_PER_ACRE, 2)} ac`}. Preliminary — grid-based, no shrink/swell.`
+    : 'No changes yet — pick Raise, Lower or Flatten and drag on the map.';
+  $('sum-earth').textContent = des.changed ? `C ${vol(ew.cut)} · F ${vol(ew.fill)}` : 'no changes';
+  $('dz-undo').disabled = !des.undo.length;
+  $('dz-redo').disabled = !des.redo.length;
+  $('dz-reset').disabled = !des.changed;
+}
+
+// ----- Mode switching -----
+function setMode(mode) {
+  if (pick.active) stopPick();
+  dz.mode = mode;
+  $('panel').classList.toggle('mode-design', mode === 'design');
+  document.querySelectorAll('.mode').forEach(b => { const on = b.dataset.mode === mode; b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on)); });
+  const design = mode === 'design';
+  if (design && !$('preview').hidden) document.querySelector('.tab[data-view="map"]').click();
+  document.querySelector('.tab[data-view="preview"]').hidden = design;
+  dzCanvas.hidden = !design;
+  // The Leaflet contour layer gives way to the design canvas (existing faded + proposed).
+  if (state.mapGroups?.contours) { if (design) map.removeLayer(state.mapGroups.contours); else if (visibility.contours) state.mapGroups.contours.addTo(map); }
+  if (drawn) { if (design) map.removeLayer(drawn); else drawn.addTo(map); }
+  dzApplyTool();
+  if (design) dzEnsure().then(() => dzRefresh(true));
+  else { map.dragging.enable(); map.getContainer().classList.remove('sculpting'); $('dz-readout').hidden = true; }
+}
+document.querySelectorAll('.mode').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+
+// ----- Tools & parameters -----
+function dzSyncUi() {
+  const u = dz.site?.units || units();
+  const p = dz.params;
+  $('dz-amount').value = p.amount;
+  $('dz-amount-u').textContent = $('dz-target-u').textContent = u;
+  $('dz-size').max = u === 'm' ? 75 : 250;
+  $('dz-size').min = u === 'm' ? 1 : 3;
+  $('dz-size').value = p.size;
+  $('dz-size-v').textContent = `${fmt(p.size, 0)} ${u}`;
+  $('dz-soft').value = p.soft;
+  $('dz-soft-v').textContent = `${p.soft}%`;
+  $('dz-strength').value = p.strength;
+  $('dz-strength-v').textContent = `${p.strength}%`;
+  if (dz.target != null) $('dz-target').value = dz.target.toFixed(2);
+  $('cf-scale').textContent = `±${fmt(dzScale(), 1)} ${u}`;
+}
+
+function dzApplyTool() {
+  const t = dz.tool;
+  document.querySelectorAll('.tool').forEach(b => { const on = b.dataset.tool === t; b.classList.toggle('active', on); b.setAttribute('aria-checked', String(on)); });
+  $('f-amount').hidden = !(t === 'raise' || t === 'lower');
+  $('f-target').hidden = t !== 'flatten';
+  $('f-strength').hidden = t !== 'smooth';
+  const sculpt = dz.mode === 'design' && t !== 'pan' && !dz.spaceDown && !!dz.design;
+  if (sculpt) map.dragging.disable(); else map.dragging.enable();
+  map.getContainer().classList.toggle('sculpting', sculpt);
+  const u = dz.site?.units || 'ft';
+  $('sum-tool').textContent = { pan: 'pan', raise: `raise ${dz.params.amount} ${u}`, lower: `lower ${dz.params.amount} ${u}`, flatten: dz.target != null ? `flatten to ${dz.target.toFixed(1)}` : 'flatten', smooth: 'smooth' }[t] + ` · r ${dz.params.size}`;
+  dzDraw();
+}
+document.querySelectorAll('.tool').forEach(b => b.addEventListener('click', () => { dz.tool = b.dataset.tool; dzApplyTool(); }));
+const dzParam = (id, key, num = true) => $(id).addEventListener('input', e => {
+  const v = num ? Number(e.target.value) : e.target.value;
+  if (num && !Number.isFinite(v)) return;
+  dz.params[key] = v; saveDzParams(); dzSyncUi(); dzApplyTool();
+});
+dzParam('dz-amount', 'amount'); dzParam('dz-size', 'size'); dzParam('dz-soft', 'soft'); dzParam('dz-strength', 'strength');
+$('dz-target').addEventListener('change', e => { const v = Number(e.target.value); dz.target = e.target.value === '' || !Number.isFinite(v) ? null : v; dzApplyTool(); });
+$('dz-show-exist').addEventListener('change', e => { dz.showExist = e.target.checked; dzDraw(); });
+$('dz-show-cf').addEventListener('change', e => { dz.showCf = e.target.checked; dzDraw(); });
+$('dz-undo').addEventListener('click', () => { if (dz.design?.doUndo()) dzAfterEdit(); });
+$('dz-redo').addEventListener('click', () => { if (dz.design?.doRedo()) dzAfterEdit(); });
+$('dz-reset').addEventListener('click', () => { if (dz.design?.reset()) { dzAfterEdit(); setStatus('Design reset — Undo brings it back.'); } });
+function dzAfterEdit() { dzUpdateRaster(true); dzEarthwork(); dzSave(); dzRefresh(true); }
+
+// ----- Brush input on the map -----
+function dzNative(e) {
+  const ll = e.latlng || map.mouseEventToLatLng(e);
+  return projector(dz.site.zone).fwd([ll.lng, ll.lat]);
+}
+function dzReadout(xy) {
+  const el = $('dz-readout');
+  const des = dz.design, u = dz.site.units;
+  const ex = des.existingAt(xy[0], xy[1]), pr = des.proposedAt(xy[0], xy[1]);
+  if (!Number.isFinite(ex)) { el.hidden = true; return; }
+  const d = pr - ex;
+  el.hidden = false;
+  el.innerHTML = `Existing <b>${ex.toFixed(2)}</b> · Proposed <b>${pr.toFixed(2)}</b> · ${Math.abs(d) < 0.01 ? 'no change' : `<span class="${d > 0 ? 'fill' : 'cut'}">${d > 0 ? 'Fill +' : 'Cut −'}${Math.abs(d).toFixed(2)} ${u}</span>`}`;
+}
+function dzStrokeTo(xy) {
+  const R = dz.params.size / dz.site.toOut;
+  const step = Math.max(R / 5, dz.site.grid.s / 2);
+  const [x0, y0] = dz.last || xy;
+  const L = Math.hypot(xy[0] - x0, xy[1] - y0);
+  const n = Math.max(1, Math.ceil(L / step));
+  for (let k = dz.last ? 1 : 0; k <= n; k++) dz.design.dab(x0 + (xy[0] - x0) * k / n, y0 + (xy[1] - y0) * k / n);
+  dz.last = xy;
+}
+map.on('mousedown', e => {
+  if (dz.mode !== 'design' || !dz.design || dz.tool === 'pan' || dz.spaceDown || e.originalEvent.button !== 0) return;
+  const xy = dzNative(e);
+  if (dz.tool === 'flatten' && (e.originalEvent.altKey || dz.target == null)) {
+    const z = dz.design.proposedAt(xy[0], xy[1]);
+    if (Number.isFinite(z)) { dz.target = Math.round(z * 100) / 100; dzSyncUi(); dzApplyTool(); setStatus(`Flatten target set to ${dz.target.toFixed(2)} ${dz.site.units}${e.originalEvent.altKey ? '' : ' (sampled here — Alt+click to sample again)'}.`); }
+    if (e.originalEvent.altKey) return;
+  }
+  const u = dz.site.toOut;
+  dz.design.begin(dz.tool, { amount: dz.params.amount, target: dz.target, soft: dz.params.soft / 100, radius: dz.params.size / u, strength: dz.params.strength / 100 });
+  dz.stroking = true; dz.last = null;
+  dzStrokeTo(xy);
+  dzRefresh();
+});
+map.on('mousemove', e => {
+  if (dz.mode !== 'design' || !dz.design) return;
+  const xy = dzNative(e);
+  dz.cursor = xy;
+  dzReadout(xy);
+  if (dz.stroking) dzStrokeTo(xy);
+  dzRefresh();
+});
+map.on('mouseout', () => { if (dz.mode === 'design') { dz.cursor = null; dzDraw(); } });
+document.addEventListener('mouseup', () => {
+  if (!dz.stroking) return;
+  dz.stroking = false; dz.last = null;
+  if (dz.design.end()) dzAfterEdit();
+});
+map.on('move zoom resize viewreset', () => { if (dz.mode === 'design') dzDraw(); });
+map.on('zoomstart', () => { if (dz.mode === 'design') dzCanvas.style.visibility = 'hidden'; });
+map.on('zoomend', () => { dzCanvas.style.visibility = ''; if (dz.mode === 'design') dzDraw(); });
+const typing = e => /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName) && e.target.type !== 'range' && e.target.type !== 'checkbox';
+document.addEventListener('keydown', e => {
+  if (dz.mode !== 'design' || typing(e)) return;
+  if (e.code === 'Space' && !dz.spaceDown) { dz.spaceDown = true; dzApplyTool(); e.preventDefault(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); if (e.shiftKey ? dz.design?.doRedo() : dz.design?.doUndo()) dzAfterEdit(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); if (dz.design?.doRedo()) dzAfterEdit(); return; }
+  if (e.key === '[' || e.key === ']') {
+    const p = dz.params, mn = Number($('dz-size').min), mx = Number($('dz-size').max);
+    p.size = Math.max(mn, Math.min(mx, Math.round(p.size * (e.key === ']' ? 1.2 : 1 / 1.2)) || mn));
+    saveDzParams(); dzSyncUi(); dzApplyTool();
+  }
+});
+document.addEventListener('keyup', e => { if (e.code === 'Space' && dz.spaceDown) { dz.spaceDown = false; dzApplyTool(); } });
+
+// ----- New-construction exports -----
+/** Proposed grid with NaN edges clamped, for sampling at arbitrary points. */
+function dzDeltaAt(x, y) {
+  const g = dz.site.grid, des = dz.design;
+  const cx = Math.min(Math.max(x, g.x0), g.x0 + (g.nx - 1) * g.s - 1e-6), cy = Math.min(Math.max(y, g.y0), g.y0 + (g.ny - 1) * g.s - 1e-6);
+  const v = des.sample(des.delta, cx, cy);
+  return Number.isFinite(v) ? v : 0;
+}
+
+function makeNewDxf(site, v) {
+  const des = dz.design;
+  if (!des || dz.site !== site) throw new Error('open the Site design tab first');
+  const d = new Dxf(site.units, datumOf(site));
+  const pg = des.grid();
+  const levels = dzLevels(pg);
+  const prop = contourLines(pg, levels);
+  addContours(d, site, [], v.labels !== false, prop, { majr: 'C-TOPO-PROP-MAJR', minr: 'C-TOPO-PROP-MINR', text: 'C-TOPO-PROP-TEXT', cMaj: 30, cMin: 7, cTxt: 7 });
+  if ($('dz-dxf-exist').checked) addContours(d, site, [], false, site.contours, { majr: 'C-TOPO-EXST-MAJR', minr: 'C-TOPO-EXST-MINR', text: 'C-TOPO-EXST-TEXT', cMaj: 252, cMin: 253, cTxt: 252 });
+  // Limits of grading: where the change is at least 0.05 (output units), traced on |delta|, draped on the proposed surface.
+  if (des.changed) {
+    const mag = { ...site.grid, z: des.delta.map(Math.abs) };
+    d.layer('C-GRAD-LIMT', 1);
+    for (const c of contourLines(mag, [0.05])) for (const line of c.lines) {
+      d.polyline3d('C-GRAD-LIMT', line.map(([x, y]) => [...outXY(site, x, y), des.proposedAt(x, y) || site.pStats.min]));
+    }
+    // Cut / fill tags at the deepest and highest points.
+    let iMax = -1, iMin = -1;
+    des.delta.forEach((dv, k) => { if (iMax < 0 || dv > des.delta[iMax]) iMax = k; if (iMin < 0 || dv < des.delta[iMin]) iMin = k; });
+    const h = labelHeight(site), g = site.grid;
+    d.layer('C-GRAD-TEXT', 1);
+    for (const [k, word] of [[iMax, 'FILL'], [iMin, 'CUT']]) {
+      const dv = des.delta[k];
+      if (Math.abs(dv) < 0.05) continue;
+      const x = g.x0 + (k % g.nx) * g.s, y = g.y0 + Math.floor(k / g.nx) * g.s;
+      const [ox, oy] = outXY(site, x, y);
+      d.text('C-GRAD-TEXT', ox, oy, des.z[k], h * 0.8, `MAX ${word} ${Math.abs(dv).toFixed(2)}`);
+    }
+  }
+  return d.toString();
+}
+
+function makeNewCsv(site) {
+  if (!dz.design || dz.site !== site) throw new Error('open the Site design tab first');
+  const { pts } = site;
+  const rows = [];
+  for (let j = 0; j < pts.ny; j++) for (let i = 0; i < pts.nx; i++) {
+    const zv = pts.z[j * pts.nx + i];
+    if (Number.isNaN(zv)) continue;
+    const x = pts.x0 + i * pts.s, y = pts.y0 + j * pts.s;
+    const [ox, oy] = outXY(site, x, y);
+    rows.push(`${ox.toFixed(3)},${oy.toFixed(3)},${(zv + dzDeltaAt(x, y) - datumOf(site)).toFixed(3)}`);
+  }
+  return rows.join('\r\n') + '\r\n';
+}
+MAKERS.newDxf = (s, v) => ({ name: `${baseName(s)}_new.dxf`, data: makeNewDxf(s, v), type: 'application/dxf' });
+MAKERS.newCsv = (s, v) => ({ name: `${baseName(s)}_new_points.csv`, data: makeNewCsv(s), type: 'text/csv' });
+
 // ---------- Utils ----------
 function fmt(v, dec = 0) {
   return Number(v).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
@@ -1889,6 +2287,7 @@ function clearAll() {
   updateLayerCounts(null);
   onSiteChanged(false);
   applyOrigin();
+  if (dz.mode === 'design') { dzEnsure(); dzDraw(); }
   setStatus('Cleared. Draw a new site boundary to start again.');
 }
 const ClearControl = L.Control.extend({
