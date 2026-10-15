@@ -1,14 +1,14 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.17.0';
-import { fetchElevation, sample } from './dem.js?v=0.17.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.17.0';
-import { Dxf } from './dxf.js?v=0.17.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32, smoothClosed } from './design.js?v=0.17.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.17.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.17.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.17.1';
+import { fetchElevation, sample } from './dem.js?v=0.17.1';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.17.1';
+import { Dxf } from './dxf.js?v=0.17.1';
+import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32, smoothClosed } from './design.js?v=0.17.1';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.17.1';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.17.1';
 
-const VERSION = '0.17.0';
+const VERSION = '0.17.1';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -1923,6 +1923,7 @@ function drawingGeom(d) {
 const centroidOf = pts => [pts.reduce((a, c) => a + c[0], 0) / pts.length, pts.reduce((a, c) => a + c[1], 0) / pts.length];
 
 function dzDraw() {
+  if ((dz.sel || null) !== dzPopId) dzPopBuild(); else dzPopPlace();
   const site = dz.site, des = dz.design;
   const cont = map.getContainer();
   const dpr = window.devicePixelRatio || 1;
@@ -2019,6 +2020,17 @@ function dzDraw() {
       labels.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, `${(f.p.slope * 100).toFixed(f.p.slope * 100 % 1 ? 2 : 1)}%${o ? `  ${o.zA.toFixed(1)}→${o.zB.toFixed(1)}` : ''}`, col]);
     }
     ctx.setLineDash([]);
+    if (sel && f.type !== 'pad') {
+      screen();
+      ctx.font = '700 11px "IBM Plex Sans", system-ui, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      [['A', f.geom.a, f.geom.b], ['B', f.geom.b, f.geom.a]].forEach(([t, p0, p1]) => {
+        const [sx, sy] = toScreen(M, ...p0), [ox, oy] = toScreen(M, ...p1);
+        const L = Math.hypot(sx - ox, sy - oy) || 1, lx = sx + (sx - ox) / L * 16, ly = sy + (sy - oy) / L * 16;
+        ctx.fillStyle = SEL_COLOR; ctx.beginPath(); ctx.arc(lx, ly, 8, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#fff'; ctx.fillText(t, lx, ly + 0.5);
+      });
+    }
     if (sel) {
       screen();
       for (const h of featHandles(f)) {
@@ -2117,6 +2129,125 @@ function dzDraw() {
   }
 }
 
+// ----- On-map editor for the selected feature -----
+const dzPop = document.createElement('div');
+dzPop.className = 'dz-pop';
+dzPop.hidden = true;
+map.getContainer().appendChild(dzPop);
+L.DomEvent.disableClickPropagation(dzPop);
+L.DomEvent.disableScrollPropagation(dzPop);
+dzPop.addEventListener('mousedown', e => e.stopPropagation());
+let dzPopId = null;
+
+function popAnchor(f) {
+  if (f.type === 'pad') return centroidOf(Design.padOutline(f.geom, f.p.rot));
+  return [(f.geom.a[0] + f.geom.b[0]) / 2, (f.geom.a[1] + f.geom.b[1]) / 2];
+}
+
+function dzPopClose() { dz.sel = null; dzApplyTool(); dzFeatureList(); dzPopBuild(); dzDraw(); }
+
+function dzPopBuild() {
+  const f = dz.sel && dz.design?.feature(dz.sel);
+  dzPopId = f ? f.id : null;
+  if (!f || dz.mode !== 'design') { dzPop.hidden = true; return; }
+  const u = dz.site.units;
+  const num = (k, label) => `<label>${label}<input type="number" step="0.01" data-k="${k}" inputmode="decimal"></label>`;
+  let body = '';
+  if (f.type === 'wall') {
+    body = `<div class="pop-grid"><span></span><b>A start</b><b>B end</b>
+      <span>TW</span><input type="number" step="0.01" data-k="tw0" inputmode="decimal"><input type="number" step="0.01" data-k="tw1" inputmode="decimal">
+      <span>BW</span><input type="number" step="0.01" data-k="bw0" inputmode="decimal"><input type="number" step="0.01" data-k="bw1" inputmode="decimal"></div>
+      <div class="pop-row">${num('thick', `Thickness (${u})`)}</div>`;
+  } else if (f.type === 'pad') {
+    body = `<div class="pop-row">${num('elev', `Elevation (${u})`)}<label>Side slope<select data-k="ratio"><option value="2">2:1</option><option value="3">3:1</option><option value="4">4:1</option></select></label></div>`;
+  } else {
+    body = `<div class="pop-row">${num('za', `Start A (${u})`)}${num('zb', `End B (${u})`)}</div><div class="pop-row">${num('pct', 'Slope %')}${num('width', `Width (${u})`)}</div>`;
+  }
+  dzPop.innerHTML = `<div class="pop-head"><span>${FEATURE_NAMES[f.type]}</span><button type="button" class="pop-x" title="Close (Esc)">×</button></div>${body}`;
+  dzPop.querySelector('.pop-x').addEventListener('click', dzPopClose);
+  dzPop.querySelectorAll('[data-k]').forEach(el => {
+    el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => dzPopInput(el.dataset.k, el.value));
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+      else if (e.key === 'Escape') { el.blur(); dzPopClose(); }
+      e.stopPropagation();
+    });
+    el.addEventListener('blur', () => { dz.popCheckpoint = false; });
+  });
+  dzPop.hidden = false;
+  dzPopRefresh();
+  dzPopPlace();
+}
+
+/** Put current values into the editor's inputs (except the one being typed in). */
+function dzPopRefresh() {
+  const f = dz.sel && dz.design?.feature(dz.sel);
+  if (!f || dzPop.hidden) return;
+  const o = f.out || {};
+  const v = {};
+  if (f.type === 'wall' && o.ends) Object.assign(v, { tw0: o.ends[0].tw, tw1: o.ends[2].tw, bw0: o.ends[0].bw, bw1: o.ends[2].bw, thick: f.p.thick });
+  if (f.type === 'pad') Object.assign(v, { elev: o.elev, ratio: f.p.ratio });
+  if (f.type === 'slope' && o.zA != null) Object.assign(v, { za: o.zA, zb: o.zB, pct: f.p.slope * 100, width: f.p.width });
+  dzPop.querySelectorAll('[data-k]').forEach(el => {
+    const val = v[el.dataset.k];
+    if (document.activeElement === el || val == null || !Number.isFinite(+val)) return;
+    el.value = el.tagName === 'SELECT' ? String(val) : (+val).toFixed(2);
+  });
+}
+
+/** Keep the editor beside its feature as the map moves. */
+function dzPopPlace() {
+  const f = dz.sel && dz.design?.feature(dz.sel);
+  if (!f || dzPop.hidden) return;
+  const M = dzAffine(dz.site);
+  const [sx, sy] = toScreen(M, ...popAnchor(f));
+  const W = map.getContainer().clientWidth, H = map.getContainer().clientHeight;
+  const pw = dzPop.offsetWidth || 220, ph = dzPop.offsetHeight || 120;
+  let x = sx + 24, y = sy - ph / 2;
+  if (x + pw > W - 8) x = sx - pw - 24;
+  x = Math.max(8, Math.min(W - pw - 8, x)); y = Math.max(8, Math.min(H - ph - 8, y));
+  dzPop.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+}
+
+/** A value typed in the editor: change the feature (one undo step per field). */
+function dzPopInput(k, raw) {
+  const f = dz.sel && dz.design?.feature(dz.sel);
+  if (!f) return;
+  const val = Number(raw);
+  if (raw === '' || !Number.isFinite(val)) return;
+  if (!dz.popCheckpoint) { dz.design.checkpoint(); dz.popCheckpoint = true; }
+  const o = f.out || {};
+  let patch = null;
+  if (f.type === 'wall') {
+    if (k === 'thick') patch = { thick: Math.max(0.1, val) };
+    else {
+      // Any end value switches the wall to set elevations, keeping the others where they stand now.
+      const en = o.ends || [{}, {}, {}];
+      const keep = (pv, cur) => (Number.isFinite(pv) && f.p.elevMode === 'set' ? pv : cur);
+      const cur = { tw0: keep(f.p.tw0, en[0].tw), tw1: keep(f.p.tw1, en[2].tw), bw0: keep(f.p.bw0, en[0].bw), bw1: keep(f.p.bw1, en[2].bw) };
+      for (const kk in cur) cur[kk] = Math.round(cur[kk] * 100) / 100;
+      cur[k] = val;
+      patch = { elevMode: 'set', ...cur };
+      dz.params.welev = 'set';
+      dz.wallElev = { ...cur };
+    }
+  } else if (f.type === 'pad') {
+    if (k === 'elev') { patch = { elev: val }; dz.padElev = val; } else { patch = { ratio: val }; dz.params.ratio = val; }
+  } else {
+    const len = o.len || 1, za = Number.isFinite(f.p.startElev) ? f.p.startElev : o.zA;
+    if (k === 'za') patch = { startElev: val };
+    else if (k === 'zb') patch = { startElev: za, slope: (za - val) / len };
+    else if (k === 'pct') patch = { startElev: za, slope: val / 100 };
+    else patch = { width: Math.max(1, val) };
+    if (patch.slope != null) dz.params.slope = +(patch.slope * 100).toFixed(3);
+    if (patch.startElev != null) dz.slopeStart = patch.startElev;
+    if (patch.width != null) dz.params.width = patch.width;
+  }
+  dz.design.updateFeature(f.id, { p: patch });
+  dzAfterChange();
+  dzSyncUi();
+}
+
 /** Colour scale for cut / fill: full colour at ±scale (output units). */
 function dzScale() { return Math.max(dz.site?.units === 'm' ? 1.5 : 5, (dz.params.amount || 0)); }
 
@@ -2210,6 +2341,7 @@ function dzSave() {
 function dzAfterChange(save = true) {
   if (!dz.design) return;
   if (dz.sel && !dz.design.feature(dz.sel)) dz.sel = null;
+  setTimeout(dzPopRefresh, 0);
   dzEarthwork();
   dzFeatureList();
   if (save) dzSave();
@@ -2306,7 +2438,7 @@ function setMode(mode) {
   map.getContainer().classList.toggle('design-mode', design);
   if (design) map.doubleClickZoom.disable(); else { map.doubleClickZoom.enable(); dz.poly = null; }
   if (design) dzEnsure().then(() => { dzApplyTool(); dzRefresh(true); });
-  else { map.dragging.enable(); map.getContainer().classList.remove('sculpting'); $('dz-readout').hidden = true; }
+  else { map.dragging.enable(); map.getContainer().classList.remove('sculpting'); $('dz-readout').hidden = true; dzPop.hidden = true; dzPopId = null; }
 }
 document.querySelectorAll('.mode').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
 
@@ -2510,27 +2642,44 @@ function dzHit(cp) {
   const sel = dz.sel && des.feature(dz.sel);
   if (sel) {
     const hs = featHandles(sel);
-    for (let i = 0; i < hs.length; i++) { const [sx, sy] = toScreen(M, ...hs[i]); if (Math.hypot(sx - cp.x, sy - cp.y) < 9) return { f: sel, handle: i }; }
+    for (let i = 0; i < hs.length; i++) { const [sx, sy] = toScreen(M, ...hs[i]); if (Math.hypot(sx - cp.x, sy - cp.y) < 9) return { f: sel, handle: i, edge: true }; }
   }
+  const segDist = ([ax, ay], [bx, by]) => {
+    const L2 = (bx - ax) ** 2 + (by - ay) ** 2;
+    const t = L2 ? Math.max(0, Math.min(1, ((cp.x - ax) * (bx - ax) + (cp.y - ay) * (by - ay)) / L2)) : 0;
+    return Math.hypot(ax + t * (bx - ax) - cp.x, ay + t * (by - ay) - cp.y);
+  };
   for (let n = des.features.length - 1; n >= 0; n--) {
     const f = des.features[n];
     const pts = (f.type === 'pad' ? Design.padOutline(f.geom, f.p.rot) : [f.geom.a, f.geom.b]).map(q => toScreen(M, ...q));
     if (f.type === 'pad') {
-      let inside = false;
+      let inside = false, near = Infinity;
       for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
         const [xi, yi] = pts[i], [xj, yj] = pts[j];
         if ((yi > cp.y) !== (yj > cp.y) && cp.x < (xj - xi) * (cp.y - yi) / (yj - yi) + xi) inside = !inside;
+        near = Math.min(near, segDist(pts[j], pts[i]));
       }
-      if (inside) return { f, handle: -1 };
-    } else {
-      const [[ax, ay], [bx, by]] = pts;
-      const L2 = (bx - ax) ** 2 + (by - ay) ** 2;
-      const t = L2 ? Math.max(0, Math.min(1, ((cp.x - ax) * (bx - ax) + (cp.y - ay) * (by - ay)) / L2)) : 0;
-      if (Math.hypot(ax + t * (bx - ax) - cp.x, ay + t * (by - ay) - cp.y) < 8) return { f, handle: -1 };
-    }
+      if (near < 7) return { f, handle: -1, edge: true };
+      if (inside) return { f, handle: -1, edge: false };
+    } else if (segDist(pts[0], pts[1]) < 8) return { f, handle: -1, edge: true };
   }
   return null;
 }
+
+// Ctrl + wheel: brush size (brush tools) or corridor width (Slope tool), instead of zooming.
+map.getContainer().addEventListener('wheel', e => {
+  if (dz.mode !== 'design' || !e.ctrlKey || !dz.design || !(BRUSHES.includes(dz.tool) || dz.tool === 'slope')) return;
+  e.preventDefault(); e.stopPropagation();
+  const k = Math.pow(1.1, -Math.sign(e.deltaY) * Math.min(3, Math.max(1, Math.abs(e.deltaY) / 100)));
+  if (dz.tool === 'slope') {
+    dz.params.width = Math.max(1, Math.min(500, Math.round(dz.params.width * k * 10) / 10));
+    dzFieldsChanged();
+  } else {
+    const mn = Number($('dz-size').min), mx = Number($('dz-size').max);
+    dz.params.size = Math.max(mn, Math.min(mx, Math.round(dz.params.size * k * 10) / 10));
+    saveDzParams(); dzSyncUi(); dzApplyTool();
+  }
+}, { passive: false, capture: true });
 
 // Middle-button (wheel-click) drag pans the map in every tool.
 map.getContainer().addEventListener('mousedown', e => {
@@ -2560,8 +2709,8 @@ map.on('mousedown', e => {
     return;
   }
   // Features: drag a handle of the selected one, or (with a shape tool) select / move one.
-  const hit = (shapeTool || dz.sel) ? dzHit(e.containerPoint) : null;
-  if (hit && (shapeTool || hit.handle >= 0)) {
+  const hit = dz.design.features.length ? dzHit(e.containerPoint) : null;
+  if (hit && (shapeTool || hit.edge)) {
     if (dz.sel !== hit.f.id) dzSelect(hit.f.id);
     dz.edit = { id: hit.f.id, handle: hit.handle, from: xy, geom0: JSON.parse(JSON.stringify(hit.f.geom)), moved: false };
     return;
@@ -2616,10 +2765,10 @@ map.on('mousemove', e => {
   if (dz.stroking) dzStrokeTo(xy);
   else if (dz.drawing) dz.drawing.b = xy;
   else if (dz.edit) dzEditMove(xy);
-  else if (SHAPES.includes(dz.tool) || dz.sel) {
+  else if (dz.design.features.length) {
     const hit = dzHit(e.containerPoint);
     map.getContainer().classList.toggle('over-handle', !!hit && hit.handle >= 0);
-    map.getContainer().classList.toggle('over-feature', !!hit && hit.handle < 0 && SHAPES.includes(dz.tool));
+    map.getContainer().classList.toggle('over-feature', !!hit && hit.handle < 0 && (hit.edge || SHAPES.includes(dz.tool)));
   }
   dzReadout(xy);
   dzRefresh();

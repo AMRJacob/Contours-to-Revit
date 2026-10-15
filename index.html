@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.17.0">
+  <link rel="stylesheet" href="css/app.css?v=0.17.1">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -311,7 +311,7 @@
                 <label for="dz-soft">Edge softness <output id="dz-soft-v">60%</output></label>
                 <input type="range" id="dz-soft" min="0" max="100" value="60">
               </div>
-              <p class="hint">Wheel-click and drag to pan (or hold <kbd>Space</kbd>) · <kbd>[</kbd> <kbd>]</kbd> brush size · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo · <kbd>Esc</kbd> finishes the shape you're editing.</p>
+              <p class="hint">Wheel-click and drag to pan (or hold <kbd>Space</kbd>) · <kbd>Ctrl</kbd>+wheel brush size · click a wall, slope or pad outline to type new values · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo · <kbd>Esc</kbd> stops editing.</p>
             </div>
           </details>
           <details class="step" open>
@@ -398,6 +398,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.17.0"></script>
+  <script type="module" src="js/app.js?v=0.17.1"></script>
 </body>
 </html>
