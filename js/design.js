@@ -224,29 +224,67 @@ export class Design {
   }
 
   /**
-   * Building pad. geom: { a, b } opposite corners. p: { elev (null = ground at centre), ratio (H:V), rot, k }.
+   * Outline of a pad as a closed polygon (native XY, no repeated last point).
+   * geom: { shape: 'rect', a, b } (default) | { shape: 'poly', pts, smooth } | { shape: 'circle', c, r }.
+   */
+  static padOutline(geom, rot = 0) {
+    if (geom.shape === 'circle') {
+      const n = 72, out = [];
+      for (let i = 0; i < n; i++) { const t = i / n * Math.PI * 2; out.push([geom.c[0] + geom.r * Math.cos(t), geom.c[1] + geom.r * Math.sin(t)]); }
+      return out;
+    }
+    if (geom.shape === 'poly') return geom.smooth ? smoothClosed(geom.pts, 14) : geom.pts.map(q => q.slice());
+    return Design.padCorners(geom, rot);
+  }
+
+  /**
+   * Building pad of any outline. p: { elev (null = ground at centre), ratio (H:V), rot, k }.
    * Inside: flat at elev. Outside: fill slopes down / cut slopes up at 1:ratio until they meet the ground.
    */
   _pad(D, base, geom, p) {
-    const r = (p.rot || 0) * Math.PI / 180;
-    const ex = [Math.cos(r), -Math.sin(r)], ey = [Math.sin(r), Math.cos(r)];
-    const o = geom.a;
-    const loc = (x, y) => [(x - o[0]) * ex[0] + (y - o[1]) * ex[1], (x - o[0]) * ey[0] + (y - o[1]) * ey[1]];
-    const [ub, vb] = loc(...geom.b);
-    const u0 = Math.min(0, ub), u1 = Math.max(0, ub), v0 = Math.min(0, vb), v1 = Math.max(0, vb);
-    const corners = Design.padCorners(geom, p.rot);
-    const cx = (geom.a[0] + geom.b[0]) / 2, cy = (geom.a[1] + geom.b[1]) / 2;
+    const poly = Design.padOutline(geom, p.rot);
+    if (poly.length < 3) return null;
+    const n = poly.length;
+    let A = 0, cx = 0, cy = 0;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const cr = poly[j][0] * poly[i][1] - poly[i][0] * poly[j][1];
+      A += cr; cx += (poly[j][0] + poly[i][0]) * cr; cy += (poly[j][1] + poly[i][1]) * cr;
+    }
+    if (Math.abs(A) < 1e-9) return null;
+    cx /= 3 * A; cy /= 3 * A;
     const elev = Number.isFinite(p.elev) ? p.elev : this.sample(this.g.z, cx, cy) + this.sample(D, cx, cy);
     if (!Number.isFinite(elev)) return null;
     const [lo, hi] = this.zRange;
     const R = Math.min((Math.max(Math.abs(elev - lo), Math.abs(elev - hi)) + 30) * p.ratio / p.k, 2000 / p.k);
-    const xs = corners.map(c => c[0]), ys = corners.map(c => c[1]);
+    const xs = poly.map(c => c[0]), ys = poly.map(c => c[1]);
     const E = this.g.z;
-    this._forBox(Math.min(...xs) - R, Math.min(...ys) - R, Math.max(...xs) + R, Math.max(...ys) + R, (k, x, y) => {
-      const [u, v] = loc(x, y);
-      const du = Math.max(u0 - u, 0, u - u1), dv = Math.max(v0 - v, 0, v - v1);
-      const dist = Math.hypot(du, dv) * p.k;
+    const inside = (x, y) => {
+      let c = false;
+      for (let i = 0, j = n - 1; i < n; j = i++) {
+        const [xi, yi] = poly[i], [xj, yj] = poly[j];
+        if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c;
+      }
+      return c;
+    };
+    const edgeDist = (x, y) => {
+      let best = Infinity;
+      for (let i = 0, j = n - 1; i < n; j = i++) {
+        const [ax, ay] = poly[j], [bx, by] = poly[i];
+        const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+        const t = L2 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / L2)) : 0;
+        const d2 = (ax + t * dx - x) ** 2 + (ay + t * dy - y) ** 2;
+        if (d2 < best) best = d2;
+      }
+      return Math.sqrt(best);
+    };
+    const bx0 = Math.min(...xs), bx1 = Math.max(...xs), by0 = Math.min(...ys), by1 = Math.max(...ys);
+    this._forBox(bx0 - R, by0 - R, bx1 + R, by1 + R, (k, x, y) => {
       const b = base(k);
+      // Cheap lower bound on the distance: to the outline's bounding box. If the ground already lies inside the
+      // daylight cone at that distance it is untouched, so the exact edge distance isn't needed.
+      const dBox = Math.hypot(Math.max(bx0 - x, 0, x - bx1), Math.max(by0 - y, 0, y - by1)) * p.k;
+      if (dBox > 0 && Math.abs(b - elev) <= dBox / p.ratio) return;
+      const dist = (dBox === 0 && inside(x, y)) ? 0 : edgeDist(x, y) * p.k;
       let z = b;
       if (!dist) z = elev;
       else {
@@ -255,7 +293,7 @@ export class Design {
       }
       if (z !== b) D[k] = z - E[k];
     });
-    return { corners, elev, w: (u1 - u0) * p.k, h: (v1 - v0) * p.k };
+    return { outline: poly, elev, area: Math.abs(A) / 2 * p.k * p.k, w: (Math.max(...xs) - Math.min(...xs)) * p.k, h: (Math.max(...ys) - Math.min(...ys)) * p.k };
   }
 
   /**
@@ -270,7 +308,15 @@ export class Design {
     const nxv = -dy * sg, nyv = dx * sg;
     const half = p.thick / 2 / p.k;
     const footAt = t => { const tt = Math.max(0, Math.min(L, t)); return baseAt(ax + dx * tt, ay + dy * tt); };
-    const reach = (p.height + 4) * p.ratio / p.k + p.shelf / p.k + half + 2 * this.g.s;
+    const setMode = p.elevMode === 'set';
+    const fin = v => Number.isFinite(v) ? v : null;
+    const tw0 = fin(p.tw0), tw1 = fin(p.tw1) ?? tw0, bw0 = fin(p.bw0), bw1 = fin(p.bw1) ?? bw0;
+    // Missing values follow the ground: TW = ground + height, BW = ground.
+    const twAt = (f, foot) => tw0 == null ? foot + p.height : tw0 + (tw1 - tw0) * f;
+    const bwAt = (f, foot) => bw0 == null ? foot : bw0 + (bw1 - bw0) * f;
+    let span = p.height + 4;
+    if (setMode) for (const v of [tw0, tw1, bw0, bw1]) if (v != null) span = Math.max(span, Math.abs(v - this.zRange[0]) + 4, Math.abs(v - this.zRange[1]) + 4);
+    const reach = Math.min(span * p.ratio / p.k + Math.max(p.shelf, p.front ?? 5) / p.k + half + 2 * this.g.s, 1500 / p.k);
     const E = this.g.z;
     this._forBox(Math.min(ax, bx) - reach, Math.min(ay, by) - reach, Math.max(ax, bx) + reach, Math.max(ay, by) + reach, (k, x, y) => {
       const t = (x - ax) * dx + (y - ay) * dy;
@@ -280,7 +326,21 @@ export class Design {
       if (!Number.isFinite(foot)) return;
       const b = base(k);
       let z = b;
-      if (p.mode === 'cut') {
+      if (setMode) {
+        // Set top / bottom of wall (linear between the ends): high side graded to TW, low side to BW,
+        // each held level for its shelf width, then daylighting both ways to existing at 1:ratio.
+        const f = Math.max(0, Math.min(1, t / L));
+        const TW = twAt(f, foot), BW = bwAt(f, foot);
+        if (Math.abs(sd) <= half && !endOver) z = TW;
+        else if (sd > half || sd < -half) {
+          const hiSide = sd > half;
+          const T = hiSide ? TW : BW, sh = hiSide ? p.shelf : (p.front ?? 5);
+          const d = ((hiSide ? sd : -sd) - half) * p.k;
+          const dist = Math.max(0, d - sh) + endOver;
+          const zf = T - dist / p.ratio, zc = T + dist / p.ratio;
+          z = b < zf ? zf : b > zc ? zc : b;
+        }
+      } else if (p.mode === 'cut') {
         if (Math.abs(sd) <= half && !endOver) z = foot;
         else if (sd < -half) {
           const d = (-sd - half) * p.k;
@@ -296,7 +356,11 @@ export class Design {
       }
       if (z !== b) D[k] = z - E[k];
     });
-    const at = t => { const f = footAt(t); return p.mode === 'cut' ? { tw: f, bw: f - p.height } : { tw: f + p.height, bw: f }; };
+    const at = t => {
+      const f = footAt(t);
+      if (setMode) { const u = Math.max(0, Math.min(1, t / L)); return { tw: twAt(u, f), bw: bwAt(u, f) }; }
+      return p.mode === 'cut' ? { tw: f, bw: f - p.height } : { tw: f + p.height, bw: f };
+    };
     return { ends: [at(0), at(L / 2), at(L)], len: L * p.k };
   }
 
@@ -341,8 +405,8 @@ export class Design {
  */
 export function contourSegments(g, levels, isMajor) {
   const { nx, ny, z, x0, y0, s } = g;
-  const major = [], minor = [];
-  if (!levels.length) return { major, minor };
+  const major = [], minor = [], majorLv = [];
+  if (!levels.length) return { major, minor, majorLv };
   const lo = levels[0], step = levels.length > 1 ? levels[1] - levels[0] : 1;
   for (let j = 0; j < ny - 1; j++) {
     for (let i = 0; i < nx - 1; i++) {
@@ -368,12 +432,27 @@ export function contourSegments(g, levels, isMajor) {
           const up = (bl + br + tl + tr) / 4 >= L;
           pairs = c === 5 ? (up ? [[0, 1], [2, 3]] : [[3, 0], [1, 2]]) : (up ? [[3, 0], [1, 2]] : [[0, 1], [2, 3]]);
         }
-        const out = isMajor(L) ? major : minor;
-        for (const [ea, eb] of pairs) { const p = ex(ea), q = ex(eb); out.push(p[0], p[1], q[0], q[1]); }
+        const mj = isMajor(L), out = mj ? major : minor;
+        for (const [ea, eb] of pairs) { const p = ex(ea), q = ex(eb); out.push(p[0], p[1], q[0], q[1]); if (mj) majorLv.push(L); }
       }
     }
   }
-  return { major, minor };
+  return { major, minor, majorLv };
+}
+
+/** Closed Catmull-Rom curve through pts, `per` samples per span. */
+export function smoothClosed(pts, per = 12) {
+  const n = pts.length;
+  if (n < 3) return pts.map(q => q.slice());
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const p0 = pts[(i - 1 + n) % n], p1 = pts[i], p2 = pts[(i + 1) % n], p3 = pts[(i + 2) % n];
+    for (let s = 0; s < per; s++) {
+      const t = s / per, t2 = t * t, t3 = t2 * t;
+      out.push([0, 1].map(c => 0.5 * (2 * p1[c] + (-p0[c] + p2[c]) * t + (2 * p0[c] - 5 * p1[c] + 4 * p2[c] - p3[c]) * t2 + (-p0[c] + 3 * p1[c] - 3 * p2[c] + p3[c]) * t3)));
+    }
+  }
+  return out;
 }
 
 const SEGS = {

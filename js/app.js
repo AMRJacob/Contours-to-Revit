@@ -1,14 +1,14 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.16.2';
-import { fetchElevation, sample } from './dem.js?v=0.16.2';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.16.2';
-import { Dxf } from './dxf.js?v=0.16.2';
-import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32 } from './design.js?v=0.16.2';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.16.2';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.16.2';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.17.0';
+import { fetchElevation, sample } from './dem.js?v=0.17.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.17.0';
+import { Dxf } from './dxf.js?v=0.17.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32, smoothClosed } from './design.js?v=0.17.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.17.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.17.0';
 
-const VERSION = '0.16.2';
+const VERSION = '0.17.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -1865,7 +1865,7 @@ $('reset-origin').addEventListener('click', () => { state.origin = null; session
 // =====================================================================================================
 const SHAPES = ['slope', 'wall', 'pad'];
 const BRUSHES = ['raise', 'lower', 'flatten', 'smooth'];
-const DZ_DEFAULTS = { amount: 2, size: 25, soft: 60, strength: 50, slope: 2, width: 20, wheight: 4, wthick: 1, shelf: 10, wside: 'left', wmode: 'fill', ratio: 3 };
+const DZ_DEFAULTS = { amount: 2, size: 25, soft: 60, strength: 50, slope: 2, width: 20, wheight: 4, wthick: 1, shelf: 10, front: 5, wside: 'left', wmode: 'fill', welev: 'ground', ratio: 3, pshape: 'rect', psmooth: false };
 const dz = {
   mode: 'existing', tool: 'raise', design: null, site: null,
   exist: null, prop: null, raster: null,
@@ -1873,7 +1873,9 @@ const dz = {
   cursor: null, stroking: false, last: null, spaceDown: false,
   params: (() => { try { return { ...DZ_DEFAULTS, ...JSON.parse(localStorage.getItem('c2r-dz') || '{}') }; } catch { return { ...DZ_DEFAULTS }; } })(),
   target: null, slopeStart: null, padElev: null,
-  showExist: true, showCf: true,
+  wallElev: { tw0: null, tw1: null, bw0: null, bw1: null },
+  poly: null,           // polygon pad being clicked out: { pts }
+  showExist: true, showCf: true, showLabels: true, showCursor: true,
   sel: null,            // selected feature id
   drawing: null,        // { kind, a, b } while dragging out a new shape
   edit: null,           // { id, handle, from, geom0, moved } while dragging a feature or its handle
@@ -1904,9 +1906,21 @@ const SEL_COLOR = '#e8913f';
 
 /** Handle points (native) of a feature, for drawing and dragging. */
 function featHandles(f) {
-  if (f.type === 'pad') return Design.padCorners(f.geom, f.p.rot);
+  if (f.type === 'pad') {
+    const g = f.geom;
+    if (g.shape === 'poly') return g.pts;
+    if (g.shape === 'circle') return [g.c, [g.c[0] + g.r, g.c[1]]];
+    return Design.padCorners(g, f.p.rot);
+  }
   return [f.geom.a, f.geom.b];
 }
+/** Geometry of the shape being dragged out. */
+function drawingGeom(d) {
+  if (d.kind === 'pad' && d.shape === 'circle') return { shape: 'circle', c: d.a, r: Math.max(Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]), 1e-6) };
+  if (d.kind === 'pad') return { shape: 'rect', a: d.a, b: d.b };
+  return { a: d.a, b: d.b };
+}
+const centroidOf = pts => [pts.reduce((a, c) => a + c[0], 0) / pts.length, pts.reduce((a, c) => a + c[1], 0) / pts.length];
 
 function dzDraw() {
   const site = dz.site, des = dz.design;
@@ -1962,12 +1976,12 @@ function dzDraw() {
     const col = sel ? SEL_COLOR : FEAT_COLOR[f.type];
     if (preview) ctx.setLineDash([6 * px, 4 * px]);
     if (f.type === 'pad') {
-      const cs = Design.padCorners(f.geom, f.p.rot);
+      const cs = Design.padOutline(f.geom, f.p.rot);
       ctx.beginPath(); cs.forEach((c, i) => (i ? ctx.lineTo(...c) : ctx.moveTo(...c))); ctx.closePath();
       ctx.fillStyle = sel ? 'rgba(232,145,63,0.12)' : 'rgba(248,250,252,0.08)'; ctx.fill();
       ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 4 * px; ctx.stroke();
       ctx.strokeStyle = col; ctx.lineWidth = 2 * px; ctx.stroke();
-      const cx = cs.reduce((a, c) => a + c[0], 0) / 4, cy = cs.reduce((a, c) => a + c[1], 0) / 4;
+      const [cx, cy] = centroidOf(cs);
       const e = f.out?.elev ?? f.p.elev;
       labels.push([cx, cy, Number.isFinite(e) ? `PAD ${e.toFixed(2)}` : 'PAD', col]);
     } else if (f.type === 'wall') {
@@ -1984,7 +1998,9 @@ function dzDraw() {
       for (let t = step / 2; t < L; t += step) { const x = a[0] + ux * t, y = a[1] + uy * t; ctx.moveTo(x + nx * 3 * px, y + ny * 3 * px); ctx.lineTo(x + nx * tk, y + ny * tk); }
       ctx.strokeStyle = col; ctx.lineWidth = 1.5 * px; ctx.stroke();
       const m = f.out?.ends?.[1];
-      labels.push([(a[0] + b[0]) / 2 - nx * 12 * px, (a[1] + b[1]) / 2 - ny * 12 * px, m ? `TW ${m.tw.toFixed(1)} / BW ${m.bw.toFixed(1)}` : `WALL ${f.p.height}`, col]);
+      const en = f.out?.ends;
+      const rng = (k) => Math.abs(en[0][k] - en[2][k]) > 0.05 ? `${en[0][k].toFixed(1)}–${en[2][k].toFixed(1)}` : m[k].toFixed(1);
+      labels.push([(a[0] + b[0]) / 2 - nx * 12 * px, (a[1] + b[1]) / 2 - ny * 12 * px, m ? `TW ${rng('tw')} / BW ${rng('bw')}` : `WALL ${f.p.height}`, col]);
     } else {
       const [a, b] = [f.geom.a, f.geom.b];
       const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
@@ -2015,7 +2031,23 @@ function dzDraw() {
   for (const f of des.features) drawFeature(f, f.id === dz.sel, false);
   if (dz.drawing) {
     const d = dz.drawing;
-    drawFeature({ type: d.kind, geom: { a: d.a, b: d.b }, p: dzShapeParams(d.kind) }, false, true);
+    drawFeature({ type: d.kind, geom: drawingGeom(d), p: dzShapeParams(d.kind) }, false, true);
+  }
+  if (dz.poly?.pts.length) {
+    native();
+    const pts = dz.cursor ? [...dz.poly.pts, dz.cursor] : dz.poly.pts;
+    const shown = dz.params.psmooth && pts.length >= 3 ? smoothClosed(pts, 10) : pts;
+    ctx.beginPath(); shown.forEach((c, i) => (i ? ctx.lineTo(...c) : ctx.moveTo(...c)));
+    if (pts.length >= 3) ctx.closePath();
+    ctx.fillStyle = 'rgba(248,250,252,0.08)'; if (pts.length >= 3) ctx.fill();
+    ctx.setLineDash([6 * px, 4 * px]); ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 4 * px; ctx.stroke();
+    ctx.strokeStyle = SEL_COLOR; ctx.lineWidth = 2 * px; ctx.stroke(); ctx.setLineDash([]);
+    screen();
+    dz.poly.pts.forEach((q, i) => {
+      const [sx, sy] = toScreen(M, ...q);
+      ctx.fillStyle = i === 0 ? SEL_COLOR : '#fff'; ctx.strokeStyle = SEL_COLOR; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sx, sy, i === 0 ? 6 : 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    });
   }
   // Labels in screen space.
   screen();
@@ -2025,6 +2057,49 @@ function dzDraw() {
     const [sx, sy] = toScreen(M, x, y);
     ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(11,18,21,0.85)'; ctx.strokeText(t, sx, sy);
     ctx.fillStyle = col; ctx.fillText(t, sx, sy);
+  }
+  // Contour labels on index contours, spread out in screen space.
+  if (dz.showLabels && dz.prop?.majorLv?.length) {
+    screen();
+    ctx.font = '600 10.5px "IBM Plex Mono", ui-monospace, monospace';
+    const cell = 150, used = new Set(), seg = dz.prop.major, lv = dz.prop.majorLv;
+    const Wc = W, Hc = H;
+    for (let k = 0, n = 0; k < seg.length; k += 4, n++) {
+      const [x1, y1] = toScreen(M, seg[k], seg[k + 1]), [x2, y2] = toScreen(M, seg[k + 2], seg[k + 3]);
+      const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+      if (mx < 20 || my < 20 || mx > Wc - 20 || my > Hc - 20 || Math.hypot(x2 - x1, y2 - y1) < 1.5) continue;
+      const key = `${Math.floor(mx / cell)},${Math.floor(my / cell)},${lv[n]}`;
+      const area = `${Math.floor(mx / cell)},${Math.floor(my / cell)}`;
+      if (used.has(key) || used.has(area + 'n')) continue;
+      used.add(key);
+      if ([...used].filter(u => u.startsWith(area + ',')).length > 2) used.add(area + 'n');
+      let ang = Math.atan2(y2 - y1, x2 - x1);
+      if (ang > Math.PI / 2) ang -= Math.PI; else if (ang < -Math.PI / 2) ang += Math.PI;
+      const t = formatElev(lv[n], dz.site.interval);
+      ctx.save(); ctx.translate(mx, my); ctx.rotate(ang);
+      ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(11,18,21,0.9)'; ctx.strokeText(t, 0, 0);
+      ctx.fillStyle = '#ffd59a'; ctx.fillText(t, 0, 0);
+      ctx.restore();
+    }
+  }
+  // Elevation at the cursor.
+  if (dz.showCursor && dz.cursor && !dz.pan) {
+    const ex = des.existingAt(...dz.cursor), pr = des.proposedAt(...dz.cursor);
+    if (Number.isFinite(pr)) {
+      screen();
+      const [sx, sy] = toScreen(M, ...dz.cursor);
+      const d = pr - ex;
+      const main = pr.toFixed(2), sub = Math.abs(d) >= 0.01 ? ` ${d > 0 ? '+' : '−'}${Math.abs(d).toFixed(2)}` : '';
+      ctx.font = '600 12px "IBM Plex Mono", ui-monospace, monospace';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      const w1 = ctx.measureText(main).width, w2 = sub ? ctx.measureText(sub).width : 0;
+      const bxp = sx + 16, byp = sy + 14;
+      ctx.fillStyle = 'rgba(11,18,21,0.82)';
+      ctx.beginPath(); ctx.roundRect ? ctx.roundRect(bxp - 5, byp - 3, w1 + w2 + 10, 20, 4) : ctx.rect(bxp - 5, byp - 3, w1 + w2 + 10, 20); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.fillText(main, bxp, byp);
+      if (sub) { ctx.fillStyle = d > 0 ? '#4ade80' : '#f87171'; ctx.fillText(sub, bxp + w1, byp); }
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    }
   }
   // Brush cursor
   native();
@@ -2164,8 +2239,16 @@ function dzEarthwork() {
 
 function featSummary(f) {
   const u = dz.site.units, o = f.out;
-  if (f.type === 'pad') return o ? `${fmt(o.w, 0)} × ${fmt(o.h, 0)} ${u} at ${o.elev.toFixed(2)}${Number.isFinite(f.p.elev) ? '' : ' (ground)'} · ${f.p.ratio}:1` : 'outside the site';
-  if (f.type === 'wall') return o ? `${f.p.height} ${u} ${f.p.mode === 'cut' ? 'cut' : 'fill'} · ${fmt(o.len, 0)} ${u} long · TW ${o.ends[1].tw.toFixed(1)}` : 'outside the site';
+  if (f.type === 'pad') {
+    if (!o) return 'outside the site';
+    const sh = f.geom.shape === 'circle' ? `⌀${fmt(f.geom.r * 2 * dz.site.toOut, 0)} ${u}` : f.geom.shape === 'poly' ? `${f.geom.smooth ? 'curved' : `${f.geom.pts.length}-sided`}, ${u === 'm' ? fmt(o.area, 0) + ' m²' : fmt(o.area, 0) + ' sf'}` : `${fmt(o.w, 0)} × ${fmt(o.h, 0)} ${u}`;
+    return `${sh} at ${o.elev.toFixed(2)}${Number.isFinite(f.p.elev) ? '' : ' (ground)'} · ${f.p.ratio}:1`;
+  }
+  if (f.type === 'wall') {
+    if (!o) return 'outside the site';
+    const e = o.ends, r = k => Math.abs(e[0][k] - e[2][k]) > 0.05 ? `${e[0][k].toFixed(1)}–${e[2][k].toFixed(1)}` : e[1][k].toFixed(1);
+    return f.p.elevMode === 'set' ? `TW ${r('tw')} / BW ${r('bw')} · ${fmt(o.len, 0)} ${u}` : `${f.p.height} ${u} ${f.p.mode === 'cut' ? 'cut' : 'fill'} · ${fmt(o.len, 0)} ${u} · TW ${r('tw')}`;
+  }
   return o ? `${(f.p.slope * 100).toFixed(2).replace(/\.?0+$/, '')}% · ${fmt(o.len, 0)} ${u} · ${o.zA.toFixed(1)} → ${o.zB.toFixed(1)}` : 'outside the site';
 }
 
@@ -2193,8 +2276,12 @@ function dzSelect(id, fromList = false) {
   const f = id && dz.design.feature(id);
   if (f) {
     dz.tool = f.type;
-    if (f.type === 'pad') { dz.padElev = Number.isFinite(f.p.elev) ? f.p.elev : null; dz.params.ratio = f.p.ratio; }
-    if (f.type === 'wall') Object.assign(dz.params, { wheight: f.p.height, wthick: f.p.thick, shelf: f.p.shelf, wside: f.p.side, wmode: f.p.mode, ratio: f.p.ratio });
+    if (f.type === 'pad') { dz.padElev = Number.isFinite(f.p.elev) ? f.p.elev : null; Object.assign(dz.params, { ratio: f.p.ratio, pshape: f.geom.shape || 'rect', psmooth: !!f.geom.smooth }); }
+    if (f.type === 'wall') {
+      Object.assign(dz.params, { wheight: f.p.height, wthick: f.p.thick, shelf: f.p.shelf, front: f.p.front ?? 5, wside: f.p.side, wmode: f.p.mode, ratio: f.p.ratio, welev: f.p.elevMode || 'ground' });
+      const fin = v => (Number.isFinite(v) ? v : null);
+      dz.wallElev = { tw0: fin(f.p.tw0), tw1: fin(f.p.tw1), bw0: fin(f.p.bw0), bw1: fin(f.p.bw1) };
+    }
     if (f.type === 'slope') { Object.assign(dz.params, { slope: +(f.p.slope * 100).toFixed(3), width: f.p.width }); dz.slopeStart = Number.isFinite(f.p.startElev) ? f.p.startElev : null; }
     if (fromList) {
       const [lon, lat] = projector(dz.site.zone).inv(featHandles(f)[0]);
@@ -2217,6 +2304,7 @@ function setMode(mode) {
   if (state.mapGroups?.contours) { if (design) map.removeLayer(state.mapGroups.contours); else if (visibility.contours) state.mapGroups.contours.addTo(map); }
   if (drawn) { if (design) map.removeLayer(drawn); else drawn.addTo(map); }
   map.getContainer().classList.toggle('design-mode', design);
+  if (design) map.doubleClickZoom.disable(); else { map.doubleClickZoom.enable(); dz.poly = null; }
   if (design) dzEnsure().then(() => { dzApplyTool(); dzRefresh(true); });
   else { map.dragging.enable(); map.getContainer().classList.remove('sculpting'); $('dz-readout').hidden = true; }
 }
@@ -2226,7 +2314,8 @@ document.querySelectorAll('.mode').forEach(b => b.addEventListener('click', () =
 function dzShapeParams(kind) {
   const p = dz.params, k = dz.site?.toOut || 1;
   if (kind === 'pad') return { elev: dz.padElev, ratio: Number(p.ratio), rot: $('local-origin').checked ? align.rot : 0, k };
-  if (kind === 'wall') return { height: Number(p.wheight), thick: Number(p.wthick), shelf: Number(p.shelf), side: p.wside, mode: p.wmode, ratio: Number(p.ratio), k };
+  if (kind === 'wall') return { height: Number(p.wheight), thick: Number(p.wthick), shelf: Number(p.shelf), front: Number(p.front), side: p.wside, mode: p.wmode, ratio: Number(p.ratio), k,
+    elevMode: p.welev, ...dz.wallElev };
   return { slope: Number(p.slope) / 100, startElev: dz.slopeStart, width: Number(p.width), soft: p.soft / 100, k };
 }
 
@@ -2247,7 +2336,16 @@ function dzSyncUi() {
   setv('dz-target', dz.target != null ? dz.target.toFixed(2) : '');
   setv('dz-slope', p.slope); setv('dz-width', p.width);
   setv('dz-start', dz.slopeStart != null ? dz.slopeStart.toFixed(2) : '');
-  setv('dz-wheight', p.wheight); setv('dz-wthick', p.wthick); setv('dz-shelf', p.shelf);
+  setv('dz-wheight', p.wheight); setv('dz-wthick', p.wthick); setv('dz-shelf', p.shelf); setv('dz-front', p.front);
+  for (const kk of ['tw0', 'tw1', 'bw0', 'bw1']) setv(`dz-${kk}`, dz.wallElev[kk] != null ? dz.wallElev[kk].toFixed(2) : '');
+  document.querySelectorAll('input[name="welev"]').forEach(r => { r.checked = r.value === p.welev; });
+  $('f-wall-ground').hidden = p.welev === 'set';
+  $('f-wall-set').hidden = p.welev !== 'set';
+  $('f-front').hidden = p.welev !== 'set';
+  document.querySelectorAll('input[name="pshape"]').forEach(r => { r.checked = r.value === p.pshape; });
+  $('f-psmooth').hidden = p.pshape !== 'poly';
+  $('dz-psmooth').checked = !!p.psmooth;
+  $('pshape-hint').innerHTML = { rect: 'Drag from corner to corner.', poly: 'Click each corner. Double-click, press <kbd>Enter</kbd> or click the first point to close. <kbd>Backspace</kbd> removes the last point.', circle: 'Drag from the centre outward.' }[p.pshape];
   document.querySelectorAll('input[name="wside"]').forEach(r => { r.checked = r.value === p.wside; });
   document.querySelectorAll('input[name="wmode"]').forEach(r => { r.checked = r.value === p.wmode; });
   $('dz-ratio').value = String(p.ratio);
@@ -2264,7 +2362,7 @@ const TOOL_HINTS = {
   smooth: 'Drag to soften bumps and hard edges.',
   slope: 'Drag from the high end to the low end of the run. Click a run to edit it.',
   wall: 'Drag along the wall line. Ticks show the high side. Click a wall to edit it.',
-  pad: 'Drag a rectangle, then type the pad elevation. Click a pad to edit it.',
+  pad: 'Draw the pad (rectangle, polygon or circle), then type its elevation. Click a pad to edit it.',
 };
 
 function dzApplyTool() {
@@ -2330,6 +2428,44 @@ optNum('dz-target', 'target'); optNum('dz-start', 'slopeStart'); optNum('dz-pele
 $('dz-ratio').addEventListener('change', e => { dz.params.ratio = Number(e.target.value); dzFieldsChanged(); });
 document.querySelectorAll('input[name="wside"]').forEach(r => r.addEventListener('change', () => { dz.params.wside = r.value; dzFieldsChanged(); }));
 document.querySelectorAll('input[name="wmode"]').forEach(r => r.addEventListener('change', () => { dz.params.wmode = r.value; dzFieldsChanged(); }));
+numParam('dz-front', 'front');
+/** Fill blank TW/BW values of the selected wall from where it currently stands, so editing one keeps the others. */
+function dzPrefillWallElev() {
+  const f = dz.sel && dz.design?.feature(dz.sel);
+  const en = f?.type === 'wall' && f.out?.ends;
+  if (!en) return;
+  const r2 = v => Math.round(v * 100) / 100;
+  const we = dz.wallElev;
+  if (we.tw0 == null) we.tw0 = r2(en[0].tw);
+  if (we.tw1 == null) we.tw1 = r2(en[2].tw);
+  if (we.bw0 == null) we.bw0 = r2(en[0].bw);
+  if (we.bw1 == null) we.bw1 = r2(en[2].bw);
+}
+document.querySelectorAll('input[name="welev"]').forEach(r => r.addEventListener('change', () => {
+  dz.params.welev = r.value;
+  if (r.value === 'set') dzPrefillWallElev();
+  dzFieldsChanged();
+}));
+for (const kk of ['tw0', 'tw1', 'bw0', 'bw1']) $(`dz-${kk}`).addEventListener('input', e => {
+  const v = Number(e.target.value);
+  if (dz.sel) dzPrefillWallElev();
+  dz.wallElev[kk] = e.target.value === '' || !Number.isFinite(v) ? null : v;
+  dzFieldsChanged();
+});
+document.querySelectorAll('input[name="pshape"]').forEach(r => r.addEventListener('change', () => {
+  dz.params.pshape = r.value; dz.poly = null; dz.drawing = null;
+  const f = dz.sel && dz.design?.feature(dz.sel);
+  if (f?.type === 'pad' && (f.geom.shape || 'rect') !== r.value) dz.sel = null; // shape applies to the next pad
+  saveDzParams(); dzSyncUi(); dzApplyTool(); dzFeatureList();
+}));
+$('dz-psmooth').addEventListener('change', e => {
+  dz.params.psmooth = e.target.checked; saveDzParams();
+  const f = dz.sel && dz.design?.feature(dz.sel);
+  if (f?.type === 'pad' && f.geom.shape === 'poly') { dz.design.checkpoint(); dz.design.updateFeature(f.id, { geom: { smooth: e.target.checked } }); dzAfterChange(); }
+  dzSyncUi(); dzDraw();
+});
+$('dz-show-labels').addEventListener('change', e => { dz.showLabels = e.target.checked; dzDraw(); });
+$('dz-show-cursor').addEventListener('change', e => { dz.showCursor = e.target.checked; dzDraw(); });
 document.querySelectorAll('#slope-chips button').forEach(b => b.addEventListener('click', () => { dz.params.slope = Number(b.dataset.v); dzFieldsChanged(); }));
 document.querySelectorAll('#dz-body input, #dz-body select').forEach(el => el.addEventListener('blur', () => { dz.fieldCheckpoint = false; }));
 $('dz-show-exist').addEventListener('change', e => { dz.showExist = e.target.checked; dzDraw(); });
@@ -2352,8 +2488,9 @@ function dzReadout(xy) {
   let extra = '';
   if (dz.drawing) {
     const L = Math.hypot(dz.drawing.b[0] - dz.drawing.a[0], dz.drawing.b[1] - dz.drawing.a[1]) * dz.site.toOut;
-    extra = dz.drawing.kind === 'pad' ? (() => { const cs = Design.padCorners({ a: dz.drawing.a, b: dz.drawing.b }, dzShapeParams('pad').rot); return ` · ${fmt(Math.hypot(cs[1][0] - cs[0][0], cs[1][1] - cs[0][1]) * dz.site.toOut, 0)} × ${fmt(Math.hypot(cs[3][0] - cs[0][0], cs[3][1] - cs[0][1]) * dz.site.toOut, 0)} ${u}`; })() : ` · ${fmt(L, 0)} ${u}`;
+    extra = dz.drawing.kind === 'pad' && dz.drawing.shape === 'circle' ? ` · ⌀ ${fmt(L * 2, 0)} ${u}` : dz.drawing.kind === 'pad' ? (() => { const cs = Design.padCorners({ a: dz.drawing.a, b: dz.drawing.b }, dzShapeParams('pad').rot); return ` · ${fmt(Math.hypot(cs[1][0] - cs[0][0], cs[1][1] - cs[0][1]) * dz.site.toOut, 0)} × ${fmt(Math.hypot(cs[3][0] - cs[0][0], cs[3][1] - cs[0][1]) * dz.site.toOut, 0)} ${u}`; })() : ` · ${fmt(L, 0)} ${u}`;
   }
+  if (dz.poly) extra = ` · ${dz.poly.pts.length} corner${dz.poly.pts.length === 1 ? '' : 's'} — double-click or Enter to close`;
   el.hidden = false;
   el.innerHTML = `Existing <b>${ex.toFixed(2)}</b> · Proposed <b>${pr.toFixed(2)}</b> · ${Math.abs(d) < 0.01 ? 'no change' : `<span class="${d > 0 ? 'fill' : 'cut'}">${d > 0 ? 'Fill +' : 'Cut −'}${Math.abs(d).toFixed(2)}</span>`}${extra}`;
 }
@@ -2377,10 +2514,10 @@ function dzHit(cp) {
   }
   for (let n = des.features.length - 1; n >= 0; n--) {
     const f = des.features[n];
-    const pts = (f.type === 'pad' ? Design.padCorners(f.geom, f.p.rot) : [f.geom.a, f.geom.b]).map(q => toScreen(M, ...q));
+    const pts = (f.type === 'pad' ? Design.padOutline(f.geom, f.p.rot) : [f.geom.a, f.geom.b]).map(q => toScreen(M, ...q));
     if (f.type === 'pad') {
       let inside = false;
-      for (let i = 0, j = 3; i < 4; j = i++) {
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
         const [xi, yi] = pts[i], [xj, yj] = pts[j];
         if ((yi > cp.y) !== (yj > cp.y) && cp.x < (xj - xi) * (cp.y - yi) / (yj - yi) + xi) inside = !inside;
       }
@@ -2414,6 +2551,14 @@ map.on('mousedown', e => {
   if (dz.mode !== 'design' || !dz.design || dz.spaceDown || e.originalEvent.button !== 0) return;
   const xy = dzNative(e);
   const shapeTool = SHAPES.includes(dz.tool);
+  // Polygon pad in progress: each click adds a corner; clicking the first corner closes it.
+  if (dz.poly) {
+    const M = dzAffine(dz.site), [fx, fy] = toScreen(M, ...dz.poly.pts[0]);
+    if (dz.poly.pts.length >= 3 && Math.hypot(fx - e.containerPoint.x, fy - e.containerPoint.y) < 10) dzFinishPoly();
+    else dz.poly.pts.push(xy);
+    dzDraw();
+    return;
+  }
   // Features: drag a handle of the selected one, or (with a shape tool) select / move one.
   const hit = (shapeTool || dz.sel) ? dzHit(e.containerPoint) : null;
   if (hit && (shapeTool || hit.handle >= 0)) {
@@ -2423,7 +2568,8 @@ map.on('mousedown', e => {
   }
   if (shapeTool) {
     if (dz.sel) { dz.sel = null; dzApplyTool(); dzFeatureList(); }
-    dz.drawing = { kind: dz.tool, a: xy, b: xy };
+    if (dz.tool === 'pad' && dz.params.pshape === 'poly') { dz.poly = { pts: [xy] }; dzDraw(); return; }
+    dz.drawing = { kind: dz.tool, shape: dz.tool === 'pad' ? dz.params.pshape : null, a: xy, b: xy };
     dzDraw();
     return;
   }
@@ -2448,8 +2594,14 @@ function dzEditMove(xy) {
   if (!ed.moved) { dz.design.checkpoint(); ed.moved = true; }
   const g0 = ed.geom0;
   let geom;
-  if (ed.handle < 0) geom = { a: [g0.a[0] + dx, g0.a[1] + dy], b: [g0.b[0] + dx, g0.b[1] + dy] };
-  else if (f.type === 'pad') {
+  const sh = f.type === 'pad' ? (g0.shape || 'rect') : null;
+  if (sh === 'poly') {
+    geom = ed.handle < 0 ? { pts: g0.pts.map(q => [q[0] + dx, q[1] + dy]) } : { pts: g0.pts.map((q, i) => (i === ed.handle ? xy : q.slice())) };
+  } else if (sh === 'circle') {
+    if (ed.handle === 1) geom = { r: Math.max(Math.hypot(xy[0] - g0.c[0], xy[1] - g0.c[1]), dz.site.grid.s) };
+    else geom = { c: [g0.c[0] + dx, g0.c[1] + dy] };
+  } else if (ed.handle < 0) geom = { a: [g0.a[0] + dx, g0.a[1] + dy], b: [g0.b[0] + dx, g0.b[1] + dy] };
+  else if (sh === 'rect') {
     const cs = Design.padCorners(g0, f.p.rot);
     geom = { a: cs[(ed.handle + 2) % 4], b: xy }; // opposite corner stays put
   } else geom = ed.handle === 0 ? { a: xy } : { b: xy };
@@ -2474,6 +2626,20 @@ map.on('mousemove', e => {
 });
 map.on('mouseout', () => { if (dz.mode === 'design') { dz.cursor = null; dzDraw(); } });
 
+/** Close the polygon pad being clicked out (needs 3+ distinct corners). */
+function dzFinishPoly() {
+  const pts = [];
+  for (const q of dz.poly?.pts || []) if (!pts.length || Math.hypot(q[0] - pts.at(-1)[0], q[1] - pts.at(-1)[1]) > dz.site.grid.s / 2) pts.push(q);
+  if (pts.length > 2 && Math.hypot(pts[0][0] - pts.at(-1)[0], pts[0][1] - pts.at(-1)[1]) < dz.site.grid.s / 2) pts.pop();
+  dz.poly = null;
+  if (pts.length < 3) { setStatus('A polygon pad needs at least 3 corners.', true); dzDraw(); return; }
+  const f = dz.design.addFeature('pad', { shape: 'poly', pts, smooth: !!dz.params.psmooth }, dzShapeParams('pad'));
+  dzSelect(f.id);
+  dzAfterChange();
+  if (!Number.isFinite(f.p.elev)) { setStatus(`Pad set to the ground at its centre (${f.out?.elev?.toFixed(2)}). Type an elevation to change it.`); $('dz-pelev').focus(); }
+}
+map.on('dblclick', () => { if (dz.mode === 'design' && dz.poly) dzFinishPoly(); });
+
 document.addEventListener('mouseup', e => {
   if (e.button !== 0) return;
   // Shapes end exactly where the button is released (not at the last mouse-move).
@@ -2491,11 +2657,11 @@ document.addEventListener('mouseup', e => {
     dz.drawing = null;
     const L = Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]);
     if (L < dz.site.grid.s * 2) { dzDraw(); return; }
-    if (d.kind === 'pad' && d.a[0] !== d.b[0]) {
+    if (d.kind === 'pad' && d.shape === 'rect') {
       const cs = Design.padCorners({ a: d.a, b: d.b }, dzShapeParams('pad').rot);
       if (Math.hypot(cs[1][0] - cs[0][0], cs[1][1] - cs[0][1]) < dz.site.grid.s || Math.hypot(cs[3][0] - cs[0][0], cs[3][1] - cs[0][1]) < dz.site.grid.s) { dzDraw(); return; }
     }
-    const f = dz.design.addFeature(d.kind, { a: d.a, b: d.b }, dzShapeParams(d.kind));
+    const f = dz.design.addFeature(d.kind, drawingGeom(d), dzShapeParams(d.kind));
     dzSelect(f.id);
     dzAfterChange();
     if (d.kind === 'pad' && !Number.isFinite(f.p.elev)) { setStatus(`Pad set to the ground at its centre (${f.out?.elev?.toFixed(2)}). Type an elevation to change it.`); $('dz-pelev').focus(); }
@@ -2512,9 +2678,11 @@ map.on('zoomend', () => { dzCanvas.style.visibility = ''; if (dz.mode === 'desig
 const typing = e => /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName) && e.target.type !== 'range' && e.target.type !== 'checkbox' && e.target.type !== 'radio';
 document.addEventListener('keydown', e => {
   if (dz.mode !== 'design') return;
-  if (e.key === 'Escape') { if (dz.drawing) { dz.drawing = null; dzDraw(); } else if (dz.sel) { dz.sel = null; dzApplyTool(); dzFeatureList(); } if (typing(e)) e.target.blur(); return; }
+  if (e.key === 'Escape') { if (dz.poly) { dz.poly = null; dzDraw(); } else if (dz.drawing) { dz.drawing = null; dzDraw(); } else if (dz.sel) { dz.sel = null; dzApplyTool(); dzFeatureList(); } if (typing(e)) e.target.blur(); return; }
   if (typing(e)) { if (e.key === 'Enter') e.target.blur(); return; }
   if (e.code === 'Space' && !dz.spaceDown) { dz.spaceDown = true; dzApplyTool(); e.preventDefault(); return; }
+  if (dz.poly && e.key === 'Enter') { e.preventDefault(); dzFinishPoly(); return; }
+  if (dz.poly && e.key === 'Backspace') { e.preventDefault(); dz.poly.pts.pop(); if (!dz.poly.pts.length) dz.poly = null; dzDraw(); return; }
   if ((e.key === 'Delete' || e.key === 'Backspace') && dz.sel) { e.preventDefault(); if (dz.design.removeFeature(dz.sel)) { dz.sel = null; dzApplyTool(); dzAfterChange(); } return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); if (e.shiftKey ? dz.design?.doRedo() : dz.design?.doUndo()) dzAfterChange(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); if (dz.design?.doRedo()) dzAfterChange(); return; }
@@ -2624,8 +2792,8 @@ function makeNewDxf(site, v) {
     if (!o) continue;
     if (f.type === 'pad') {
       d.layer('C-PAD', 4).layer('C-PAD-TEXT', 4);
-      d.polyline3d('C-PAD', o.corners.map(([x, y]) => P(x, y, o.elev)), true);
-      const cx = o.corners.reduce((a, c) => a + c[0], 0) / 4, cy = o.corners.reduce((a, c) => a + c[1], 0) / 4;
+      d.polyline3d('C-PAD', o.outline.map(([x, y]) => P(x, y, o.elev)), true);
+      const [cx, cy] = centroidOf(o.outline);
       const t = `PAD EL ${o.elev.toFixed(2)}`;
       d.text('C-PAD-TEXT', ...P(cx, cy, o.elev), h, t);
     } else if (f.type === 'wall') {
@@ -2639,7 +2807,12 @@ function makeNewDxf(site, v) {
       const m = o.ends[1], mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
       const ang = Math.atan2(...(() => { const [p1, p2] = [outXY(site, ...a), outXY(site, ...b)]; return [p2[1] - p1[1], p2[0] - p1[0]]; })()) * 180 / Math.PI;
       const up = ang > 90 || ang < -90 ? ang + 180 : ang;
-      d.text('C-WALL-TEXT', ...P(mx, my, m.tw), h * 0.7, `TW ${m.tw.toFixed(2)} / BW ${m.bw.toFixed(2)}  (${f.p.height}' ${f.p.mode === 'cut' ? 'CUT' : 'FILL'} WALL, ${f.p.thick}' THK)`, up);
+      const e0 = o.ends[0], e2 = o.ends[2];
+      const rg = k => Math.abs(e0[k] - e2[k]) > 0.005 ? `${e0[k].toFixed(2)}-${e2[k].toFixed(2)}` : m[k].toFixed(2);
+      const what = f.p.elevMode === 'set' ? 'RETAINING WALL' : `${f.p.height}' ${f.p.mode === 'cut' ? 'CUT' : 'FILL'} WALL`;
+      d.text('C-WALL-TEXT', ...P(mx, my, m.tw), h * 0.7, `TW ${rg('tw')} / BW ${rg('bw')}  (${what}, ${f.p.thick}' THK)`, up);
+      // Top / bottom of wall at each end.
+      for (const [pt, en] of [[a, e0], [b, e2]]) d.text('C-WALL-TEXT', ...P(pt[0], pt[1], en.tw), h * 0.55, `TW ${en.tw.toFixed(2)} BW ${en.bw.toFixed(2)}`, up);
     } else {
       d.layer('C-GRAD-ARRW', 5).layer('C-GRAD-ARRW-TEXT', 5);
       const [a, b] = [f.geom.a, f.geom.b];

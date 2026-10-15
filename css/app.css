@@ -315,3 +315,9 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .leaflet-container.sculpting.over-handle { cursor: move !important; }
 .leaflet-container.sculpting.over-feature { cursor: pointer !important; }
 .leaflet-container.panning, .leaflet-container.panning * { cursor: grabbing !important; }
+
+.elev-grid { display: grid; grid-template-columns: auto 1fr 1fr; gap: 6px 8px; align-items: center; margin-bottom: 6px; }
+.elev-grid input { font: inherit; font-family: var(--mono); font-size: 13px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; width: 100%; min-width: 0; }
+.elev-grid input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.eg-h { font-size: 11px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: .05em; }
+.eg-l { font-size: 12px; font-weight: 600; color: var(--ink-2); white-space: nowrap; }

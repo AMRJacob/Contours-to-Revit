@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.16.2">
+  <link rel="stylesheet" href="css/app.css?v=0.17.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -257,21 +257,42 @@
                 </div>
               </div>
               <div id="f-wall" hidden>
-                <div class="field-row">
-                  <div class="field"><label for="dz-wheight">Wall height</label><input type="number" id="dz-wheight" step="0.5" min="0.5" value="4" inputmode="decimal"></div>
-                  <div class="field"><label for="dz-wthick">Thickness</label><input type="number" id="dz-wthick" step="0.25" min="0.25" value="1" inputmode="decimal"></div>
-                  <div class="field"><label for="dz-shelf">Level behind</label><input type="number" id="dz-shelf" step="1" min="0" value="10" inputmode="decimal"></div>
+                <div class="field">
+                  <label>Wall elevations</label>
+                  <div class="seg seg-sm" role="radiogroup"><label><input type="radio" name="welev" value="ground" checked><span>From ground (height)</span></label><label><input type="radio" name="welev" value="set"><span>Set TW / BW</span></label></div>
+                </div>
+                <div id="f-wall-ground">
+                  <div class="field-row">
+                    <div class="field"><label for="dz-wheight">Wall height</label><input type="number" id="dz-wheight" step="0.5" min="0.5" value="4" inputmode="decimal"></div>
+                    <div class="field"><label>Wall makes</label>
+                      <div class="seg seg-sm" role="radiogroup"><label><input type="radio" name="wmode" value="fill" checked><span>Fill behind</span></label><label><input type="radio" name="wmode" value="cut"><span>Cut in front</span></label></div>
+                    </div>
+                  </div>
+                </div>
+                <div id="f-wall-set" hidden>
+                  <div class="elev-grid">
+                    <span></span><span class="eg-h">Start</span><span class="eg-h">End</span>
+                    <span class="eg-l">Top (TW)</span><input type="number" id="dz-tw0" step="0.01" placeholder="ground+H" inputmode="decimal"><input type="number" id="dz-tw1" step="0.01" placeholder="= start" inputmode="decimal">
+                    <span class="eg-l">Bottom (BW)</span><input type="number" id="dz-bw0" step="0.01" placeholder="ground" inputmode="decimal"><input type="number" id="dz-bw1" step="0.01" placeholder="= start" inputmode="decimal">
+                  </div>
+                  <p class="hint">Start is where you began dragging. Leave End blank for a level top or bottom; different values make it slope. The high side is graded to TW, the low side to BW.</p>
                 </div>
                 <div class="field-row">
-                  <div class="field"><label>High side <span class="sub">facing along the line</span></label>
-                    <div class="seg seg-sm" role="radiogroup"><label><input type="radio" name="wside" value="left" checked><span>Left</span></label><label><input type="radio" name="wside" value="right"><span>Right</span></label></div>
-                  </div>
-                  <div class="field"><label>Wall makes</label>
-                    <div class="seg seg-sm" role="radiogroup"><label><input type="radio" name="wmode" value="fill" checked><span>Fill behind</span></label><label><input type="radio" name="wmode" value="cut"><span>Cut in front</span></label></div>
-                  </div>
+                  <div class="field"><label for="dz-wthick">Thickness</label><input type="number" id="dz-wthick" step="0.25" min="0.25" value="1" inputmode="decimal"></div>
+                  <div class="field"><label for="dz-shelf">Level behind</label><input type="number" id="dz-shelf" step="1" min="0" value="10" inputmode="decimal"></div>
+                  <div class="field" id="f-front" hidden><label for="dz-front">Level in front</label><input type="number" id="dz-front" step="1" min="0" value="5" inputmode="decimal"></div>
+                </div>
+                <div class="field"><label>High side <span class="sub">looking along the line as drawn</span></label>
+                  <div class="seg seg-sm" role="radiogroup"><label><input type="radio" name="wside" value="left" checked><span>Left</span></label><label><input type="radio" name="wside" value="right"><span>Right</span></label></div>
                 </div>
               </div>
               <div id="f-pad" hidden>
+                <div class="field">
+                  <label>Pad shape</label>
+                  <div class="seg seg-sm" role="radiogroup"><label><input type="radio" name="pshape" value="rect" checked><span>Rectangle</span></label><label><input type="radio" name="pshape" value="poly"><span>Polygon</span></label><label><input type="radio" name="pshape" value="circle"><span>Circle</span></label></div>
+                  <label class="check" id="f-psmooth" hidden><input type="checkbox" id="dz-psmooth"><span><strong>Curved</strong> — smooth curve through the points</span></label>
+                  <p class="hint" id="pshape-hint"></p>
+                </div>
                 <div class="field">
                   <label for="dz-pelev">Pad elevation <span class="sub">blank = ground at the pad's centre</span></label>
                   <div class="align-row"><input type="number" id="dz-pelev" step="0.1" placeholder="ground" inputmode="decimal"><span class="unit" id="dz-pelev-u">ft</span></div>
@@ -308,6 +329,8 @@
                 <button type="button" class="btn btn-quiet" id="dz-reset">Reset design</button>
               </div>
               <label class="check"><input type="checkbox" id="dz-show-exist" checked><span>Show existing contours (grey)</span></label>
+              <label class="check"><input type="checkbox" id="dz-show-labels" checked><span>Contour labels</span></label>
+              <label class="check"><input type="checkbox" id="dz-show-cursor" checked><span>Elevation at the cursor</span></label>
               <label class="check"><input type="checkbox" id="dz-show-cf" checked><span>Show cut / fill colors</span></label>
               <div class="cf-legend" aria-hidden="true"><span>Cut</span><i></i><span>Fill</span><small id="cf-scale">±5 ft</small></div>
             </div>
@@ -375,6 +398,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.16.2"></script>
+  <script type="module" src="js/app.js?v=0.17.0"></script>
 </body>
 </html>
