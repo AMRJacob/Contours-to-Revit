@@ -188,3 +188,4 @@ input[type="search"]:focus, select:focus { outline: 2px solid var(--accent); out
 .gh-token summary { cursor: pointer; color: var(--ink-3); }
 .token-row { display: flex; gap: 6px; margin-top: 6px; }
 .token-row input { flex: 1; min-width: 0; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
+.aerial-res { margin: 2px 0 0; } .aerial-res label { font-size: 12px; }

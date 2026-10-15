@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.12.1';
-import { fetchElevation, sample } from './dem.js?v=0.12.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.12.1';
-import { Dxf } from './dxf.js?v=0.12.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.12.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.12.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.13.0';
+import { fetchElevation, sample } from './dem.js?v=0.13.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.13.0';
+import { Dxf } from './dxf.js?v=0.13.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.13.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.13.0';
 
-const VERSION = '0.12.1';
+const VERSION = '0.13.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -454,8 +454,8 @@ async function fetchImagery(zone, box) {
   const toReq = zone.note ? 1 / zoneUnitsPerMeter(zone) : 1; // converted zones are requested in their metric EPSG units
   const w = box.xmax - box.xmin, h = box.ymax - box.ymin;
   const sources = [
+    { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export', long: 2400, credit: 'Esri World Imagery (Esri, Maxar, Earthstar Geographics)' },
     { url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/export', long: 2400, credit: 'USGS The National Map: Orthoimagery (public domain)' },
-    { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export', long: 1600, credit: 'Esri World Imagery (Esri, Maxar, Earthstar Geographics)' },
   ];
   for (const src of sources) {
     const size = w >= h ? [src.long, Math.max(1, Math.round(src.long * h / w))] : [Math.max(1, Math.round(src.long * w / h)), src.long];
@@ -474,39 +474,93 @@ async function fetchImagery(zone, box) {
   return { bitmap: null, credit: '' };
 }
 
+/** Aerial download resolution, ft per pixel (0 = finest the source offers, ~0.25 ft/px). */
+const AERIAL_RES = [
+  { v: 0, label: 'Maximum detail (about 0.25 ft/px)' },
+  { v: 0.5, label: '0.5 ft/px' },
+  { v: 1, label: '1 ft/px' },
+  { v: 2, label: '2 ft/px (small file)' },
+];
+const AERIAL_MAX_PX = 64e6;   // total pixels (~8000 x 8000) — keeps the browser and Revit responsive
+const AERIAL_TILE = 2048;     // per-request size; the services allow 4096 but smaller requests are far more reliable
+let aerialRes = (() => { try { const v = parseFloat(localStorage.getItem('c2r-aerial-res')); return AERIAL_RES.some(o => o.v === v) ? v : 0; } catch { return 0; } })();
+
+const AERIAL_SOURCES = [
+  // Esri World Imagery: 3-6 in. imagery in most US towns (tested downtown Little Rock: real detail to ~0.25 ft/px).
+  { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export', credit: 'Esri World Imagery (Esri, Maxar, Earthstar Geographics)' },
+  // USGS NAIP-based orthoimagery: public domain but much softer (about 1 m).
+  { url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/export', credit: 'USGS The National Map: Orthoimagery (public domain)' },
+];
+
 /**
- * Clean aerial for Revit/CAD: the site box exactly, grid-north up, ~0.5 ft/px (max 4096 px).
- * Cached per generated site. Returns { blob, w, h, credit, ftPerPx }.
+ * Clean aerial for Revit/CAD: the site box exactly, grid-north up, at the chosen resolution.
+ * Large images are requested as a grid of tiles in the State Plane zone and stitched, so pixels line up exactly.
+ * Cached per generated site and resolution. Returns { blob, w, h, credit, ftPerPx }.
  */
 async function fetchAerialExport(site) {
-  if (site._aerial) return site._aerial;
+  if (site._aerial && site._aerial.res === aerialRes) return site._aerial;
   const { zone, box } = site;
   const toReq = zone.note ? 1 / zoneUnitsPerMeter(zone) : 1;
   const w = box.xmax - box.xmin, h = box.ymax - box.ymin;
   const nativePerFt = zoneUnitsPerMeter(zone) * 0.3048;
-  const want = Math.min(4096, Math.max(1200, Math.ceil(Math.max(w, h) / nativePerFt / 0.5)));
-  const tries = [
-    { url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/export', long: want, credit: 'USGS The National Map: Orthoimagery (public domain)' },
-    { url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/export', long: Math.min(want, 2400), credit: 'USGS The National Map: Orthoimagery (public domain)' },
-    { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export', long: Math.min(want, 2000), credit: 'Esri World Imagery (Esri, Maxar, Earthstar Geographics)' },
-  ];
-  for (const t of tries) {
-    const size = w >= h ? [t.long, Math.max(1, Math.round(t.long * h / w))] : [Math.max(1, Math.round(t.long * w / h)), t.long];
-    const params = new URLSearchParams({
-      bbox: [box.xmin * toReq, box.ymin * toReq, box.xmax * toReq, box.ymax * toReq].join(','),
-      bboxSR: String(zone.code), imageSR: String(zone.code), size: size.join(','), format: 'jpg', f: 'image',
-    });
-    try {
-      const r = await fetch(`${t.url}?${params}`, { signal: AbortSignal.timeout(45000) });
-      if (!r.ok || !(r.headers.get('content-type') || '').startsWith('image/')) continue;
-      const blob = await r.blob();
-      const bmp = await createImageBitmap(blob);
-      site._aerial = { blob, w: bmp.width, h: bmp.height, credit: t.credit, ftPerPx: (w / nativePerFt) / bmp.width };
-      bmp.close?.();
-      return site._aerial;
-    } catch { /* try next */ }
+  const wFt = w / nativePerFt, hFt = h / nativePerFt;
+  let ftPerPx = aerialRes || 0.25;
+  if ((wFt / ftPerPx) * (hFt / ftPerPx) > AERIAL_MAX_PX) ftPerPx = Math.sqrt(wFt * hFt / AERIAL_MAX_PX);
+  const W = Math.max(1, Math.round(wFt / ftPerPx)), H = Math.max(1, Math.round(hFt / ftPerPx));
+  const nx = Math.ceil(W / AERIAL_TILE), ny = Math.ceil(H / AERIAL_TILE);
+  const fails = [];
+  for (const src of AERIAL_SOURCES) {
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    const jobs = [];
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) jobs.push([i, j]);
+    let done = 0, ok = true;
+    const one = async ([i, j]) => {
+      const px0 = i * AERIAL_TILE, py0 = j * AERIAL_TILE;
+      const tw = Math.min(AERIAL_TILE, W - px0), th = Math.min(AERIAL_TILE, H - py0);
+      // Tile bbox in native zone units; pixel rows count down from the north edge.
+      const x0 = box.xmin + px0 / W * w, x1 = box.xmin + (px0 + tw) / W * w;
+      const y1 = box.ymax - py0 / H * h, y0 = box.ymax - (py0 + th) / H * h;
+      const params = new URLSearchParams({
+        bbox: [x0 * toReq, y0 * toReq, x1 * toReq, y1 * toReq].join(','),
+        bboxSR: String(zone.code), imageSR: String(zone.code), size: `${tw},${th}`, format: 'jpg', f: 'image',
+      });
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const r = await fetch(`${src.url}?${params}`, { signal: AbortSignal.timeout(60000) });
+          if (!r.ok || !(r.headers.get('content-type') || '').startsWith('image/')) throw new Error(`HTTP ${r.status}`);
+          const bmp = await createImageBitmap(await r.blob());
+          ctx.drawImage(bmp, px0, py0, tw, th);
+          bmp.close?.();
+          setStatus(`Downloading aerial — ${++done} of ${jobs.length} tiles…`);
+          return;
+        } catch { await new Promise(res => setTimeout(res, 800 * (attempt + 1))); }
+      }
+      ok = false;
+    };
+    // 4 requests at a time.
+    const queue = jobs.slice();
+    await Promise.all(Array.from({ length: Math.min(4, queue.length) }, async () => { while (ok && queue.length) await one(queue.shift()); }));
+    if (!ok) { fails.push(src.credit); continue; }
+    setStatus('Saving aerial JPG…');
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.92));
+    canvas.width = canvas.height = 0;
+    if (!blob) throw new Error('image too large for this browser — choose a coarser aerial resolution');
+    site._aerial = { blob, w: W, h: H, credit: src.credit, ftPerPx: wFt / W, res: aerialRes };
+    setStatus(`Aerial: ${fmt(W, 0)} × ${fmt(H, 0)} px, ${(wFt / W).toFixed(2)} ft/px.`);
+    return site._aerial;
   }
   throw new Error('aerial imagery service did not respond');
+}
+
+{
+  const sel = $('aerial-res');
+  sel.innerHTML = AERIAL_RES.map(o => `<option value="${o.v}"${o.v === aerialRes ? ' selected' : ''}>${o.label}</option>`).join('');
+  sel.addEventListener('change', () => {
+    aerialRes = parseFloat(sel.value);
+    try { localStorage.setItem('c2r-aerial-res', String(aerialRes)); } catch { /* ignore */ }
+  });
 }
 
 // ---------- Underlay processing (desaturate + wash toward white) ----------
