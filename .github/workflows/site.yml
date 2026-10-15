@@ -1,0 +1,67 @@
+name: Build site and context data
+
+# Publishes the app plus compact OpenStreetMap context tiles for Arkansas.
+# Weekly refresh (Mondays) and on every push; the OSM tiles are cached per ISO week
+# so ordinary pushes don't re-download the Arkansas extract.
+on:
+  schedule:
+    - cron: '17 9 * * 1'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Week key
+        id: wk
+        run: echo "key=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore context tiles
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: _ctx
+          key: ctx-ar-${{ steps.wk.outputs.key }}-${{ hashFiles('tools/build_data.py') }}
+
+      - name: Build context tiles from the Arkansas OSM extract
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
+          curl -sSfL -o ar.osm.pbf https://download.geofabrik.de/north-america/us/arkansas-latest.osm.pbf
+          SRC_DATE=$(osmium fileinfo -g header.option.osmosis_replication_timestamp ar.osm.pbf | cut -c1-10)
+          osmium tags-filter ar.osm.pbf w/amenity=parking w/area:highway w/footway=sidewalk w/highway=pedestrian,footway,service,residential,unclassified -o sel.osm.pbf
+          osmium export sel.osm.pbf -f geojsonseq --geometry-types=linestring,polygon -a id -o sel.geojsonseq
+          python3 tools/build_data.py sel.geojsonseq _ctx "${SRC_DATE:-unknown}"
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          rsync -a --exclude '.git' --exclude '.github' --exclude '_ctx' --exclude '_site' --exclude 'tools' ./ _site/
+          mkdir -p _site/c9 && cp _ctx/* _site/c9/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
