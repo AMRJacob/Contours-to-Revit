@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.8.2';
-import { fetchElevation, sample } from './dem.js?v=0.8.2';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.8.2';
-import { Dxf } from './dxf.js?v=0.8.2';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.8.2';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.8.2';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.9.0';
+import { fetchElevation, sample } from './dem.js?v=0.9.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.9.0';
+import { Dxf } from './dxf.js?v=0.9.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.9.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.9.0';
 
-const VERSION = '0.8.2';
+const VERSION = '0.9.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -468,6 +468,55 @@ async function fetchImagery(zone, box) {
   return { bitmap: null, credit: '' };
 }
 
+/**
+ * Clean aerial for Revit/CAD: the site box exactly, grid-north up, ~0.5 ft/px (max 4096 px).
+ * Cached per generated site. Returns { blob, w, h, credit, ftPerPx }.
+ */
+async function fetchAerialExport(site) {
+  if (site._aerial) return site._aerial;
+  const { zone, box } = site;
+  const toReq = zone.note ? 1 / zoneUnitsPerMeter(zone) : 1;
+  const w = box.xmax - box.xmin, h = box.ymax - box.ymin;
+  const nativePerFt = zoneUnitsPerMeter(zone) * 0.3048;
+  const want = Math.min(4096, Math.max(1200, Math.ceil(Math.max(w, h) / nativePerFt / 0.5)));
+  const tries = [
+    { url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/export', long: want, credit: 'USGS The National Map: Orthoimagery (public domain)' },
+    { url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/export', long: Math.min(want, 2400), credit: 'USGS The National Map: Orthoimagery (public domain)' },
+    { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export', long: Math.min(want, 2000), credit: 'Esri World Imagery (Esri, Maxar, Earthstar Geographics)' },
+  ];
+  for (const t of tries) {
+    const size = w >= h ? [t.long, Math.max(1, Math.round(t.long * h / w))] : [Math.max(1, Math.round(t.long * w / h)), t.long];
+    const params = new URLSearchParams({
+      bbox: [box.xmin * toReq, box.ymin * toReq, box.xmax * toReq, box.ymax * toReq].join(','),
+      bboxSR: String(zone.code), imageSR: String(zone.code), size: size.join(','), format: 'jpg', f: 'image',
+    });
+    try {
+      const r = await fetch(`${t.url}?${params}`, { signal: AbortSignal.timeout(45000) });
+      if (!r.ok || !(r.headers.get('content-type') || '').startsWith('image/')) continue;
+      const blob = await r.blob();
+      const bmp = await createImageBitmap(blob);
+      site._aerial = { blob, w: bmp.width, h: bmp.height, credit: t.credit, ftPerPx: (w / nativePerFt) / bmp.width };
+      bmp.close?.();
+      return site._aerial;
+    } catch { /* try next */ }
+  }
+  throw new Error('aerial imagery service did not respond');
+}
+
+/** Image extents in output coordinates (same frame as the CSV/DXF, after any local origin). */
+function aerialExtent(site) {
+  const [x0, y0] = outXY(site, site.box.xmin, site.box.ymin);
+  const [x1, y1] = outXY(site, site.box.xmax, site.box.ymax);
+  return { x0, y0, x1, y1, w: x1 - x0, h: y1 - y0 };
+}
+
+/** ESRI world file (.jgw): pixel size and the centre of the upper-left pixel, in output coordinates. */
+function makeWorldFile(site, img) {
+  const e = aerialExtent(site);
+  const px = e.w / img.w, py = e.h / img.h;
+  return [px, 0, 0, -py, e.x0 + px / 2, e.y1 - py / 2].map(v => v.toFixed(6)).join('\r\n') + '\r\n';
+}
+
 function buildMeta(site) {
   const z = site.zone;
   const u = site.units;
@@ -551,10 +600,11 @@ const LAYERS = [
   { key: 'parcels', label: 'Parcels', swatch: '#ff4fd8' },
   { key: 'flood', label: 'Flood zones', swatch: '#3b82f6' },
   { key: 'labels', label: 'Labels', swatch: '#ffffff', note: 'preview · PNG · DXF' },
+  { key: 'imageFrame', label: 'Aerial image frame', swatch: '#93c5fd', note: 'DXF only' },
   { key: 'points', label: 'Grid points', swatch: '#7bd88f', note: 'DXF only' },
 ];
 const visibility = (() => {
-  const v = { contours: true, buildings: true, bldgMs: false, bldgOsm: false, roads: true, roadWidths: true, roadEdges: true, parcels: true, flood: true, labels: true, points: false };
+  const v = { contours: true, buildings: true, bldgMs: false, bldgOsm: false, roads: true, roadWidths: true, roadEdges: true, imageFrame: true, parcels: true, flood: true, labels: true, points: false };
   try { Object.assign(v, JSON.parse(localStorage.getItem('c2r-layers') || '{}')); } catch { /* ignore */ }
   return v;
 })();
@@ -597,6 +647,7 @@ function updateLayerCounts(site) {
     flood: c ? (site.floodFailed ? 'failed' : c.floodZones.length ? String(c.floodZones.length) : 'none') : '',
     points: site ? `${fmt(site.pts.nx * site.pts.ny - site.pStats.missing, 0)} · DXF only` : 'DXF only',
     labels: 'preview · PNG · DXF',
+    imageFrame: 'DXF only',
   };
   document.querySelectorAll('.layers-panel .lp-row').forEach(row => { row.querySelector('.lp-count').textContent = counts[row.dataset.key]; });
 }
@@ -772,6 +823,16 @@ function makeDxf(site, v) {
   if (v.contours) addContours(d, site, labels.boxes, v.labels !== false);
   if (site.context) addContext(d, site, v, labels);
   if (v.points) addPoints(d, site);
+  if (v.imageFrame) {
+    // Exact extent of the aerial JPG, for snapping the image corner in Revit.
+    const e = aerialExtent(site), z = site.pStats.min, h = labelHeight(site);
+    d.layer('C-IMAG-BNDY', 140);
+    d.polyline3d('C-IMAG-BNDY', [[e.x0, e.y0, z], [e.x1, e.y0, z], [e.x1, e.y1, z], [e.x0, e.y1, z]], true);
+    if (v.labels !== false) {
+      const t = `AERIAL IMAGE EXTENT ${e.w.toFixed(2)} x ${e.h.toFixed(2)} ${site.units === 'm' ? 'M' : 'FT'} - LOWER-LEFT CORNER`;
+      d.text('C-IMAG-BNDY', e.x0 + textW(t, h * 0.6) / 2 + h, e.y0 + h, z, h * 0.6, t);
+    }
+  }
   if (site.base[0] || site.base[1]) {
     // Origin marker at (0,0): a cross and circle on C-ORIG, at ground level, labelled with its State Plane values.
     const h = labelHeight(site);
@@ -999,6 +1060,22 @@ function makeReadme(site, v = vis()) {
     '                 Auto-Detect (older DXF readers default to inches). Positioning: "Auto - Origin to Origin"',
     '                 unless you have set up shared coordinates.',
     '*_map.png        Printable map over aerial imagery with the same layers, grid-north up.',
+    ...(() => {
+      const e = aerialExtent(site), uu = u === 'm' ? 'm' : 'ft', img = site._aerial;
+      return [
+        '*_aerial.jpg     Clean aerial photo of the site box, grid-north up, no linework' + (img ? ` (${img.w} x ${img.h} px, ${img.ftPerPx.toFixed(2)} ft/px; ${img.credit})` : '') + '.',
+        '*_aerial.jgw     World file: places the JPG automatically in AutoCAD / Civil 3D / GIS (same coordinates as the DXF).',
+        `                 Image extent: ${e.w.toFixed(3)} x ${e.h.toFixed(3)} ${uu}`,
+        `                 Lower-left corner: X ${e.x0.toFixed(3)}, Y ${e.y0.toFixed(3)}   Upper-right: X ${e.x1.toFixed(3)}, Y ${e.y1.toFixed(3)}`,
+        '                 REVIT (Insert > Image does not read world files):',
+        '                   1. Link the DXF (Origin to Origin) so layer C-IMAG-BNDY shows the image frame.',
+        '                   2. In a plan view: Insert > Image, place it anywhere.',
+        `                   3. Properties: check Lock Proportions, set Width = ${e.w.toFixed(3)} ${uu}.`,
+        '                   4. Move the image by its lower-left corner onto the frame\'s lower-left corner (or use the',
+        '                      coordinates above). Set Draw Layer = Background to keep it under the model.',
+        '                 Grid north is up; if your project north is rotated, rotate the image with the model.',
+      ];
+    })(),
     '',
     `Map imagery: ${site.imagery ? site.imageryCredit : 'none (hillshade shown)'}.`,
     '');
@@ -1069,6 +1146,8 @@ const MAKERS = {
   dxf: (s, v) => ({ name: `${baseName(s)}.dxf`, data: makeDxf(s, v), type: 'application/dxf' }),
   png: async (s, v) => ({ name: `${baseName(s)}_map.png`, data: await makePng(s, v), type: 'image/png' }),
   readme: (s, v) => ({ name: `${baseName(s)}_README.txt`, data: makeReadme(s, v), type: 'text/plain' }),
+  jpg: async (s, v) => { const a = await fetchAerialExport(s); return { name: `${baseName(s)}_aerial.jpg`, data: a.blob, type: 'image/jpeg' }; },
+  jgw: async (s, v) => { const a = await fetchAerialExport(s); return { name: `${baseName(s)}_aerial.jgw`, data: makeWorldFile(s, a), type: 'text/plain' }; },
 };
 
 function saveBlob(name, data, type) {
@@ -1093,7 +1172,7 @@ document.querySelectorAll('.dl').forEach(b => b.addEventListener('click', async 
     if (kind === 'zip') {
       const zip = new JSZip();
       const folder = zip.folder(baseName(site));
-      for (const k of Object.keys(MAKERS)) {
+      for (const k of ['csv', 'dxf', 'png', 'jpg', 'jgw', 'readme']) {
         const f = await MAKERS[k](site, v);
         if (f) folder.file(f.name, f.data);
       }
@@ -1102,6 +1181,7 @@ document.querySelectorAll('.dl').forEach(b => b.addEventListener('click', async 
       const f = await MAKERS[kind](site, v);
       if (!f) throw new Error('nothing to export');
       saveBlob(f.name, f.data, f.type);
+      if (kind === 'jpg') { const wf = await MAKERS.jgw(site, v); setTimeout(() => saveBlob(wf.name, wf.data, wf.type), 400); }
     }
     setStatus(`Downloaded ${label}.`);
   } catch (err) {
