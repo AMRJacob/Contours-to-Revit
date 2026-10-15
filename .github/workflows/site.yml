@@ -34,23 +34,30 @@ jobs:
         uses: actions/cache@v4
         with:
           path: _ctx
-          key: ctx-ar-${{ steps.wk.outputs.key }}-${{ hashFiles('tools/build_data.py') }}
+          key: ctx-${{ steps.wk.outputs.key }}-${{ hashFiles('tools/build_data.py', 'tools/build_index.py', 'context-states.txt') }}
 
-      - name: Build context tiles from the Arkansas OSM extract
+      - name: Build context tiles for each state in context-states.txt
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
-          curl -sSfL -o ar.osm.pbf https://download.geofabrik.de/north-america/us/arkansas-latest.osm.pbf
-          SRC_DATE=$(osmium fileinfo -g header.option.osmosis_replication_timestamp ar.osm.pbf | cut -c1-10)
-          osmium tags-filter ar.osm.pbf w/amenity=parking w/area:highway w/footway=sidewalk w/highway=pedestrian,footway,service,residential,unclassified -o sel.osm.pbf
-          osmium export sel.osm.pbf -f geojsonseq --geometry-types=linestring,polygon -a id -o sel.geojsonseq
-          python3 tools/build_data.py sel.geojsonseq _ctx "${SRC_DATE:-unknown}"
+          rm -rf _ctx && mkdir -p _ctx
+          for st in $(grep -v '^\s*#' context-states.txt | tr -d '\r' | awk 'NF{print $1}'); do
+            echo "::group::$st"
+            curl -sSfL -o "$st.osm.pbf" "https://download.geofabrik.de/north-america/us/$st-latest.osm.pbf" || { echo "::warning::No Geofabrik extract for '$st'"; echo "::endgroup::"; continue; }
+            SRC_DATE=$(osmium fileinfo -g header.option.osmosis_replication_timestamp "$st.osm.pbf" | cut -c1-10)
+            osmium tags-filter "$st.osm.pbf" w/amenity=parking w/area:highway w/footway=sidewalk w/highway=pedestrian,footway,service,residential,unclassified -o "$st.sel.osm.pbf"
+            osmium export "$st.sel.osm.pbf" -f geojsonseq --geometry-types=linestring,polygon -a id -o "$st.geojsonseq"
+            python3 tools/build_data.py "$st.geojsonseq" "_ctx/$st" "${SRC_DATE:-unknown}"
+            rm -f "$st.osm.pbf" "$st.sel.osm.pbf" "$st.geojsonseq"
+            echo "::endgroup::"
+          done
+          python3 tools/build_index.py _ctx
 
       - name: Assemble site
         run: |
           mkdir -p _site
-          rsync -a --exclude '.git' --exclude '.github' --exclude '_ctx' --exclude '_site' --exclude 'tools' ./ _site/
-          mkdir -p _site/c9 && cp _ctx/* _site/c9/
+          rsync -a --exclude '.git' --exclude '.github' --exclude '_ctx' --exclude '_site' --exclude 'tools' --exclude 'context-states.txt' ./ _site/
+          mkdir -p _site/c9 && cp -r _ctx/. _site/c9/
 
       - uses: actions/upload-pages-artifact@v3
         with:

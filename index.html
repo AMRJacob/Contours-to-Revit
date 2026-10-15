@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.10.0">
+  <link rel="stylesheet" href="css/app.css?v=0.11.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -123,6 +123,16 @@
         </div>
       </section>
 
+      <section class="step" id="step-data">
+        <details>
+          <summary><h2 style="display:inline-flex;margin:0"><span class="num">⚙</span> Hosted map data</h2></summary>
+          <p class="hint">Parking lots, sidewalks and street surfaces come from OpenStreetMap data this site hosts for the states below (refreshed weekly). Elsewhere the app asks the public OpenStreetMap servers, which can be busy.</p>
+          <ul id="hosted-states" class="hosted"><li>Loading…</li></ul>
+          <a class="btn btn-block" id="edit-states" href="https://github.com/AMRJacob/Contours-to-Revit/edit/main/context-states.txt" target="_blank" rel="noopener">Add / remove states (GitHub)</a>
+          <p class="hint">Add a state's name (e.g. <code>oklahoma</code>, <code>new-mexico</code>) on its own line, or delete a line to free the space. Saving rebuilds the data in a few minutes. Needs write access to the repository.</p>
+        </details>
+      </section>
+
       <footer class="foot">
         <p><strong>Preliminary only — not survey data.</strong> Bare-earth elevations are interpolated under buildings and trees. Elevations: USGS 3DEP, NAVD88.</p>
         <p class="credits">Map imagery &copy; Esri, Maxar, Earthstar Geographics; export imagery USGS The National Map. Streets &amp; roads &copy; OpenStreetMap contributors. Buildings: FEMA/ORNL USA Structures. <a href="https://github.com/AMRJacob/Contours-to-Revit" target="_blank" rel="noopener">Source</a></p>
@@ -152,6 +162,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.10.0"></script>
+  <script type="module" src="js/app.js?v=0.11.0"></script>
 </body>
 </html>

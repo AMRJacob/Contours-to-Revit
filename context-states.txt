@@ -1,0 +1,5 @@
+# States whose OpenStreetMap site-context data (parking lots, sidewalks, street surfaces) the app hosts.
+# One Geofabrik state name per line (lowercase, spaces as hyphens), e.g. arkansas, oklahoma, new-mexico.
+# Add a state for a project there; delete the line when done — its data is dropped at the next build.
+# Changes take effect when the "Build site and context data" GitHub Action runs (on save, or Mondays).
+arkansas

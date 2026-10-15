@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.10.0';
-import { fetchElevation, sample } from './dem.js?v=0.10.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.10.0';
-import { Dxf } from './dxf.js?v=0.10.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.10.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.10.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.11.0';
+import { fetchElevation, sample } from './dem.js?v=0.11.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.11.0';
+import { Dxf } from './dxf.js?v=0.11.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.11.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.11.0';
 
-const VERSION = '0.10.0';
+const VERSION = '0.11.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -393,6 +393,7 @@ async function generate() {
     // Other footprint sources go through the same projection / draping.
     context.bldgMs = prepareContext({ buildings: msRes.status === 'fulfilled' ? msRes.value : [] }, { fwd: p.fwd, box, zAt, nativePerM, zPerM }).buildings;
     Object.assign(context, prepareOsmAreas(aRes.status === 'fulfilled' ? aRes.value : null, { fwd: p.fwd, box, zAt, nativePerM }));
+    context.areasSource = aRes.status === 'fulfilled' ? aRes.value : null;
     context.widths = prepareWidths(wRes.status === 'fulfilled' ? wRes.value : [], { fwd: p.fwd, box, zAt, nativePerM, ftToNative: nativePerM * 0.3048 });
     context.bldgOsm = prepareContext({ buildings: osmRes.status === 'fulfilled' ? osmRes.value : [] }, { fwd: p.fwd, box, zAt, nativePerM, zPerM }).buildings;
     if (pRes.status === 'rejected') contextNotes.push(pRes.reason?.message || String(pRes.reason));
@@ -1195,7 +1196,8 @@ function makeReadme(site, v = vis()) {
     }
     if (v.parking || v.streetAreas || v.sidewalks) {
       L_(`OSM areas:            ${site.areasFailed ? 'NOT INCLUDED — Overpass did not respond; regenerate to retry' : `${(site.context.parking || []).length} parking lots, ${(site.context.streetAreas || []).length} street-surface areas, ${(site.context.sidewalks || []).length} sidewalk lines`}`,
-        '                      from OpenStreetMap (© OpenStreetMap contributors, ODbL), hand-mapped; coverage varies by town.',
+        `                      from OpenStreetMap (© OpenStreetMap contributors, ODbL), hand-mapped; coverage varies by town.`,
+        `                      Data: ${site.context.areasSource?.source === 'site' ? `weekly Arkansas extract (Geofabrik), OSM data as of ${site.context.areasSource.dataDate}` : 'live Overpass query'}.`,
         '                      Layers: C-PRKG-OTLN parking outlines, C-ROAD-AREA-OSM street surfaces, C-WALK-SDWK sidewalks (draped).');
     }
     if ((v.roadWidths || v.roadEdges) && site.ctxInclude.p) {
@@ -1474,6 +1476,14 @@ const ClearControl = L.Control.extend({
   },
 });
 map.addControl(new ClearControl());
+
+// ---------- Hosted map data (settings) ----------
+hostedContextIndex().then(idx => {
+  const ul = $('hosted-states');
+  if (!idx?.states?.length) { ul.innerHTML = '<li><span>No hosted data yet — the public OpenStreetMap servers are used everywhere.</span></li>'; return; }
+  const title = id => id.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  ul.innerHTML = idx.states.map(st => `<li><span><strong>${escapeHtml(title(st.id))}</strong> — ${fmt(st.n.p, 0)} lots, ${fmt(st.n.w, 0)} sidewalks</span><span>OSM ${escapeHtml(st.src)} · ${st.mb} MB</span></li>`).join('');
+});
 
 // Restore the last site boundary and picked origin (map view is restored when the map is created).
 state.origin = session.get('origin');

@@ -679,8 +679,63 @@ export function prepareWidths(records, { fwd, box, zAt, nativePerM, ftToNative }
 // ---------- OpenStreetMap areas: parking lots, street surface areas, sidewalks (via Overpass) ----------
 const OVERPASS_GET = ['https://overpass.kumi.systems/api/interpreter', 'https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
 
-/** Returns { parking:[{rings,type}], streetAreas:[{rings,kind}], sidewalks:[{coords}] } in lon/lat. */
-export async function fetchOsmAreas([w, s, e, n]) {
+// Compact OSM tiles built weekly by the site's GitHub Action (tools/build_data.py), served next to the app.
+const CTX_DIR = 'c9';
+let ctxIndex; // promise of the hosted-data index
+
+async function gunzipJson(url) {
+  const r = await fetch(url, { cache: 'no-cache' });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const stream = r.body.pipeThrough(new DecompressionStream('gzip'));
+  return JSON.parse(await new Response(stream).text());
+}
+
+function dec(arr, scale) {
+  const out = [];
+  let x = 0, y = 0;
+  for (let i = 0; i < arr.length; i += 2) { x += arr[i]; y += arr[i + 1]; out.push([x / scale, y / scale]); }
+  return out;
+}
+
+/** Index of hosted states ({states:[{id, ext, src, built, n, mb}], tile, scale}) or null. */
+export function hostedContextIndex() {
+  ctxIndex ??= gunzipJson(`${CTX_DIR}/i.bin`).catch(() => null);
+  return ctxIndex;
+}
+
+/** Site-hosted tiles; returns null when unavailable or the site isn't inside a hosted state's data. */
+async function fetchOsmAreasLocal([w, s, e, n]) {
+  if (typeof DecompressionStream === 'undefined') return null;
+  const idx = await hostedContextIndex();
+  if (!idx?.states?.length) return null;
+  const hit = idx.states.filter(st => !(e < st.ext[0] || w > st.ext[2] || n < st.ext[1] || s > st.ext[3]));
+  if (!hit.length) return null; // no hosted state here: use Overpass
+  const T = idx.tile, out = { parking: [], streetAreas: [], sidewalks: [], source: 'site', dataDate: hit.map(h => h.src).join(', '), states: hit.map(h => h.id) };
+  const seen = new Set();
+  const jobs = [];
+  for (const st of hit) {
+    for (let tx = Math.floor(w / T); tx <= Math.floor(e / T); tx++) {
+      for (let ty = Math.floor(s / T); ty <= Math.floor(n / T); ty++) {
+        jobs.push(gunzipJson(`${CTX_DIR}/${st.id}/${tx}_${ty}.bin`).catch(() => ({ p: [], s: [], w: [] })));
+      }
+    }
+  }
+  for (const t of await Promise.all(jobs)) {
+    for (const [id, type, rings] of t.p || []) if (!seen.has('p' + id)) { seen.add('p' + id); out.parking.push({ rings: rings.map(r => dec(r, idx.scale)), type }); }
+    for (const [id, kind, rings] of t.s || []) if (!seen.has('s' + id)) { seen.add('s' + id); out.streetAreas.push({ rings: rings.map(r => dec(r, idx.scale)), kind }); }
+    for (const [id, line] of t.w || []) if (!seen.has('w' + id)) { seen.add('w' + id); out.sidewalks.push({ coords: dec(line, idx.scale) }); }
+  }
+  return out;
+}
+
+/** Returns { parking:[{rings,type}], streetAreas:[{rings,kind}], sidewalks:[{coords}], source, dataDate } in lon/lat. */
+export async function fetchOsmAreas(bbox) {
+  const local = await fetchOsmAreasLocal(bbox).catch(() => null);
+  if (local) return local;
+  return fetchOsmAreasOverpass(bbox);
+}
+
+async function fetchOsmAreasOverpass([w, s, e, n]) {
   const bb = `${s},${w},${n},${e}`;
   const q = `[out:json][timeout:25];(way["amenity"="parking"](${bb});way["area:highway"](${bb});way["highway"]["area"="yes"](${bb});way["footway"="sidewalk"](${bb}););out tags geom;`;
   const ac = new AbortController();
@@ -694,7 +749,7 @@ export async function fetchOsmAreas([w, s, e, n]) {
   } catch {
     throw new Error('OpenStreetMap parking / sidewalk data unavailable (Overpass servers busy) — generate again to retry.');
   } finally { ac.abort(); }
-  const out = { parking: [], streetAreas: [], sidewalks: [] };
+  const out = { parking: [], streetAreas: [], sidewalks: [], source: 'overpass', dataDate: 'live' };
   for (const el of j.elements || []) {
     if (el.type !== 'way' || !el.geometry?.length) continue;
     const coords = el.geometry.map(g => [g.lon, g.lat]);
