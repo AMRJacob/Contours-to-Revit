@@ -1,6 +1,6 @@
 // Canvas rendering for the on-screen preview and the printable PNG contour map.
-import { BUILDING_SOURCES } from './context.js?v=0.9.2';
-import { labelPositions, isMajor } from './contours.js?v=0.9.2';
+import { BUILDING_SOURCES } from './context.js?v=0.10.0';
+import { labelPositions, isMajor } from './contours.js?v=0.10.0';
 
 /** Hillshade (0..1) for a grid; azimuth 315°, altitude 45°. */
 export function hillshade(g, zFactor = 1) {
@@ -174,6 +174,16 @@ export function drawMap(canvas, site, mode = 'preview') {
       ctx.stroke();
       ctx.setLineDash([]);
     }
+    // OSM parking lots / street surfaces (outline + light fill) and sidewalks.
+    for (const [key, col] of [['parking', '#cbd5e1'], ['streetAreas', '#f59e0b']]) {
+      for (const ar of v[key] ? site.context[key] || [] : none) {
+        ctx.beginPath();
+        for (const r of ar.rings) { r.forEach(([x, y], i) => (i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y)))); ctx.closePath(); }
+        ctx.globalAlpha = 0.14; ctx.fillStyle = onImagery ? col : '#475569'; ctx.fill('evenodd'); ctx.globalAlpha = 1;
+        ctx.lineWidth = 1.3 * px; ctx.strokeStyle = onImagery ? col : '#334155'; ctx.stroke();
+      }
+    }
+    for (const sw of v.sidewalks ? site.context.sidewalks || [] : none) { path(sw.line); ctx.lineWidth = 1.1 * px; ctx.strokeStyle = onImagery ? 'rgba(248,250,252,0.9)' : '#64748b'; ctx.stroke(); }
     // ArDOT recorded-width edges: solid = traveled way, thin = paved incl. shoulders.
     for (const w of v.roadEdges ? site.context.widths || [] : none) {
       for (const e of w.surfaceEdges) { path(e); ctx.lineWidth = 0.9 * px; ctx.strokeStyle = onImagery ? 'rgba(250,204,21,0.75)' : 'rgba(120,90,0,0.7)'; ctx.stroke(); }

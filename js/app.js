@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.9.2';
-import { fetchElevation, sample } from './dem.js?v=0.9.2';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.9.2';
-import { Dxf } from './dxf.js?v=0.9.2';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.9.2';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.9.2';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.10.0';
+import { fetchElevation, sample } from './dem.js?v=0.10.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.10.0';
+import { Dxf } from './dxf.js?v=0.10.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.10.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.10.0';
 
-const VERSION = '0.9.2';
+const VERSION = '0.10.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -342,6 +342,7 @@ async function generate() {
       fetchBuildingsMs(bbox),
       fetchBuildingsOsm(bbox),
       inArkansas ? fetchArdotWidths(bbox) : Promise.resolve([]),
+      fetchOsmAreas(bbox),
     ])
     : null;
   const dem = await fetchElevation(bbox, 1, msg => setStatus(msg));
@@ -369,13 +370,15 @@ async function generate() {
   const contours = contourLines(cgrid, levels);
 
   let context = null;
-  let floodFailed = false, parcelsFailed = false, bldgFailed = {}, widthsFailed = false;
+  let floodFailed = false, parcelsFailed = false, bldgFailed = {}, widthsFailed = false, areasFailed = false;
   let roadsSource = '';
   const contextNotes = [];
   if (!inArkansas) contextNotes.push('Parcels are only available for sites in Arkansas (statewide data from the Arkansas GIS Office).');
   if (ctxFetch) {
     setStatus('Adding site context…');
-    const [bRes, rRes, pRes, fRes, msRes, osmRes, wRes] = await ctxFetch;
+    const [bRes, rRes, pRes, fRes, msRes, osmRes, wRes, aRes] = await ctxFetch;
+    if (aRes.status === 'rejected') contextNotes.push(aRes.reason?.message || String(aRes.reason));
+    areasFailed = aRes.status === 'rejected';
     if (wRes.status === 'rejected') contextNotes.push(wRes.reason?.message || String(wRes.reason));
     widthsFailed = wRes.status === 'rejected';
     if (bRes.status === 'rejected') contextNotes.push(`USA Structures footprints unavailable: ${bRes.reason?.message || bRes.reason}`);
@@ -389,6 +392,7 @@ async function generate() {
       { fwd: p.fwd, box, zAt, nativePerM, zPerM });
     // Other footprint sources go through the same projection / draping.
     context.bldgMs = prepareContext({ buildings: msRes.status === 'fulfilled' ? msRes.value : [] }, { fwd: p.fwd, box, zAt, nativePerM, zPerM }).buildings;
+    Object.assign(context, prepareOsmAreas(aRes.status === 'fulfilled' ? aRes.value : null, { fwd: p.fwd, box, zAt, nativePerM }));
     context.widths = prepareWidths(wRes.status === 'fulfilled' ? wRes.value : [], { fwd: p.fwd, box, zAt, nativePerM, ftToNative: nativePerM * 0.3048 });
     context.bldgOsm = prepareContext({ buildings: osmRes.status === 'fulfilled' ? osmRes.value : [] }, { fwd: p.fwd, box, zAt, nativePerM, zPerM }).buildings;
     if (pRes.status === 'rejected') contextNotes.push(pRes.reason?.message || String(pRes.reason));
@@ -425,7 +429,7 @@ async function generate() {
   const now = new Date();
   const site = {
     zone, units: u, toOut, zPerM, spacingOut, interval, box, pts, pStats, grid: cgrid, stats: cStats, shade,
-    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, floodFailed, parcelsFailed, bldgFailed, widthsFailed, imagery, imageryCredit, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
+    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, floodFailed, parcelsFailed, bldgFailed, widthsFailed, areasFailed, imagery, imageryCredit, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
     tinted: false,
   };
   site.meta = buildMeta(site);
@@ -660,6 +664,9 @@ const LAYERS = [
   { key: 'roads', label: 'Roads', swatch: '#ffe066' },
   { key: 'roadWidths', label: 'Road widths · ArDOT', swatch: '#fde68a' },
   { key: 'roadEdges', label: 'Road edges · ArDOT', swatch: '#facc15' },
+  { key: 'streetAreas', label: 'Street surfaces · OSM', swatch: '#f59e0b' },
+  { key: 'parking', label: 'Parking lots · OSM', swatch: '#cbd5e1' },
+  { key: 'sidewalks', label: 'Sidewalks · OSM', swatch: '#f8fafc' },
   { key: 'parcels', label: 'Parcels', swatch: '#ff4fd8' },
   { key: 'flood', label: 'Flood zones', swatch: '#3b82f6' },
   { key: 'labels', label: 'Labels', swatch: '#ffffff', note: 'preview · PNG · DXF' },
@@ -667,7 +674,7 @@ const LAYERS = [
   { key: 'points', label: 'Grid points', swatch: '#7bd88f', note: 'DXF only' },
 ];
 const visibility = (() => {
-  const v = { contours: true, buildings: true, bldgMs: false, bldgOsm: false, roads: true, roadWidths: true, roadEdges: true, imageFrame: true, parcels: true, flood: true, labels: true, points: false };
+  const v = { contours: true, buildings: true, bldgMs: false, bldgOsm: false, roads: true, roadWidths: true, roadEdges: true, streetAreas: true, parking: true, sidewalks: true, imageFrame: true, parcels: true, flood: true, labels: true, points: false };
   try { Object.assign(v, JSON.parse(localStorage.getItem('c2r-layers') || '{}')); } catch { /* ignore */ }
   return v;
 })();
@@ -705,6 +712,9 @@ function updateLayerCounts(site) {
     bldgOsm: c ? (site.bldgFailed?.bldgOsm ? 'failed' : String((c.bldgOsm || []).length)) : '',
     roads: c ? String(c.roads.length) : '',
     roadWidths: c ? (!site.ctxInclude.p ? 'AR only' : site.widthsFailed ? 'failed' : String((c.widths || []).length)) : '',
+    streetAreas: c ? (site.areasFailed ? 'failed' : String((c.streetAreas || []).length)) : '',
+    parking: c ? (site.areasFailed ? 'failed' : String((c.parking || []).length)) : '',
+    sidewalks: c ? (site.areasFailed ? 'failed' : String((c.sidewalks || []).length)) : '',
     roadEdges: c ? (!site.ctxInclude.p ? 'AR only' : site.widthsFailed ? 'failed' : String((c.widths || []).length)) : '',
     parcels: c ? (!site.ctxInclude.p ? 'AR only' : site.parcelsFailed ? 'failed' : String(c.parcels.length)) : '',
     flood: c ? (site.floodFailed ? 'failed' : c.floodZones.length ? String(c.floodZones.length) : 'none') : '',
@@ -727,7 +737,7 @@ function drawContoursOnMap(site) {
   const p = projector(site.zone);
   const renderer = L.canvas({ padding: 0.3 });
   const ll = ([x, y]) => { const [lon, lat] = p.inv([x, y]); return [lat, lon]; };
-  const groups = { contours: L.layerGroup(), roads: L.layerGroup(), roadWidths: L.layerGroup(), roadEdges: L.layerGroup(), parcels: L.layerGroup(), flood: L.layerGroup() };
+  const groups = { contours: L.layerGroup(), roads: L.layerGroup(), roadWidths: L.layerGroup(), roadEdges: L.layerGroup(), streetAreas: L.layerGroup(), parking: L.layerGroup(), sidewalks: L.layerGroup(), parcels: L.layerGroup(), flood: L.layerGroup() };
   for (const src of BUILDING_SOURCES) groups[src.key] = L.layerGroup();
   for (const c of site.contours) {
     const major = isMajor(c.level, site.interval);
@@ -749,6 +759,9 @@ function drawContoursOnMap(site) {
       L.polyline(r.center.map(ll), { renderer, color: r.kind === 'road' ? '#ffe066' : '#9be7ff', weight: r.kind === 'road' ? 2 : 1.2, dashArray: r.kind === 'road' ? '10 6' : '3 4', interactive: false }).addTo(groups.roads);
       for (const e of r.edges) L.polyline(e.map(ll), { renderer, color: '#ffe066', weight: 1.4, interactive: false }).addTo(groups.roads);
     }
+    for (const a of site.context.parking || []) L.polygon(a.rings.map(r => r.map(ll)), { renderer, color: '#cbd5e1', weight: 1.4, fillColor: '#cbd5e1', fillOpacity: 0.15, interactive: false }).addTo(groups.parking);
+    for (const a of site.context.streetAreas || []) L.polygon(a.rings.map(r => r.map(ll)), { renderer, color: '#f59e0b', weight: 1.4, fillColor: '#f59e0b', fillOpacity: 0.1, interactive: false }).addTo(groups.streetAreas);
+    for (const sw of site.context.sidewalks || []) L.polyline(sw.line.map(ll), { renderer, color: '#f8fafc', weight: 1.2, opacity: 0.9, interactive: false }).addTo(groups.sidewalks);
     for (const w of site.context.widths || []) {
       // Recorded widths: ArDOT's own centerline, hover for the record.
       L.polyline(w.center.map(ll), { color: '#fde68a', weight: 5, opacity: 0.35, interactive: true }).bindTooltip(`${w.text}<br><small>${w.source}</small>`, { sticky: true }).addTo(groups.roadWidths);
@@ -1003,6 +1016,14 @@ function addContext(d, site, v, labels) {
       for (const e of w.surfaceEdges) d.polyline3d('C-ROAD-PAVE-ARDOT', e.map(([x, y, z]) => P(x, y, z)));
     }
   }
+  const osmLines = (on, layer, color, list, get) => {
+    if (!on || !list?.length) return;
+    d.layer(layer, color);
+    for (const it of list) for (const l of get(it)) d.polyline3d(layer, l.map(([x, y, z]) => P(x, y, z)));
+  };
+  osmLines(v.parking, 'C-PRKG-OTLN', 8, site.context.parking, a => a.lines);
+  osmLines(v.streetAreas, 'C-ROAD-AREA-OSM', 40, site.context.streetAreas, a => a.lines);
+  osmLines(v.sidewalks, 'C-WALK-SDWK', 254, site.context.sidewalks, sw => [sw.line]);
   if (v.roads) d.layer('C-ROAD-CNTR', 2).layer('C-WALK-CNTR', 5);
   for (const r of v.roads ? site.context.roads : []) {
     const layer = r.kind === 'road' ? 'C-ROAD-CNTR' : 'C-WALK-CNTR';
@@ -1143,7 +1164,7 @@ function makeReadme(site, v = vis()) {
     '',
     `Map imagery: ${site.imagery ? site.imageryCredit : 'none (hillshade shown)'}.`,
     '');
-  if (site.context && (BUILDING_SOURCES.some(b => v[b.key]) || v.roads || v.roadWidths || v.roadEdges || v.parcels || v.flood)) {
+  if (site.context && (BUILDING_SOURCES.some(b => v[b.key]) || v.roads || v.parking || v.streetAreas || v.sidewalks || v.roadWidths || v.roadEdges || v.parcels || v.flood)) {
     const bs = site.context.buildings;
     const dates = [...new Set(bs.map(b => b.imageDate).filter(Boolean))].sort();
     const roads = site.context.roads.filter(r => r.kind === 'road');
@@ -1171,6 +1192,11 @@ function makeReadme(site, v = vis()) {
       L_(`Roads:                ${roads.length} segments, ${site.context.roads.length - roads.length} paths, from ${site.roadsSource === 'tiger' ? 'US Census TIGER/Line (public domain)' : 'OpenStreetMap (© OpenStreetMap contributors, ODbL), via Esri\'s hosted OSM North America layer'}`,
         '                      CENTERLINES ONLY. None of these sources publish pavement edges, so no edge lines are drawn;',
         '                      city/county GIS or a survey may have edge-of-pavement data. Bridges are draped on the ground.');
+    }
+    if (v.parking || v.streetAreas || v.sidewalks) {
+      L_(`OSM areas:            ${site.areasFailed ? 'NOT INCLUDED — Overpass did not respond; regenerate to retry' : `${(site.context.parking || []).length} parking lots, ${(site.context.streetAreas || []).length} street-surface areas, ${(site.context.sidewalks || []).length} sidewalk lines`}`,
+        '                      from OpenStreetMap (© OpenStreetMap contributors, ODbL), hand-mapped; coverage varies by town.',
+        '                      Layers: C-PRKG-OTLN parking outlines, C-ROAD-AREA-OSM street surfaces, C-WALK-SDWK sidewalks (draped).');
     }
     if ((v.roadWidths || v.roadEdges) && site.ctxInclude.p) {
       const ws = site.context.widths || [];
@@ -1323,6 +1349,12 @@ function buildSnapTargets() {
   };
   for (const src of BUILDING_SOURCES) if (v[src.key]) for (const b of site.context[src.key] || []) addRing(b.ring, src.label);
   if (v.parcels) for (const pc of site.context.parcels || []) for (const r of pc.rings) addRing(r, `Parcel ${pc.id || ''}`.trim());
+  if (v.parking) for (const a of site.context.parking || []) for (const r of a.rings) addRing(r, 'Parking lot (OSM)');
+  if (v.streetAreas) for (const a of site.context.streetAreas || []) for (const r of a.rings) addRing(r, 'Street surface (OSM)');
+  if (v.sidewalks) for (const sw of site.context.sidewalks || []) {
+    const pts = sw.line.map(ll);
+    for (let i = 0; i + 1 < pts.length; i++) pick.segs.push({ a: pts[i], b: pts[i + 1], label: 'Sidewalk (OSM)' });
+  }
   if (v.roadEdges) for (const w of site.context.widths || []) for (const e of [...w.roadEdges, ...w.surfaceEdges]) {
     const pts = e.map(ll);
     for (let i = 0; i + 1 < pts.length; i++) pick.segs.push({ a: pts[i], b: pts[i + 1], label: `Road edge (ArDOT) — ${w.label}` });

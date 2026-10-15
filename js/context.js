@@ -675,3 +675,50 @@ export function prepareWidths(records, { fwd, box, zAt, nativePerM, ftToNative }
   }
   return out;
 }
+
+// ---------- OpenStreetMap areas: parking lots, street surface areas, sidewalks (via Overpass) ----------
+const OVERPASS_GET = ['https://overpass.kumi.systems/api/interpreter', 'https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
+
+/** Returns { parking:[{rings,type}], streetAreas:[{rings,kind}], sidewalks:[{coords}] } in lon/lat. */
+export async function fetchOsmAreas([w, s, e, n]) {
+  const bb = `${s},${w},${n},${e}`;
+  const q = `[out:json][timeout:25];(way["amenity"="parking"](${bb});way["area:highway"](${bb});way["highway"]["area"="yes"](${bb});way["footway"="sidewalk"](${bb}););out tags geom;`;
+  const ac = new AbortController();
+  let j;
+  try {
+    j = await Promise.any(OVERPASS_GET.map(async url => {
+      const r = await fetch(`${url}?data=${encodeURIComponent(q)}`, { signal: AbortSignal.any ? AbortSignal.any([ac.signal, AbortSignal.timeout(25000)]) : ac.signal });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    }));
+  } catch {
+    throw new Error('OpenStreetMap parking / sidewalk data unavailable (Overpass servers busy) — generate again to retry.');
+  } finally { ac.abort(); }
+  const out = { parking: [], streetAreas: [], sidewalks: [] };
+  for (const el of j.elements || []) {
+    if (el.type !== 'way' || !el.geometry?.length) continue;
+    const coords = el.geometry.map(g => [g.lon, g.lat]);
+    const t = el.tags || {};
+    if (t.amenity === 'parking') out.parking.push({ rings: [coords], type: t.parking || '' });
+    else if (t['area:highway'] || (t.highway && t.area === 'yes')) out.streetAreas.push({ rings: [coords], kind: t['area:highway'] || t.highway });
+    else if (t.footway === 'sidewalk') out.sidewalks.push({ coords });
+  }
+  return out;
+}
+
+/** Project / clip / drape OSM areas. Rings are kept whole (native) for fills; outlines are clipped and draped. */
+export function prepareOsmAreas(data, { fwd, box, zAt, nativePerM }) {
+  const step = 1.5 * nativePerM;
+  const drape = pts => pts.map(([x, y]) => [x, y, zAt(x, y)]).filter(q => Number.isFinite(q[2]));
+  const inBox = ([x, y]) => x >= box.xmin && x <= box.xmax && y >= box.ymin && y <= box.ymax;
+  const area = list => list.map(a => {
+    const rings = a.rings.map(r => openRing(r.map(c => fwd(c)))).filter(r => r.length > 2);
+    const lines = rings.flatMap(r => clipPolyline(densify([...r, r[0]], step), box).map(drape)).filter(l => l.length > 1);
+    return { ...a, rings, lines };
+  }).filter(a => a.lines.length || a.rings.some(r => r.some(inBox)));
+  return {
+    parking: area(data?.parking || []),
+    streetAreas: area(data?.streetAreas || []),
+    sidewalks: (data?.sidewalks || []).flatMap(sw => clipPolyline(sw.coords.map(c => fwd(c)), box).map(p => ({ line: drape(densify(p, step)) }))).filter(sw => sw.line.length > 1),
+  };
+}
