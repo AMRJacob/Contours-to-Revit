@@ -697,6 +697,9 @@ function dec(arr, scale) {
   return out;
 }
 
+/** Forget the cached index so the next read fetches the freshly published one. */
+export function ctxIndexReset() { ctxIndex = undefined; }
+
 /** Index of hosted states ({states:[{id, ext, src, built, n, mb}], tile, scale}) or null. */
 export function hostedContextIndex() {
   ctxIndex ??= gunzipJson(`${CTX_DIR}/i.bin`).catch(() => null);

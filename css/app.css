@@ -179,3 +179,12 @@ input[type="search"]:focus, select:focus { outline: 2px solid var(--accent); out
 .hosted li { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); }
 .hosted li span:last-child { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
 #step-data code { font-family: var(--mono); font-size: 11.5px; }
+
+.data-status { font-size: 12px; margin: 6px 0 8px; padding: 7px 9px; border-radius: 6px; background: var(--card); border: 1px solid var(--line); color: var(--ink-2); }
+.data-status.stale { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+.data-status.ok::before { content: "● "; color: var(--ok); }
+#update-data.attention { background: var(--accent); border-color: var(--accent); color: #fff; }
+.gh-token { margin-top: 8px; font-size: 12px; }
+.gh-token summary { cursor: pointer; color: var(--ink-3); }
+.token-row { display: flex; gap: 6px; margin-top: 6px; }
+.token-row input { flex: 1; min-width: 0; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }

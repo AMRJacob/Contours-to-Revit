@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.11.0';
-import { fetchElevation, sample } from './dem.js?v=0.11.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.11.0';
-import { Dxf } from './dxf.js?v=0.11.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.11.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.11.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.12.0';
+import { fetchElevation, sample } from './dem.js?v=0.12.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.12.0';
+import { Dxf } from './dxf.js?v=0.12.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.12.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.12.0';
 
-const VERSION = '0.11.0';
+const VERSION = '0.12.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -1478,12 +1478,98 @@ const ClearControl = L.Control.extend({
 map.addControl(new ClearControl());
 
 // ---------- Hosted map data (settings) ----------
-hostedContextIndex().then(idx => {
+async function refreshHostedList() {
+  const idx = await hostedContextIndex();
   const ul = $('hosted-states');
   if (!idx?.states?.length) { ul.innerHTML = '<li><span>No hosted data yet — the public OpenStreetMap servers are used everywhere.</span></li>'; return; }
   const title = id => id.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   ul.innerHTML = idx.states.map(st => `<li><span><strong>${escapeHtml(title(st.id))}</strong> — ${fmt(st.n.p, 0)} lots, ${fmt(st.n.w, 0)} sidewalks</span><span>OSM ${escapeHtml(st.src)} · ${st.mb} MB</span></li>`).join('');
+}
+refreshHostedList();
+
+// ---------- Data refresh status + "Update data" (GitHub Actions) ----------
+const GH = { repo: 'AMRJacob/Contours-to-Revit', wf: 'site.yml' };
+const ghPage = `https://github.com/${GH.repo}/actions/workflows/${GH.wf}`;
+const ghToken = () => { try { return localStorage.getItem('c2r-gh') || ''; } catch { return ''; } };
+async function gh(path, opts = {}) {
+  const headers = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+  const t = ghToken();
+  if (t) headers.Authorization = `Bearer ${t}`;
+  const r = await fetch(`https://api.github.com/repos/${GH.repo}${path}`, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
+  if (!r.ok && r.status !== 204) throw new Error(`GitHub ${r.status}${r.status === 401 || r.status === 403 ? ' (token missing permission?)' : ''}`);
+  return r.status === 204 ? null : r.json();
+}
+
+async function checkDataStatus() {
+  const el = $('data-status'), btn = $('update-data');
+  const problems = [];
+  let info = '';
+  try {
+    const idx = await hostedContextIndex();
+    const built = idx?.states?.[0]?.built;
+    if (built) {
+      const age = Math.floor((Date.now() - Date.parse(built)) / 864e5);
+      info = `Data built ${built} (${age === 0 ? 'today' : age === 1 ? 'yesterday' : `${age} days ago`}).`;
+      if (age > 9) problems.push(`Data is ${age} days old.`);
+    } else problems.push('No hosted data yet.');
+  } catch { /* index missing */ }
+  try {
+    const wf = await gh(`/actions/workflows/${GH.wf}`);
+    if (wf.state !== 'active') problems.push('The weekly refresh is paused (GitHub pauses it after 60 days without repository activity).');
+    const runs = await gh(`/actions/workflows/${GH.wf}/runs?per_page=1`);
+    const last = runs.workflow_runs?.[0];
+    if (last?.status && last.status !== 'completed') info += ' An update is running now.';
+    else if (last?.conclusion && last.conclusion !== 'success') problems.push(`The last update ${last.conclusion}.`);
+  } catch (err) { info += ' (Couldn\'t reach GitHub to check the refresh job.)'; }
+  el.className = 'data-status ' + (problems.length ? 'stale' : 'ok');
+  el.textContent = problems.length ? `${problems.join(' ')} ${info}` : `${info} Weekly refresh is on.`;
+  btn.classList.toggle('attention', problems.length > 0);
+}
+
+async function updateData() {
+  const btn = $('update-data'), el = $('data-status');
+  if (!ghToken()) { window.open(ghPage, '_blank', 'noopener'); el.textContent = 'Opened the job on GitHub — click "Run workflow" (and "Enable workflow" if shown). Data refreshes in about 3 minutes.'; return; }
+  btn.disabled = true;
+  try {
+    const wf = await gh(`/actions/workflows/${GH.wf}`);
+    if (wf.state !== 'active') await gh(`/actions/workflows/${GH.wf}/enable`, { method: 'PUT' });
+    const started = Date.now();
+    await gh(`/actions/workflows/${GH.wf}/dispatches`, { method: 'POST', body: JSON.stringify({ ref: 'main' }) });
+    el.className = 'data-status'; el.textContent = 'Update started on GitHub — this takes about 3 minutes…';
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 10000));
+      const runs = await gh(`/actions/workflows/${GH.wf}/runs?per_page=1&event=workflow_dispatch`);
+      const run = runs.workflow_runs?.[0];
+      if (!run || Date.parse(run.created_at) < started - 60000) continue;
+      el.textContent = `Update ${run.status === 'completed' ? run.conclusion : run.status.replace('_', ' ')}…`;
+      if (run.status === 'completed') {
+        if (run.conclusion !== 'success') throw new Error(`the update ${run.conclusion} — see ${run.html_url}`);
+        await new Promise(r => setTimeout(r, 20000)); // let Pages finish publishing
+        ctxIndexReset();
+        break;
+      }
+    }
+  } catch (err) {
+    el.className = 'data-status stale'; el.textContent = `Couldn't update: ${err.message}`;
+    btn.disabled = false;
+    return;
+  }
+  btn.disabled = false;
+  await refreshHostedList();
+  await checkDataStatus();
+}
+
+$('update-data').addEventListener('click', updateData);
+$('gh-token').value = ghToken() ? '••••••••' : '';
+$('gh-save').addEventListener('click', () => {
+  const v = $('gh-token').value.trim();
+  if (!v || v.startsWith('•')) return;
+  try { localStorage.setItem('c2r-gh', v); } catch { /* ignore */ }
+  $('gh-token').value = '••••••••';
+  checkDataStatus();
 });
+$('gh-forget').addEventListener('click', () => { try { localStorage.removeItem('c2r-gh'); } catch { /* ignore */ } $('gh-token').value = ''; checkDataStatus(); });
+checkDataStatus();
 
 // Restore the last site boundary and picked origin (map view is restored when the map is created).
 state.origin = session.get('origin');

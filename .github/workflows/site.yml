@@ -34,7 +34,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: _ctx
-          key: ctx-${{ steps.wk.outputs.key }}-${{ hashFiles('tools/build_data.py', 'tools/build_index.py', 'context-states.txt') }}
+          # Manual runs ("Update data") always rebuild from a fresh download.
+          key: ctx-${{ steps.wk.outputs.key }}-${{ hashFiles('tools/build_data.py', 'tools/build_index.py', 'context-states.txt') }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'wk' }}
 
       - name: Build context tiles for each state in context-states.txt
         if: steps.cache.outputs.cache-hit != 'true'
