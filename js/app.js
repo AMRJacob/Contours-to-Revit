@@ -1,14 +1,14 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.17.1';
-import { fetchElevation, sample } from './dem.js?v=0.17.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.17.1';
-import { Dxf } from './dxf.js?v=0.17.1';
-import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32, smoothClosed } from './design.js?v=0.17.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.17.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.17.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.17.2';
+import { fetchElevation, sample } from './dem.js?v=0.17.2';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.17.2';
+import { Dxf } from './dxf.js?v=0.17.2';
+import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32, smoothClosed } from './design.js?v=0.17.2';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.17.2';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.17.2';
 
-const VERSION = '0.17.1';
+const VERSION = '0.17.2';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -2153,19 +2153,36 @@ function dzPopBuild() {
   const u = dz.site.units;
   const num = (k, label) => `<label>${label}<input type="number" step="0.01" data-k="${k}" inputmode="decimal"></label>`;
   let body = '';
+  const ratioSel = `<label>Side slope<select data-k="ratio"><option value="2">2:1</option><option value="3">3:1</option><option value="4">4:1</option></select></label>`;
   if (f.type === 'wall') {
     body = `<div class="pop-grid"><span></span><b>A start</b><b>B end</b>
       <span>TW</span><input type="number" step="0.01" data-k="tw0" inputmode="decimal"><input type="number" step="0.01" data-k="tw1" inputmode="decimal">
       <span>BW</span><input type="number" step="0.01" data-k="bw0" inputmode="decimal"><input type="number" step="0.01" data-k="bw1" inputmode="decimal"></div>
-      <div class="pop-row">${num('thick', `Thickness (${u})`)}</div>`;
+      <div class="pop-row">${num('thick', `Thick (${u})`)}${num('shelf', `Level behind`)}${num('front', `Level front`)}</div>
+      <div class="pop-row">${ratioSel}<label>High side<button type="button" class="pop-btn" data-act="flip">⇄ Flip</button></label></div>`;
   } else if (f.type === 'pad') {
-    body = `<div class="pop-row">${num('elev', `Elevation (${u})`)}<label>Side slope<select data-k="ratio"><option value="2">2:1</option><option value="3">3:1</option><option value="4">4:1</option></select></label></div>`;
+    body = `<div class="pop-row">${num('elev', `Elevation (${u})`)}${ratioSel}</div>
+      ${f.geom.shape === 'poly' ? '<label class="pop-check"><input type="checkbox" data-k="smooth"> Curved through the points</label>' : ''}`;
   } else {
     body = `<div class="pop-row">${num('za', `Start A (${u})`)}${num('zb', `End B (${u})`)}</div><div class="pop-row">${num('pct', 'Slope %')}${num('width', `Width (${u})`)}</div>`;
   }
-  dzPop.innerHTML = `<div class="pop-head"><span>${FEATURE_NAMES[f.type]}</span><button type="button" class="pop-x" title="Close (Esc)">×</button></div>${body}`;
+  dzPop.innerHTML = `<div class="pop-head"><span>${FEATURE_NAMES[f.type]}</span><button type="button" class="pop-x" title="Close (Esc)">×</button></div>${body}
+    <div class="pop-foot"><button type="button" class="pop-btn pop-del" data-act="del">Delete</button></div>`;
   dzPop.querySelector('.pop-x').addEventListener('click', dzPopClose);
+  dzPop.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
+    const ff = dz.sel && dz.design.feature(dz.sel);
+    if (!ff) return;
+    if (b.dataset.act === 'del') { dz.design.removeFeature(ff.id); dz.sel = null; dzApplyTool(); dzAfterChange(); dzPopBuild(); return; }
+    if (b.dataset.act === 'flip') {
+      dz.design.checkpoint();
+      const side = ff.p.side === 'right' ? 'left' : 'right';
+      dz.params.wside = side;
+      dz.design.updateFeature(ff.id, { p: { side } });
+      dzAfterChange(); dzSyncUi();
+    }
+  }));
   dzPop.querySelectorAll('[data-k]').forEach(el => {
+    if (el.type === 'checkbox') { el.addEventListener('change', () => dzPopInput(el.dataset.k, el.checked)); return; }
     el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => dzPopInput(el.dataset.k, el.value));
     el.addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
@@ -2185,11 +2202,12 @@ function dzPopRefresh() {
   if (!f || dzPop.hidden) return;
   const o = f.out || {};
   const v = {};
-  if (f.type === 'wall' && o.ends) Object.assign(v, { tw0: o.ends[0].tw, tw1: o.ends[2].tw, bw0: o.ends[0].bw, bw1: o.ends[2].bw, thick: f.p.thick });
-  if (f.type === 'pad') Object.assign(v, { elev: o.elev, ratio: f.p.ratio });
+  if (f.type === 'wall' && o.ends) Object.assign(v, { tw0: o.ends[0].tw, tw1: o.ends[2].tw, bw0: o.ends[0].bw, bw1: o.ends[2].bw, thick: f.p.thick, shelf: f.p.shelf, front: f.p.front ?? 5, ratio: f.p.ratio });
+  if (f.type === 'pad') Object.assign(v, { elev: o.elev, ratio: f.p.ratio, smooth: !!f.geom.smooth });
   if (f.type === 'slope' && o.zA != null) Object.assign(v, { za: o.zA, zb: o.zB, pct: f.p.slope * 100, width: f.p.width });
   dzPop.querySelectorAll('[data-k]').forEach(el => {
     const val = v[el.dataset.k];
+    if (el.type === 'checkbox') { el.checked = !!val; return; }
     if (document.activeElement === el || val == null || !Number.isFinite(+val)) return;
     el.value = el.tagName === 'SELECT' ? String(val) : (+val).toFixed(2);
   });
@@ -2213,6 +2231,13 @@ function dzPopPlace() {
 function dzPopInput(k, raw) {
   const f = dz.sel && dz.design?.feature(dz.sel);
   if (!f) return;
+  if (k === 'smooth') {
+    dz.design.checkpoint();
+    dz.params.psmooth = !!raw;
+    dz.design.updateFeature(f.id, { geom: { smooth: !!raw } });
+    dzAfterChange(); dzSyncUi();
+    return;
+  }
   const val = Number(raw);
   if (raw === '' || !Number.isFinite(val)) return;
   if (!dz.popCheckpoint) { dz.design.checkpoint(); dz.popCheckpoint = true; }
@@ -2220,6 +2245,8 @@ function dzPopInput(k, raw) {
   let patch = null;
   if (f.type === 'wall') {
     if (k === 'thick') patch = { thick: Math.max(0.1, val) };
+    else if (k === 'shelf' || k === 'front') { patch = { [k]: Math.max(0, val) }; dz.params[k] = patch[k]; }
+    else if (k === 'ratio') { patch = { ratio: val }; dz.params.ratio = val; }
     else {
       // Any end value switches the wall to set elevations, keeping the others where they stand now.
       const en = o.ends || [{}, {}, {}];
@@ -2666,6 +2693,15 @@ function dzHit(cp) {
   return null;
 }
 
+// Right-click a feature (any tool, pad interiors too): select it and open its editor.
+map.getContainer().addEventListener('contextmenu', e => {
+  if (dz.mode !== 'design' || !dz.design || !dz.site) return;
+  e.preventDefault();
+  if (dz.poly) { dz.poly.pts.pop(); if (!dz.poly.pts.length) dz.poly = null; dzDraw(); return; }
+  const hit = dz.design.features.length ? dzHit(map.mouseEventToContainerPoint(e)) : null;
+  if (hit) { dzSelect(hit.f.id); setTimeout(() => dzPop.querySelector('input')?.focus(), 0); }
+});
+
 // Ctrl + wheel: brush size (brush tools) or corridor width (Slope tool), instead of zooming.
 map.getContainer().addEventListener('wheel', e => {
   if (dz.mode !== 'design' || !e.ctrlKey || !dz.design || !(BRUSHES.includes(dz.tool) || dz.tool === 'slope')) return;
@@ -2704,7 +2740,7 @@ map.on('mousedown', e => {
   if (dz.poly) {
     const M = dzAffine(dz.site), [fx, fy] = toScreen(M, ...dz.poly.pts[0]);
     if (dz.poly.pts.length >= 3 && Math.hypot(fx - e.containerPoint.x, fy - e.containerPoint.y) < 10) dzFinishPoly();
-    else dz.poly.pts.push(xy);
+    else dz.poly.pts.push(e.originalEvent.shiftKey ? orthoSnap(dz.poly.pts.at(-1), xy) : xy);
     dzDraw();
     return;
   }
@@ -2734,10 +2770,26 @@ map.on('mousedown', e => {
   dzRefresh();
 });
 
-/** Move the feature (or one of its handles) being dragged so the grabbed point follows xy. */
-function dzEditMove(xy) {
+/** Shift held: lock the direction from `from` to `to` to the project axes (project north if set, else grid). */
+function orthoSnap(from, to) {
+  const r = ($('local-origin').checked ? align.rot : 0) * Math.PI / 180;
+  const ex = [Math.cos(r), -Math.sin(r)], ey = [Math.sin(r), Math.cos(r)];
+  const dx = to[0] - from[0], dy = to[1] - from[1];
+  let u = dx * ex[0] + dy * ex[1], v = dx * ey[0] + dy * ey[1];
+  if (Math.abs(u) >= Math.abs(v)) v = 0; else u = 0;
+  return [from[0] + u * ex[0] + v * ey[0], from[1] + u * ex[1] + v * ey[1]];
+}
+
+/** Move the feature (or one of its handles) being dragged so the grabbed point follows xy (Shift = orthogonal). */
+function dzEditMove(xy, shift = false) {
   const ed = dz.edit, f = dz.design.feature(ed.id);
   if (!f) return;
+  if (shift) {
+    const g = ed.geom0;
+    if (ed.handle < 0) xy = orthoSnap(ed.from, xy);
+    else if (f.type !== 'pad') xy = orthoSnap(ed.handle === 0 ? g.b : g.a, xy);
+    else if (g.shape === 'poly') xy = orthoSnap(g.pts[(ed.handle - 1 + g.pts.length) % g.pts.length], xy);
+  }
   const dx = xy[0] - ed.from[0], dy = xy[1] - ed.from[1];
   if (!ed.moved && Math.hypot(dx, dy) < 1e-9) return;
   if (!ed.moved) { dz.design.checkpoint(); ed.moved = true; }
@@ -2761,10 +2813,11 @@ function dzEditMove(xy) {
 map.on('mousemove', e => {
   if (dz.mode !== 'design' || !dz.design || dz.pan) return;
   const xy = dzNative(e);
-  dz.cursor = xy;
+  const shift = e.originalEvent?.shiftKey;
+  dz.cursor = dz.poly && shift ? orthoSnap(dz.poly.pts.at(-1), xy) : xy;
   if (dz.stroking) dzStrokeTo(xy);
-  else if (dz.drawing) dz.drawing.b = xy;
-  else if (dz.edit) dzEditMove(xy);
+  else if (dz.drawing) dz.drawing.b = shift && dz.drawing.kind !== 'pad' ? orthoSnap(dz.drawing.a, xy) : xy;
+  else if (dz.edit) dzEditMove(xy, shift);
   else if (dz.design.features.length) {
     const hit = dzHit(e.containerPoint);
     map.getContainer().classList.toggle('over-handle', !!hit && hit.handle >= 0);
@@ -2795,7 +2848,10 @@ document.addEventListener('mouseup', e => {
   if ((dz.drawing || dz.edit) && dz.site) {
     try {
       const xy = dzNative(e);
-      if (xy.every(Number.isFinite)) { if (dz.drawing) dz.drawing.b = xy; else dzEditMove(xy); }
+      if (xy.every(Number.isFinite)) {
+        if (dz.drawing) dz.drawing.b = e.shiftKey && dz.drawing.kind !== 'pad' ? orthoSnap(dz.drawing.a, xy) : xy;
+        else dzEditMove(xy, e.shiftKey);
+      }
     } catch { /* keep the last mouse-move position */ }
   }
   if (dz.stroking) {
