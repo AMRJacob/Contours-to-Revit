@@ -163,3 +163,12 @@ input[type="search"]:focus, select:focus { outline: 2px solid var(--accent); out
 
 .clear-control a { width: auto !important; padding: 0 9px; font: 600 12px/30px var(--sans); color: #1c2226; }
 .clear-control a:hover { color: #b3261e; }
+
+.underlay { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
+#underlay-thumb { width: 120px; height: 90px; border-radius: 4px; background: var(--line); flex: none; object-fit: cover; }
+.underlay-ctl { flex: 1; min-width: 0; font-size: 12px; color: var(--ink-2); }
+.ul-title { font-weight: 600; color: var(--ink); margin-bottom: 2px; }
+.underlay-ctl label { display: grid; grid-template-columns: 58px 1fr 34px; align-items: center; gap: 6px; }
+.underlay-ctl input[type=range] { width: 100%; accent-color: var(--accent); }
+.underlay-ctl output { font-family: var(--mono); font-size: 11px; text-align: right; }
+.ul-reset { all: unset; cursor: pointer; font-size: 11px; color: var(--ink-3); text-decoration: underline; }

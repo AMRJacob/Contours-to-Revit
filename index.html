@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.9.0">
+  <link rel="stylesheet" href="css/app.css?v=0.9.1">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -108,7 +108,16 @@
           <button class="dl" data-out="dxf"><span class="dl-name">DXF</span><span class="dl-desc">All layers shown on the map, one file, each on its own CAD layer</span></button>
           <p class="hint dl-note" id="dxf-units-note">In Revit, set <strong>Import units: Feet</strong> when linking the DXF (don't use Auto-Detect).</p>
           <button class="dl" data-out="png"><span class="dl-name">PNG</span><span class="dl-desc">Printable map of the shown layers, north arrow &amp; scale</span></button>
-          <button class="dl" data-out="jpg"><span class="dl-name">Aerial JPG</span><span class="dl-desc">Clean photo of the exact site extent + world file, for Revit Insert &gt; Image</span></button>
+          <button class="dl" data-out="jpg"><span class="dl-name">Aerial JPG</span><span class="dl-desc">Original + underlay version of the exact site extent, with world files, for Revit Insert &gt; Image</span></button>
+          <div class="underlay">
+            <canvas id="underlay-thumb" width="120" height="90" aria-label="Underlay preview"></canvas>
+            <div class="underlay-ctl">
+              <div class="ul-title">Underlay image</div>
+              <label>Color <input type="range" id="ul-sat" min="0" max="100" value="50"><output id="ul-sat-v">50%</output></label>
+              <label>Washout <input type="range" id="ul-wash" min="0" max="80" value="45"><output id="ul-wash-v">45%</output></label>
+              <button type="button" class="ul-reset" id="ul-reset">Reset</button>
+            </div>
+          </div>
           <button class="dl" data-out="readme"><span class="dl-name">README</span><span class="dl-desc">Sources, datum, zone, units, disclaimer</span></button>
           <button class="dl dl-all" data-out="zip"><span class="dl-name">Download all (.zip)</span></button>
         </div>
@@ -143,6 +152,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.9.0"></script>
+  <script type="module" src="js/app.js?v=0.9.1"></script>
 </body>
 </html>

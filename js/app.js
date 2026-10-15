@@ -1,13 +1,13 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.9.0';
-import { fetchElevation, sample } from './dem.js?v=0.9.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.9.0';
-import { Dxf } from './dxf.js?v=0.9.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.9.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.9.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.9.1';
+import { fetchElevation, sample } from './dem.js?v=0.9.1';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.9.1';
+import { Dxf } from './dxf.js?v=0.9.1';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.9.1';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.9.1';
 
-const VERSION = '0.9.0';
+const VERSION = '0.9.1';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -434,6 +434,7 @@ async function generate() {
   showResults(site);
   drawContoursOnMap(site);
   applyOrigin();
+  drawUnderlayThumb();
   renderPreview();
   const missing = pStats.missing;
   setStatus(missing
@@ -502,6 +503,68 @@ async function fetchAerialExport(site) {
   }
   throw new Error('aerial imagery service did not respond');
 }
+
+// ---------- Underlay processing (desaturate + wash toward white) ----------
+const UL_DEFAULT = { sat: 50, wash: 45 };
+const ulSettings = (() => { try { return { ...UL_DEFAULT, ...JSON.parse(localStorage.getItem('c2r-underlay') || '{}') }; } catch { return { ...UL_DEFAULT }; } })();
+
+/** In-place: keep `sat` of the colour (0..1 around luminance), then blend `wash` (0..1) toward white. */
+function underlayPixels(data, sat, wash) {
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    const y = 0.299 * r + 0.587 * g + 0.114 * b;
+    data[i] = 255 - (255 - (y + (r - y) * sat)) * (1 - wash);
+    data[i + 1] = 255 - (255 - (y + (g - y) * sat)) * (1 - wash);
+    data[i + 2] = 255 - (255 - (y + (b - y) * sat)) * (1 - wash);
+  }
+}
+
+async function makeUnderlayBlob(blob) {
+  const bmp = await createImageBitmap(blob);
+  const c = document.createElement('canvas');
+  c.width = bmp.width; c.height = bmp.height;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(bmp, 0, 0);
+  bmp.close?.();
+  const img = ctx.getImageData(0, 0, c.width, c.height);
+  underlayPixels(img.data, ulSettings.sat / 100, ulSettings.wash / 100);
+  ctx.putImageData(img, 0, 0);
+  return new Promise(res => c.toBlob(res, 'image/jpeg', 0.9));
+}
+
+function drawUnderlayThumb() {
+  $('ul-sat-v').textContent = `${ulSettings.sat}%`;
+  $('ul-wash-v').textContent = `${ulSettings.wash}%`;
+  const c = $('underlay-thumb'), ctx = c.getContext('2d');
+  const src = state.result?.imagery;
+  ctx.clearRect(0, 0, c.width, c.height);
+  if (!src) return;
+  // Fit the site image into the thumbnail, then draw a few sample lines so readability can be judged.
+  const k = Math.max(c.width / src.width, c.height / src.height);
+  ctx.drawImage(src, (c.width - src.width * k) / 2, (c.height - src.height * k) / 2, src.width * k, src.height * k);
+  const img = ctx.getImageData(0, 0, c.width, c.height);
+  underlayPixels(img.data, ulSettings.sat / 100, ulSettings.wash / 100);
+  ctx.putImageData(img, 0, 0);
+  ctx.strokeStyle = '#111'; ctx.lineWidth = 1;
+  ctx.strokeRect(30, 22, 50, 34);
+  ctx.beginPath(); ctx.moveTo(8, 75); ctx.bezierCurveTo(40, 60, 70, 85, 112, 66); ctx.stroke();
+  ctx.fillStyle = '#111'; ctx.font = '600 9px system-ui, sans-serif'; ctx.fillText('BLDG A', 38, 43);
+}
+
+for (const [id, key] of [['ul-sat', 'sat'], ['ul-wash', 'wash']]) {
+  $(id).value = ulSettings[key];
+  $(id).addEventListener('input', e => {
+    ulSettings[key] = Number(e.target.value);
+    try { localStorage.setItem('c2r-underlay', JSON.stringify(ulSettings)); } catch { /* ignore */ }
+    drawUnderlayThumb();
+  });
+}
+$('ul-reset').addEventListener('click', () => {
+  Object.assign(ulSettings, UL_DEFAULT);
+  $('ul-sat').value = ulSettings.sat; $('ul-wash').value = ulSettings.wash;
+  try { localStorage.removeItem('c2r-underlay'); } catch { /* ignore */ }
+  drawUnderlayThumb();
+});
 
 /** Image extents in output coordinates (same frame as the CSV/DXF, after any local origin). */
 function aerialExtent(site) {
@@ -1065,6 +1128,7 @@ function makeReadme(site, v = vis()) {
       return [
         '*_aerial.jpg     Clean aerial photo of the site box, grid-north up, no linework' + (img ? ` (${img.w} x ${img.h} px, ${img.ftPerPx.toFixed(2)} ft/px; ${img.credit})` : '') + '.',
         '*_aerial.jgw     World file: places the JPG automatically in AutoCAD / Civil 3D / GIS (same coordinates as the DXF).',
+        `*_aerial_underlay.jpg / .jgw   Same image processed as a drawing underlay: ${ulSettings.sat}% colour, ${ulSettings.wash}% washed toward white.`,
         `                 Image extent: ${e.w.toFixed(3)} x ${e.h.toFixed(3)} ${uu}`,
         `                 Lower-left corner: X ${e.x0.toFixed(3)}, Y ${e.y0.toFixed(3)}   Upper-right: X ${e.x1.toFixed(3)}, Y ${e.y1.toFixed(3)}`,
         '                 REVIT (Insert > Image does not read world files):',
@@ -1148,6 +1212,8 @@ const MAKERS = {
   readme: (s, v) => ({ name: `${baseName(s)}_README.txt`, data: makeReadme(s, v), type: 'text/plain' }),
   jpg: async (s, v) => { const a = await fetchAerialExport(s); return { name: `${baseName(s)}_aerial.jpg`, data: a.blob, type: 'image/jpeg' }; },
   jgw: async (s, v) => { const a = await fetchAerialExport(s); return { name: `${baseName(s)}_aerial.jgw`, data: makeWorldFile(s, a), type: 'text/plain' }; },
+  ulJpg: async (s, v) => { const a = await fetchAerialExport(s); return { name: `${baseName(s)}_aerial_underlay.jpg`, data: await makeUnderlayBlob(a.blob), type: 'image/jpeg' }; },
+  ulJgw: async (s, v) => { const a = await fetchAerialExport(s); return { name: `${baseName(s)}_aerial_underlay.jgw`, data: makeWorldFile(s, a), type: 'text/plain' }; },
 };
 
 function saveBlob(name, data, type) {
@@ -1172,7 +1238,7 @@ document.querySelectorAll('.dl').forEach(b => b.addEventListener('click', async 
     if (kind === 'zip') {
       const zip = new JSZip();
       const folder = zip.folder(baseName(site));
-      for (const k of ['csv', 'dxf', 'png', 'jpg', 'jgw', 'readme']) {
+      for (const k of ['csv', 'dxf', 'png', 'jpg', 'jgw', 'ulJpg', 'ulJgw', 'readme']) {
         const f = await MAKERS[k](site, v);
         if (f) folder.file(f.name, f.data);
       }
@@ -1181,7 +1247,11 @@ document.querySelectorAll('.dl').forEach(b => b.addEventListener('click', async 
       const f = await MAKERS[kind](site, v);
       if (!f) throw new Error('nothing to export');
       saveBlob(f.name, f.data, f.type);
-      if (kind === 'jpg') { const wf = await MAKERS.jgw(site, v); setTimeout(() => saveBlob(wf.name, wf.data, wf.type), 400); }
+      if (kind === 'jpg') {
+        // Also deliver the world file and the underlay version (with its own world file).
+        const extra = [await MAKERS.jgw(site, v), await MAKERS.ulJpg(site, v), await MAKERS.ulJgw(site, v)];
+        extra.forEach((x, i) => setTimeout(() => saveBlob(x.name, x.data, x.type), 400 * (i + 1)));
+      }
     }
     setStatus(`Downloaded ${label}.`);
   } catch (err) {
