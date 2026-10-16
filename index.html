@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.21.3">
+  <link rel="stylesheet" href="css/app.css?v=0.21.4">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -208,28 +208,6 @@
         </div>
       </details>
 
-      <details class="step existing-only" id="step-data">
-        <summary><span class="num">⚙</span><span class="st-title">Hosted map data</span><span class="st-sum"></span></summary>
-        <div class="step-body">
-          <p class="hint">Parking lots, sidewalks and street surfaces come from OpenStreetMap data this site hosts for the states below (refreshed weekly). Elsewhere the app asks the public OpenStreetMap servers, which can be busy.</p>
-          <ul id="hosted-states" class="hosted"><li>Loading…</li></ul>
-          <div class="admin-only" hidden>
-          <div class="data-status" id="data-status">Checking data status…</div>
-          <button type="button" class="btn btn-block" id="update-data">Update data</button>
-          <details class="gh-token">
-            <summary>One-click updates on this computer (optional)</summary>
-            <p class="hint">Without this, <strong>Update data</strong> opens the job on GitHub where you click <em>Run workflow</em>. To run it straight from here, create a <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">fine-grained GitHub token</a> for the <code>AMRJacob/Contours-to-Revit</code> repository with <strong>Actions: Read and write</strong> permission, and paste it below. It's stored only in this browser.</p>
-            <div class="token-row"><input type="password" id="gh-token" placeholder="github_pat_…" autocomplete="off"><button type="button" class="btn btn-quiet" id="gh-save">Save</button><button type="button" class="btn btn-quiet" id="gh-forget">Forget</button></div>
-          </details>
-          </div>
-          <p class="hint">Data refreshes automatically every week.</p>
-          <div class="admin-only" hidden>
-            <a class="btn btn-block" id="edit-states" href="https://github.com/AMRJacob/Contours-to-Revit/edit/main/context-states.txt" target="_blank" rel="noopener">Add / remove states (GitHub)</a>
-            <p class="hint">Add a state's name (e.g. <code>oklahoma</code>, <code>new-mexico</code>) on its own line, or delete a line to free the space. Saving rebuilds the data in a few minutes.</p>
-          </div>
-        </div>
-      </details>
-
       <section class="design-only" id="design-panel">
         <div class="dz-empty" id="dz-empty">
           <p><strong>Generate the existing site first.</strong> The design starts from that surface — switch to <em>Existing site</em>, draw a boundary and click Generate.</p>
@@ -410,6 +388,39 @@
         </div>
       </section>
 
+      <details class="step" id="step-settings">
+        <summary><span class="num">⚙</span><span class="st-title">Settings</span><span class="st-sum" id="sum-settings"></span></summary>
+        <div class="step-body">
+          <h4 class="set-h">3D view</h4>
+          <div class="set-row"><label for="v3-ex">Vertical exaggeration</label><input type="range" id="v3-ex" min="1" max="5" step="0.5" value="2"><output id="v3-ex-v">2×</output></div>
+          <div class="set-row"><label for="v3-speed">Orbit / pan / zoom speed</label><input type="range" id="v3-speed" min="0.2" max="2" step="0.1" value="1"><output id="v3-speed-v">1×</output></div>
+          <h4 class="set-h">Water flow</h4>
+          <label class="check"><input type="checkbox" id="set-flow"><span>Show water flow on the map and in 3D</span></label>
+          <p class="hint">Same as the <strong>Water flow</strong> button above the map. Streaks run downhill; circles mark low spots that would pond. Uses the proposed grade in Site design.</p>
+          <details class="sub-details existing-only" id="step-data">
+          <summary>Hosted map data</summary>
+          <div>
+          <p class="hint">Parking lots, sidewalks and street surfaces come from OpenStreetMap data this site hosts for the states below (refreshed weekly). Elsewhere the app asks the public OpenStreetMap servers, which can be busy.</p>
+          <ul id="hosted-states" class="hosted"><li>Loading…</li></ul>
+          <div class="admin-only" hidden>
+          <div class="data-status" id="data-status">Checking data status…</div>
+          <button type="button" class="btn btn-block" id="update-data">Update data</button>
+          <details class="gh-token">
+            <summary>One-click updates on this computer (optional)</summary>
+            <p class="hint">Without this, <strong>Update data</strong> opens the job on GitHub where you click <em>Run workflow</em>. To run it straight from here, create a <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">fine-grained GitHub token</a> for the <code>AMRJacob/Contours-to-Revit</code> repository with <strong>Actions: Read and write</strong> permission, and paste it below. It's stored only in this browser.</p>
+            <div class="token-row"><input type="password" id="gh-token" placeholder="github_pat_…" autocomplete="off"><button type="button" class="btn btn-quiet" id="gh-save">Save</button><button type="button" class="btn btn-quiet" id="gh-forget">Forget</button></div>
+          </details>
+          </div>
+          <p class="hint">Data refreshes automatically every week.</p>
+          <div class="admin-only" hidden>
+            <a class="btn btn-block" id="edit-states" href="https://github.com/AMRJacob/Contours-to-Revit/edit/main/context-states.txt" target="_blank" rel="noopener">Add / remove states (GitHub)</a>
+            <p class="hint">Add a state's name (e.g. <code>oklahoma</code>, <code>new-mexico</code>) on its own line, or delete a line to free the space. Saving rebuilds the data in a few minutes.</p>
+          </div>
+          </div>
+          </details>
+        </div>
+      </details>
+
       <footer class="foot">
         <p><strong>Preliminary only — not survey data.</strong> Bare-earth elevations are interpolated under buildings and trees. Elevations: USGS 3DEP, NAVD88.</p>
         <p class="credits">Map imagery &copy; Esri, Maxar, Earthstar Geographics; export imagery USGS The National Map. Streets &amp; roads &copy; OpenStreetMap contributors. Buildings: FEMA/ORNL USA Structures. <a href="https://github.com/AMRJacob/Contours-to-Revit" target="_blank" rel="noopener">Source</a></p>
@@ -446,8 +457,6 @@
             <label><input type="radio" name="v3s" value="prop" checked><span>Proposed</span></label>
             <label><input type="radio" name="v3s" value="exist"><span>Existing</span></label>
           </div>
-          <label class="v3-ex">Vertical × <input type="range" id="v3-ex" min="1" max="5" step="0.5" value="2"><output id="v3-ex-v">2</output></label>
-          <label class="v3-ex" title="How fast orbit, pan and zoom move">Speed <input type="range" id="v3-speed" min="0.2" max="2" step="0.1" value="1"></label>
           <button type="button" class="btn btn-quiet v3-btn" id="v3-reset">Reset view</button>
         </div>
         <div class="v3-stage" id="v3-stage"></div>
@@ -462,6 +471,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.21.3"></script>
+  <script type="module" src="js/app.js?v=0.21.4"></script>
 </body>
 </html>
