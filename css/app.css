@@ -343,3 +343,6 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .dz-pop .pop-del:hover { border-color: #ef4444; background: #3b1414; }
 .dz-pop .pop-check { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: #b9b4aa; font-size: 12px; cursor: pointer; }
 .dz-pop .pop-check input { width: auto; accent-color: #e8913f; }
+.feat-dot.swale { background: #60a5fa; border-radius: 50% 50% 2px 2px; }
+.tool[data-tool="swale"].active { background: #2563eb; border-color: #2563eb; color: #fff; }
+#sslope-chips button.on { background: #2563eb; border-color: #2563eb; color: #fff; }

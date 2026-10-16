@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.17.2">
+  <link rel="stylesheet" href="css/app.css?v=0.18.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -223,6 +223,7 @@
                 <button type="button" class="tool" data-tool="slope" title="Grade a run at a set slope — drag from the high end to the low end"><svg viewBox="0 0 24 24"><path d="M3 7l18 10"/><path d="M15 17h6v-4" /><path d="M3 20h18" opacity=".45"/></svg><span>Slope</span></button>
                 <button type="button" class="tool" data-tool="wall" title="Retaining wall — drag along the wall line"><svg viewBox="0 0 24 24"><path d="M10 4h4v16h-4z"/><path d="M14 8h7M3 16h7" opacity=".6"/></svg><span>Wall</span></button>
                 <button type="button" class="tool" data-tool="pad" title="Building pad — drag a rectangle, then type its elevation"><svg viewBox="0 0 24 24"><path d="M6 9h12v6H6z"/><path d="M2 19l4-4M22 19l-4-4M2 5l4 4M22 5l-4 4" opacity=".6"/></svg><span>Pad</span></button>
+                <button type="button" class="tool" data-tool="swale" title="Swale — a shallow channel that carries water along a set flowline slope"><svg viewBox="0 0 24 24"><path d="M2 8c4 0 5 8 10 8s6-8 10-8"/><path d="M7 12l5 2 5-2" opacity=".6"/></svg><span>Swale</span></button>
               </div>
               <p class="hint tool-hint" id="tool-hint"></p>
               <div class="field" id="f-amount">
@@ -240,6 +241,23 @@
               <div class="field" id="f-strength" hidden>
                 <label for="dz-strength">Strength <output id="dz-strength-v">50%</output></label>
                 <input type="range" id="dz-strength" min="5" max="100" value="50">
+              </div>
+              <div class="field" id="f-path" hidden>
+                <label>Path</label>
+                <div class="seg seg-sm" role="radiogroup"><label><input type="radio" name="path" value="line" checked><span>Straight</span></label><label><input type="radio" name="path" value="poly"><span>Polyline</span></label><label><input type="radio" name="path" value="curve"><span>Curved</span></label></div>
+                <p class="hint" id="path-hint"></p>
+              </div>
+              <div id="f-swale" hidden>
+                <div class="field">
+                  <label for="dz-sslope">Flowline slope <span class="sub">downhill from where you start</span></label>
+                  <div class="align-row"><input type="number" id="dz-sslope" step="0.1" value="1" inputmode="decimal"><span class="unit">%</span></div>
+                  <div class="chips" id="sslope-chips"><button type="button" data-v="0.5">0.5%</button><button type="button" data-v="1">1% typical min.</button><button type="button" data-v="2">2%</button><button type="button" data-v="4">4%</button></div>
+                </div>
+                <div class="field-row">
+                  <div class="field"><label for="dz-swidth">Top width</label><input type="number" id="dz-swidth" step="1" min="1" value="10" inputmode="decimal"></div>
+                  <div class="field"><label for="dz-sdepth">Depth</label><input type="number" id="dz-sdepth" step="0.25" min="0.1" value="1" inputmode="decimal"></div>
+                  <div class="field"><label for="dz-sstart">Start flowline</label><input type="number" id="dz-sstart" step="0.01" placeholder="ground − depth" inputmode="decimal"></div>
+                </div>
               </div>
               <div id="f-slope" hidden>
                 <div class="field">
@@ -398,6 +416,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.17.2"></script>
+  <script type="module" src="js/app.js?v=0.18.0"></script>
 </body>
 </html>

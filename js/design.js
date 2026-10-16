@@ -13,7 +13,7 @@ export function falloff(d, soft) {
 }
 
 let nextId = 1;
-export const FEATURE_NAMES = { pad: 'Pad', wall: 'Wall', slope: 'Slope' };
+export const FEATURE_NAMES = { pad: 'Pad', wall: 'Wall', slope: 'Slope', swale: 'Swale' };
 
 export class Design {
   /** grid: {x0, y0, s, nx, ny, z} existing surface (left untouched). */
@@ -192,6 +192,7 @@ export class Design {
       try {
         f.out = f.type === 'pad' ? this._pad(D, base, f.geom, f.p)
           : f.type === 'wall' ? this._wall(D, base, baseAt, f.geom, f.p)
+          : f.type === 'swale' ? this._swale(D, base, baseAt, f.geom, f.p)
           : this._slope(D, base, baseAt, f.geom, f.p);
       } catch { f.out = null; }
     }
@@ -364,27 +365,117 @@ export class Design {
     return { ends: [at(0), at(L / 2), at(L)], len: L * p.k };
   }
 
-  /** Slope run a→b: corridor `width` wide graded to fall `slope` (rise/run) from a toward b. p: { slope, startElev, width, soft, k } */
+  /** Points of a run's centre line: { a, b } (straight) or { pts, smooth } (polyline / curve). */
+  static pathPoints(geom) {
+    if (geom.pts?.length >= 2) return geom.smooth && geom.pts.length > 2 ? smoothOpen(geom.pts, 12) : geom.pts.map(q => q.slice());
+    return [geom.a, geom.b];
+  }
+
+  /**
+   * Measure a path for nearest-point queries. Returns { pts, cum (station at each vertex), len, at(x, y) → { s, d, over } }
+   * where s = station (native, clamped to the path), d = perpendicular distance, over = distance beyond an end.
+   */
+  static measure(pts) {
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    const len = cum.at(-1) || 1e-9;
+    // Segment boxes let most segments be skipped once a close one is found.
+    const nseg = pts.length - 1, sb = new Float64Array(nseg * 4);
+    for (let i = 1; i < pts.length; i++) {
+      const [ax, ay] = pts[i - 1], [bx, by] = pts[i], o = (i - 1) * 4;
+      sb[o] = Math.min(ax, bx); sb[o + 1] = Math.min(ay, by); sb[o + 2] = Math.max(ax, bx); sb[o + 3] = Math.max(ay, by);
+    }
+    const at = (x, y) => {
+      let best = Infinity, bs = 0, bover = 0;
+      for (let i = 1; i < pts.length; i++) {
+        const o = (i - 1) * 4;
+        const ex = x < sb[o] ? sb[o] - x : x > sb[o + 2] ? x - sb[o + 2] : 0, ey = y < sb[o + 1] ? sb[o + 1] - y : y > sb[o + 3] ? y - sb[o + 3] : 0;
+        if (ex * ex + ey * ey >= best && i !== 1 && i !== pts.length - 1) continue;
+        const [ax, ay] = pts[i - 1], [bx, by] = pts[i];
+        const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+        let t = L2 ? ((x - ax) * dx + (y - ay) * dy) / L2 : 0;
+        let over = 0;
+        const L = Math.sqrt(L2);
+        if (t < 0) { if (i === 1) over = -t * L; t = 0; }
+        if (t > 1) { if (i === pts.length - 1) over = (t - 1) * L; t = 1; }
+        const d2 = (ax + t * dx - x) ** 2 + (ay + t * dy - y) ** 2;
+        if (d2 < best) { best = d2; bs = cum[i - 1] + t * L; bover = over; }
+      }
+      const d = Math.sqrt(best);
+      return { s: bs, d: bover ? Math.sqrt(Math.max(0, best - bover * bover)) : d, over: bover };
+    };
+    return { pts, cum, len, at };
+  }
+
+  /** Bounding box of points, grown by r. */
+  static bbox(pts, r) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of pts) { if (x < x0) x0 = x; if (y < y0) y0 = y; if (x > x1) x1 = x; if (y > y1) y1 = y; }
+    return [x0 - r, y0 - r, x1 + r, y1 + r];
+  }
+
+  /**
+   * Slope run along a path (straight, polyline or curve): corridor `width` wide graded to fall `slope` (rise/run)
+   * from the start, measured along the path. p: { slope, startElev, width, soft, k }
+   */
   _slope(D, base, baseAt, geom, p) {
-    const [ax, ay] = geom.a, [bx, by] = geom.b;
-    const L = Math.hypot(bx - ax, by - ay) || 1e-9;
-    const dx = (bx - ax) / L, dy = (by - ay) / L;
+    const pts = Design.pathPoints(geom);
+    const P = Design.measure(pts);
     const half = p.width / 2 / p.k;
-    const zA = Number.isFinite(p.startElev) ? p.startElev : baseAt(ax, ay);
+    const zA = Number.isFinite(p.startElev) ? p.startElev : baseAt(...pts[0]);
     if (!Number.isFinite(zA)) return null;
     const E = this.g.z;
-    this._forBox(Math.min(ax, bx) - half, Math.min(ay, by) - half, Math.max(ax, bx) + half, Math.max(ay, by) + half, (k, x, y) => {
-      const t = (x - ax) * dx + (y - ay) * dy;
-      const perp = Math.abs(-(x - ax) * dy + (y - ay) * dx);
-      let w = falloff(perp / half, p.soft);
-      const over = t < 0 ? -t : t > L ? t - L : 0;
-      if (over) w *= falloff(over / half, p.soft);
+    const [bx0, by0, bx1, by1] = Design.bbox(pts, half);
+    this._forBox(bx0, by0, bx1, by1, (k, x, y) => {
+      const m = P.at(x, y);
+      let w = falloff(m.d / half, p.soft);
+      if (m.over) w *= falloff(m.over / half, p.soft);
       if (!w) return;
-      const tgt = zA - p.slope * Math.max(0, Math.min(L, t)) * p.k;
+      const tgt = zA - p.slope * m.s * p.k;
       const b = base(k);
       D[k] = b + (tgt - b) * w - E[k];
     });
-    return { zA, zB: zA - p.slope * L * p.k, len: L * p.k };
+    return { zA, zB: zA - p.slope * P.len * p.k, len: P.len * p.k, path: pts };
+  }
+
+  /**
+   * Swale along a path. Flowline falls `slope` from the start (startElev = flowline at the start; blank = ground − depth).
+   * Rounded (parabolic) channel `width` wide (top) and `depth` deep, cut or filled to shape, then side slopes at
+   * 1:ratio back to existing grade. Ends taper over half a width. p: { slope, startElev, width, depth, ratio, k }
+   */
+  _swale(D, base, baseAt, geom, p) {
+    const pts = Design.pathPoints(geom);
+    const P = Design.measure(pts);
+    const half = p.width / 2 / p.k;
+    const depth = Math.max(0.05, p.depth || 1);
+    const fA = Number.isFinite(p.startElev) ? p.startElev : baseAt(...pts[0]) - depth;
+    if (!Number.isFinite(fA)) return null;
+    const [lo, hi] = this.zRange;
+    const reach = half + Math.min((Math.max(Math.abs(fA - lo), Math.abs(fA - hi)) + depth + 10) * p.ratio / p.k, 400 / p.k);
+    const E = this.g.z;
+    const [bx0, by0, bx1, by1] = Design.bbox(pts, reach);
+    this._forBox(bx0, by0, bx1, by1, (k, x, y) => {
+      const m = P.at(x, y);
+      if (m.over > half) return;
+      const flow = fA - p.slope * m.s * p.k;
+      const top = flow + depth;
+      const b = base(k);
+      let z;
+      if (m.d <= half) {
+        const r = m.d / half;
+        z = flow + depth * r * r;
+      } else {
+        // Beyond the top of bank: side slopes up (cut) or down (fill) at 1:ratio until they meet the ground.
+        const dist = (m.d - half) * p.k;
+        const zc = top + dist / p.ratio, zf = top - dist / p.ratio;
+        if (b <= zc && b >= zf) return;
+        z = b > zc ? zc : zf;
+      }
+      // Taper the ends so the channel opens out instead of stopping at a wall.
+      if (m.over) { const w = falloff(m.over / half, 0.8); z = b + (z - b) * w; }
+      D[k] = z - E[k];
+    });
+    return { fA, fB: fA - p.slope * P.len * p.k, len: P.len * p.k, depth, path: pts };
   }
 
   /** Earthwork from the total change grid. cellArea in (output units)^2. */
@@ -438,6 +529,23 @@ export function contourSegments(g, levels, isMajor) {
     }
   }
   return { major, minor, majorLv };
+}
+
+/** Open Catmull-Rom curve through pts (passes through every point), `per` samples per span. */
+export function smoothOpen(pts, per = 12) {
+  const n = pts.length;
+  if (n < 3) return pts.map(q => q.slice());
+  const P = i => pts[Math.max(0, Math.min(n - 1, i))];
+  const out = [];
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = P(i - 1), p1 = P(i), p2 = P(i + 1), p3 = P(i + 2);
+    for (let s = 0; s < per; s++) {
+      const t = s / per, t2 = t * t, t3 = t2 * t;
+      out.push([0, 1].map(c => 0.5 * (2 * p1[c] + (-p0[c] + p2[c]) * t + (2 * p0[c] - 5 * p1[c] + 4 * p2[c] - p3[c]) * t2 + (-p0[c] + 3 * p1[c] - 3 * p2[c] + p3[c]) * t3)));
+    }
+  }
+  out.push(pts[n - 1].slice());
+  return out;
 }
 
 /** Closed Catmull-Rom curve through pts, `per` samples per span. */

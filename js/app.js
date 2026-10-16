@@ -1,14 +1,14 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.17.2';
-import { fetchElevation, sample } from './dem.js?v=0.17.2';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.17.2';
-import { Dxf } from './dxf.js?v=0.17.2';
-import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32, smoothClosed } from './design.js?v=0.17.2';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.17.2';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.17.2';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.18.0';
+import { fetchElevation, sample } from './dem.js?v=0.18.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.18.0';
+import { Dxf } from './dxf.js?v=0.18.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.18.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.18.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.18.0';
 
-const VERSION = '0.17.2';
+const VERSION = '0.18.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -1863,16 +1863,17 @@ $('reset-origin').addEventListener('click', () => { state.origin = null; session
 // =====================================================================================================
 // ---------- Site design: sculpt a proposed surface, live contours, earthwork, new-construction export ----------
 // =====================================================================================================
-const SHAPES = ['slope', 'wall', 'pad'];
+const SHAPES = ['slope', 'wall', 'pad', 'swale'];
+const PATHS = ['slope', 'swale'];
 const BRUSHES = ['raise', 'lower', 'flatten', 'smooth'];
-const DZ_DEFAULTS = { amount: 2, size: 25, soft: 60, strength: 50, slope: 2, width: 20, wheight: 4, wthick: 1, shelf: 10, front: 5, wside: 'left', wmode: 'fill', welev: 'ground', ratio: 3, pshape: 'rect', psmooth: false };
+const DZ_DEFAULTS = { amount: 2, size: 25, soft: 60, strength: 50, slope: 2, width: 20, wheight: 4, wthick: 1, shelf: 10, front: 5, wside: 'left', wmode: 'fill', welev: 'ground', ratio: 3, pshape: 'rect', psmooth: false, path: 'line', sslope: 1, swidth: 10, sdepth: 1 };
 const dz = {
   mode: 'existing', tool: 'raise', design: null, site: null,
   exist: null, prop: null, raster: null,
   lastContour: 0, raf: 0, contourVer: -1,
   cursor: null, stroking: false, last: null, spaceDown: false,
   params: (() => { try { return { ...DZ_DEFAULTS, ...JSON.parse(localStorage.getItem('c2r-dz') || '{}') }; } catch { return { ...DZ_DEFAULTS }; } })(),
-  target: null, slopeStart: null, padElev: null,
+  target: null, slopeStart: null, padElev: null, swaleStart: null,
   wallElev: { tw0: null, tw1: null, bw0: null, bw1: null },
   poly: null,           // polygon pad being clicked out: { pts }
   showExist: true, showCf: true, showLabels: true, showCursor: true,
@@ -1912,8 +1913,21 @@ function featHandles(f) {
     if (g.shape === 'circle') return [g.c, [g.c[0] + g.r, g.c[1]]];
     return Design.padCorners(g, f.p.rot);
   }
+  if (f.geom.pts) return f.geom.pts;
   return [f.geom.a, f.geom.b];
 }
+/** Centre line of a wall / slope / swale (smoothed for curved paths). */
+const featPath = f => (f.type === 'pad' ? Design.padOutline(f.geom, f.p.rot) : Design.pathPoints(f.geom));
+const pathMid = pts => {
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  const half = cum.at(-1) / 2;
+  for (let i = 1; i < pts.length; i++) if (cum[i] >= half) {
+    const t = (half - cum[i - 1]) / ((cum[i] - cum[i - 1]) || 1);
+    return { pt: [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * t, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * t], dir: [pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]] };
+  }
+  return { pt: pts[0], dir: [1, 0] };
+};
 /** Geometry of the shape being dragged out. */
 function drawingGeom(d) {
   if (d.kind === 'pad' && d.shape === 'circle') return { shape: 'circle', c: d.a, r: Math.max(Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]), 1e-6) };
@@ -2003,28 +2017,35 @@ function dzDraw() {
       const rng = (k) => Math.abs(en[0][k] - en[2][k]) > 0.05 ? `${en[0][k].toFixed(1)}–${en[2][k].toFixed(1)}` : m[k].toFixed(1);
       labels.push([(a[0] + b[0]) / 2 - nx * 12 * px, (a[1] + b[1]) / 2 - ny * 12 * px, m ? `TW ${rng('tw')} / BW ${rng('bw')}` : `WALL ${f.p.height}`, col]);
     } else {
-      const [a, b] = [f.geom.a, f.geom.b];
-      const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
-      const ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L;
+      // Slope run or swale along a path.
+      const pts = Design.pathPoints(f.geom);
       const hw = f.p.width / 2 / site.toOut;
-      ctx.beginPath();
-      ctx.moveTo(a[0] - uy * hw, a[1] + ux * hw); ctx.lineTo(b[0] - uy * hw, b[1] + ux * hw);
-      ctx.moveTo(a[0] + uy * hw, a[1] - ux * hw); ctx.lineTo(b[0] + uy * hw, b[1] - ux * hw);
-      ctx.strokeStyle = col; ctx.globalAlpha = 0.5; ctx.lineWidth = 1 * px; ctx.stroke(); ctx.globalAlpha = 1;
-      ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b);
-      const ah = 12 * px;
+      const offset = sgn => pts.map((q, i) => {
+        const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+        const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+        return [q[0] - (b[1] - a[1]) / L * hw * sgn, q[1] + (b[0] - a[0]) / L * hw * sgn];
+      });
+      const line = arr => { ctx.beginPath(); arr.forEach((q, i) => (i ? ctx.lineTo(...q) : ctx.moveTo(...q))); };
+      const swale = f.type === 'swale';
+      const c = swale ? (sel ? SEL_COLOR : '#60a5fa') : col;
+      for (const sgn of [1, -1]) { line(offset(sgn)); ctx.strokeStyle = c; ctx.globalAlpha = swale ? 0.85 : 0.5; ctx.lineWidth = (swale ? 1.4 : 1) * px; if (swale) ctx.setLineDash([5 * px, 3 * px]); ctx.stroke(); ctx.setLineDash(preview ? [6 * px, 4 * px] : []); ctx.globalAlpha = 1; }
+      line(pts);
+      const b = pts.at(-1), a = pts.at(-2) || pts[0];
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L, ah = 12 * px;
       ctx.moveTo(b[0] - ux * ah - uy * ah * 0.5, b[1] - uy * ah + ux * ah * 0.5); ctx.lineTo(...b); ctx.lineTo(b[0] - ux * ah + uy * ah * 0.5, b[1] - uy * ah - ux * ah * 0.5);
       ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 4.5 * px; ctx.stroke();
-      ctx.strokeStyle = col; ctx.lineWidth = 2.2 * px; ctx.stroke();
-      const o = f.out;
-      labels.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, `${(f.p.slope * 100).toFixed(f.p.slope * 100 % 1 ? 2 : 1)}%${o ? `  ${o.zA.toFixed(1)}→${o.zB.toFixed(1)}` : ''}`, col]);
+      ctx.strokeStyle = c; ctx.lineWidth = 2.2 * px; ctx.stroke();
+      const o = f.out, mid = pathMid(pts);
+      const pct = `${(f.p.slope * 100).toFixed(f.p.slope * 100 % 1 ? 2 : 1)}%`;
+      labels.push([mid.pt[0], mid.pt[1], swale ? `SWALE ${pct}${o ? `  FL ${o.fA.toFixed(1)}→${o.fB.toFixed(1)}` : ''}` : `${pct}${o ? `  ${o.zA.toFixed(1)}→${o.zB.toFixed(1)}` : ''}`, c]);
     }
     ctx.setLineDash([]);
     if (sel && f.type !== 'pad') {
       screen();
       ctx.font = '700 11px "IBM Plex Sans", system-ui, sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      [['A', f.geom.a, f.geom.b], ['B', f.geom.b, f.geom.a]].forEach(([t, p0, p1]) => {
+      const hp = featHandles(f);
+      [['A', hp[0], hp[1]], ['B', hp.at(-1), hp.at(-2)]].forEach(([t, p0, p1]) => {
         const [sx, sy] = toScreen(M, ...p0), [ox, oy] = toScreen(M, ...p1);
         const L = Math.hypot(sx - ox, sy - oy) || 1, lx = sx + (sx - ox) / L * 16, ly = sy + (sy - oy) / L * 16;
         ctx.fillStyle = SEL_COLOR; ctx.beginPath(); ctx.arc(lx, ly, 8, 0, Math.PI * 2); ctx.fill();
@@ -2048,10 +2069,16 @@ function dzDraw() {
   if (dz.poly?.pts.length) {
     native();
     const pts = dz.cursor ? [...dz.poly.pts, dz.cursor] : dz.poly.pts;
-    const shown = dz.params.psmooth && pts.length >= 3 ? smoothClosed(pts, 10) : pts;
+    const closed = dz.poly.kind === 'pad';
+    const smooth = closed ? dz.params.psmooth : dz.params.path === 'curve';
+    const shown = smooth && pts.length >= 3 ? (closed ? smoothClosed(pts, 10) : smoothOpen(pts, 10)) : pts;
+    if (!closed && pts.length >= 2) {
+      const tmp = { type: dz.poly.kind, geom: { pts, smooth }, p: dzShapeParams(dz.poly.kind) };
+      drawFeature(tmp, false, true); native();
+    }
     ctx.beginPath(); shown.forEach((c, i) => (i ? ctx.lineTo(...c) : ctx.moveTo(...c)));
-    if (pts.length >= 3) ctx.closePath();
-    ctx.fillStyle = 'rgba(248,250,252,0.08)'; if (pts.length >= 3) ctx.fill();
+    if (closed && pts.length >= 3) ctx.closePath();
+    ctx.fillStyle = 'rgba(248,250,252,0.08)'; if (closed && pts.length >= 3) ctx.fill();
     ctx.setLineDash([6 * px, 4 * px]); ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 4 * px; ctx.stroke();
     ctx.strokeStyle = SEL_COLOR; ctx.lineWidth = 2 * px; ctx.stroke(); ctx.setLineDash([]);
     screen();
@@ -2141,7 +2168,7 @@ let dzPopId = null;
 
 function popAnchor(f) {
   if (f.type === 'pad') return centroidOf(Design.padOutline(f.geom, f.p.rot));
-  return [(f.geom.a[0] + f.geom.b[0]) / 2, (f.geom.a[1] + f.geom.b[1]) / 2];
+  return pathMid(featPath(f)).pt;
 }
 
 function dzPopClose() { dz.sel = null; dzApplyTool(); dzFeatureList(); dzPopBuild(); dzDraw(); }
@@ -2163,8 +2190,14 @@ function dzPopBuild() {
   } else if (f.type === 'pad') {
     body = `<div class="pop-row">${num('elev', `Elevation (${u})`)}${ratioSel}</div>
       ${f.geom.shape === 'poly' ? '<label class="pop-check"><input type="checkbox" data-k="smooth"> Curved through the points</label>' : ''}`;
+  } else if (f.type === 'swale') {
+    body = `<div class="pop-row">${num('za', `Flowline A (${u})`)}${num('zb', `Flowline B (${u})`)}</div>
+      <div class="pop-row">${num('pct', 'Slope %')}${num('width', `Top width`)}${num('depth', `Depth`)}</div>
+      <div class="pop-row">${ratioSel}</div>
+      ${f.geom.pts?.length > 2 ? '<label class="pop-check"><input type="checkbox" data-k="smooth"> Curved through the points</label>' : ''}`;
   } else {
-    body = `<div class="pop-row">${num('za', `Start A (${u})`)}${num('zb', `End B (${u})`)}</div><div class="pop-row">${num('pct', 'Slope %')}${num('width', `Width (${u})`)}</div>`;
+    body = `<div class="pop-row">${num('za', `Start A (${u})`)}${num('zb', `End B (${u})`)}</div><div class="pop-row">${num('pct', 'Slope %')}${num('width', `Width (${u})`)}</div>
+      ${f.geom.pts?.length > 2 ? '<label class="pop-check"><input type="checkbox" data-k="smooth"> Curved through the points</label>' : ''}`;
   }
   dzPop.innerHTML = `<div class="pop-head"><span>${FEATURE_NAMES[f.type]}</span><button type="button" class="pop-x" title="Close (Esc)">×</button></div>${body}
     <div class="pop-foot"><button type="button" class="pop-btn pop-del" data-act="del">Delete</button></div>`;
@@ -2204,7 +2237,8 @@ function dzPopRefresh() {
   const v = {};
   if (f.type === 'wall' && o.ends) Object.assign(v, { tw0: o.ends[0].tw, tw1: o.ends[2].tw, bw0: o.ends[0].bw, bw1: o.ends[2].bw, thick: f.p.thick, shelf: f.p.shelf, front: f.p.front ?? 5, ratio: f.p.ratio });
   if (f.type === 'pad') Object.assign(v, { elev: o.elev, ratio: f.p.ratio, smooth: !!f.geom.smooth });
-  if (f.type === 'slope' && o.zA != null) Object.assign(v, { za: o.zA, zb: o.zB, pct: f.p.slope * 100, width: f.p.width });
+  if (f.type === 'slope' && o.zA != null) Object.assign(v, { za: o.zA, zb: o.zB, pct: f.p.slope * 100, width: f.p.width, smooth: !!f.geom.smooth });
+  if (f.type === 'swale' && o.fA != null) Object.assign(v, { za: o.fA, zb: o.fB, pct: f.p.slope * 100, width: f.p.width, depth: f.p.depth, ratio: f.p.ratio, smooth: !!f.geom.smooth });
   dzPop.querySelectorAll('[data-k]').forEach(el => {
     const val = v[el.dataset.k];
     if (el.type === 'checkbox') { el.checked = !!val; return; }
@@ -2233,7 +2267,7 @@ function dzPopInput(k, raw) {
   if (!f) return;
   if (k === 'smooth') {
     dz.design.checkpoint();
-    dz.params.psmooth = !!raw;
+    if (f.type === 'pad') dz.params.psmooth = !!raw; else dz.params.path = raw ? 'curve' : 'poly';
     dz.design.updateFeature(f.id, { geom: { smooth: !!raw } });
     dzAfterChange(); dzSyncUi();
     return;
@@ -2260,6 +2294,19 @@ function dzPopInput(k, raw) {
     }
   } else if (f.type === 'pad') {
     if (k === 'elev') { patch = { elev: val }; dz.padElev = val; } else { patch = { ratio: val }; dz.params.ratio = val; }
+  } else if (f.type === 'swale') {
+    const len = o.len || 1, fa = Number.isFinite(f.p.startElev) ? f.p.startElev : o.fA;
+    if (k === 'za') patch = { startElev: val };
+    else if (k === 'zb') patch = { startElev: fa, slope: (fa - val) / len };
+    else if (k === 'pct') patch = { startElev: fa, slope: val / 100 };
+    else if (k === 'width') patch = { width: Math.max(1, val) };
+    else if (k === 'depth') patch = { depth: Math.max(0.1, val) };
+    else if (k === 'ratio') patch = { ratio: val };
+    if (patch.slope != null) dz.params.sslope = +(patch.slope * 100).toFixed(3);
+    if (patch.startElev != null) dz.swaleStart = patch.startElev;
+    if (patch.width != null) dz.params.swidth = patch.width;
+    if (patch.depth != null) dz.params.sdepth = patch.depth;
+    if (patch.ratio != null) dz.params.ratio = patch.ratio;
   } else {
     const len = o.len || 1, za = Number.isFinite(f.p.startElev) ? f.p.startElev : o.zA;
     if (k === 'za') patch = { startElev: val };
@@ -2408,7 +2455,10 @@ function featSummary(f) {
     const e = o.ends, r = k => Math.abs(e[0][k] - e[2][k]) > 0.05 ? `${e[0][k].toFixed(1)}–${e[2][k].toFixed(1)}` : e[1][k].toFixed(1);
     return f.p.elevMode === 'set' ? `TW ${r('tw')} / BW ${r('bw')} · ${fmt(o.len, 0)} ${u}` : `${f.p.height} ${u} ${f.p.mode === 'cut' ? 'cut' : 'fill'} · ${fmt(o.len, 0)} ${u} · TW ${r('tw')}`;
   }
-  return o ? `${(f.p.slope * 100).toFixed(2).replace(/\.?0+$/, '')}% · ${fmt(o.len, 0)} ${u} · ${o.zA.toFixed(1)} → ${o.zB.toFixed(1)}` : 'outside the site';
+  const pct = `${(f.p.slope * 100).toFixed(2).replace(/\.?0+$/, '')}%`;
+  const shape = f.geom.pts ? (f.geom.smooth ? 'curved, ' : `${f.geom.pts.length} pts, `) : '';
+  if (f.type === 'swale') return o ? `${pct} · ${shape}${fmt(o.len, 0)} ${u} · ${f.p.width}×${f.p.depth} ${u} · FL ${o.fA.toFixed(1)} → ${o.fB.toFixed(1)}` : 'outside the site';
+  return o ? `${pct} · ${shape}${fmt(o.len, 0)} ${u} · ${o.zA.toFixed(1)} → ${o.zB.toFixed(1)}` : 'outside the site';
 }
 
 function dzFeatureList() {
@@ -2442,6 +2492,8 @@ function dzSelect(id, fromList = false) {
       dz.wallElev = { tw0: fin(f.p.tw0), tw1: fin(f.p.tw1), bw0: fin(f.p.bw0), bw1: fin(f.p.bw1) };
     }
     if (f.type === 'slope') { Object.assign(dz.params, { slope: +(f.p.slope * 100).toFixed(3), width: f.p.width }); dz.slopeStart = Number.isFinite(f.p.startElev) ? f.p.startElev : null; }
+    if (f.type === 'swale') { Object.assign(dz.params, { sslope: +(f.p.slope * 100).toFixed(3), swidth: f.p.width, sdepth: f.p.depth, ratio: f.p.ratio }); dz.swaleStart = Number.isFinite(f.p.startElev) ? f.p.startElev : null; }
+    if (PATHS.includes(f.type)) dz.params.path = !f.geom.pts ? 'line' : f.geom.smooth ? 'curve' : 'poly';
     if (fromList) {
       const [lon, lat] = projector(dz.site.zone).inv(featHandles(f)[0]);
       if (!map.getBounds().contains([lat, lon])) map.panTo([lat, lon]);
@@ -2475,6 +2527,7 @@ function dzShapeParams(kind) {
   if (kind === 'pad') return { elev: dz.padElev, ratio: Number(p.ratio), rot: $('local-origin').checked ? align.rot : 0, k };
   if (kind === 'wall') return { height: Number(p.wheight), thick: Number(p.wthick), shelf: Number(p.shelf), front: Number(p.front), side: p.wside, mode: p.wmode, ratio: Number(p.ratio), k,
     elevMode: p.welev, ...dz.wallElev };
+  if (kind === 'swale') return { slope: Number(p.sslope) / 100, startElev: dz.swaleStart, width: Number(p.swidth), depth: Number(p.sdepth), ratio: Number(p.ratio), k };
   return { slope: Number(p.slope) / 100, startElev: dz.slopeStart, width: Number(p.width), soft: p.soft / 100, k };
 }
 
@@ -2510,6 +2563,11 @@ function dzSyncUi() {
   $('dz-ratio').value = String(p.ratio);
   setv('dz-pelev', dz.padElev != null ? dz.padElev.toFixed(2) : '');
   document.querySelectorAll('#slope-chips button').forEach(b => b.classList.toggle('on', Number(b.dataset.v) === Number(p.slope)));
+  document.querySelectorAll('#sslope-chips button').forEach(b => b.classList.toggle('on', Number(b.dataset.v) === Number(p.sslope)));
+  setv('dz-sslope', p.sslope); setv('dz-swidth', p.swidth); setv('dz-sdepth', p.sdepth);
+  setv('dz-sstart', dz.swaleStart != null ? dz.swaleStart.toFixed(2) : '');
+  document.querySelectorAll('input[name="path"]').forEach(r => { r.checked = r.value === p.path; });
+  $('path-hint').innerHTML = p.path === 'line' ? 'Drag from the start to the end.' : 'Click each point from the start. Double-click or press <kbd>Enter</kbd> to finish; <kbd>Backspace</kbd> or right-click removes the last point.';
   $('pad-hint').textContent = $('local-origin').checked && align.rot ? `Pads line up with your project north (${bearingText(align.rot).toLowerCase()} of grid).` : 'Pads line up with grid north (set a project north on the Existing site tab to rotate them).';
   $('cf-scale').textContent = `±${fmt(dzScale(), 1)} ${u}`;
 }
@@ -2522,6 +2580,7 @@ const TOOL_HINTS = {
   slope: 'Drag from the high end to the low end of the run. Click a run to edit it.',
   wall: 'Drag along the wall line. Ticks show the high side. Click a wall to edit it.',
   pad: 'Draw the pad (rectangle, polygon or circle), then type its elevation. Click a pad to edit it.',
+  swale: 'Draw the swale from its high end. The flowline falls at the slope set here; blank start = ground less the depth.',
 };
 
 function dzApplyTool() {
@@ -2534,9 +2593,11 @@ function dzApplyTool() {
   $('f-size').hidden = !brush;
   $('f-soft').hidden = !(brush || t === 'slope');
   $('f-slope').hidden = t !== 'slope';
+  $('f-swale').hidden = t !== 'swale';
+  $('f-path').hidden = !PATHS.includes(t);
   $('f-wall').hidden = t !== 'wall';
   $('f-pad').hidden = t !== 'pad';
-  $('f-ratio').hidden = !(t === 'wall' || t === 'pad');
+  $('f-ratio').hidden = !(t === 'wall' || t === 'pad' || t === 'swale');
   const selF = dz.sel && dz.design?.feature(dz.sel);
   $('tool-hint').innerHTML = selF && selF.type === t
     ? `<strong>Editing ${FEATURE_NAMES[t]} — changes apply to it.</strong> Drag its handles or body to move it. <kbd>Esc</kbd> to stop editing.`
@@ -2548,7 +2609,7 @@ function dzApplyTool() {
   $('sum-tool').textContent = {
     raise: `raise ${dz.params.amount} ${u}`, lower: `lower ${dz.params.amount} ${u}`,
     flatten: dz.target != null ? `flatten to ${dz.target.toFixed(1)}` : 'flatten', smooth: 'smooth',
-    slope: `slope ${dz.params.slope}%`, wall: `wall ${dz.params.wheight} ${u}`, pad: dz.padElev != null ? `pad at ${dz.padElev.toFixed(1)}` : 'pad',
+    slope: `slope ${dz.params.slope}%`, swale: `swale ${dz.params.sslope}% · ${dz.params.swidth} ${u} wide`, wall: `wall ${dz.params.wheight} ${u}`, pad: dz.padElev != null ? `pad at ${dz.padElev.toFixed(1)}` : 'pad',
   }[t];
   dzDraw();
 }
@@ -2588,6 +2649,17 @@ $('dz-ratio').addEventListener('change', e => { dz.params.ratio = Number(e.targe
 document.querySelectorAll('input[name="wside"]').forEach(r => r.addEventListener('change', () => { dz.params.wside = r.value; dzFieldsChanged(); }));
 document.querySelectorAll('input[name="wmode"]').forEach(r => r.addEventListener('change', () => { dz.params.wmode = r.value; dzFieldsChanged(); }));
 numParam('dz-front', 'front');
+numParam('dz-sslope', 'sslope'); numParam('dz-swidth', 'swidth'); numParam('dz-sdepth', 'sdepth');
+$('dz-sstart').addEventListener('input', e => { const v = Number(e.target.value); dz.swaleStart = e.target.value === '' || !Number.isFinite(v) ? null : v; dzFieldsChanged(); });
+document.querySelectorAll('#sslope-chips button').forEach(b => b.addEventListener('click', () => { dz.params.sslope = Number(b.dataset.v); dzFieldsChanged(); }));
+document.querySelectorAll('input[name="path"]').forEach(r => r.addEventListener('change', () => {
+  dz.params.path = r.value; dz.poly = null; dz.drawing = null;
+  const f = dz.sel && dz.design?.feature(dz.sel);
+  // On a selected polyline run, Polyline / Curved switches its curve; otherwise it applies to the next one.
+  if (f && PATHS.includes(f.type) && f.geom.pts && r.value !== 'line') { dz.design.checkpoint(); dz.design.updateFeature(f.id, { geom: { smooth: r.value === 'curve' } }); dzAfterChange(); }
+  else if (f && PATHS.includes(f.type)) { dz.sel = null; dzFeatureList(); }
+  saveDzParams(); dzSyncUi(); dzApplyTool();
+}));
 /** Fill blank TW/BW values of the selected wall from where it currently stands, so editing one keeps the others. */
 function dzPrefillWallElev() {
   const f = dz.sel && dz.design?.feature(dz.sel);
@@ -2649,7 +2721,9 @@ function dzReadout(xy) {
     const L = Math.hypot(dz.drawing.b[0] - dz.drawing.a[0], dz.drawing.b[1] - dz.drawing.a[1]) * dz.site.toOut;
     extra = dz.drawing.kind === 'pad' && dz.drawing.shape === 'circle' ? ` · ⌀ ${fmt(L * 2, 0)} ${u}` : dz.drawing.kind === 'pad' ? (() => { const cs = Design.padCorners({ a: dz.drawing.a, b: dz.drawing.b }, dzShapeParams('pad').rot); return ` · ${fmt(Math.hypot(cs[1][0] - cs[0][0], cs[1][1] - cs[0][1]) * dz.site.toOut, 0)} × ${fmt(Math.hypot(cs[3][0] - cs[0][0], cs[3][1] - cs[0][1]) * dz.site.toOut, 0)} ${u}`; })() : ` · ${fmt(L, 0)} ${u}`;
   }
-  if (dz.poly) extra = ` · ${dz.poly.pts.length} corner${dz.poly.pts.length === 1 ? '' : 's'} — double-click or Enter to close`;
+  if (dz.poly) extra = dz.poly.kind === 'pad'
+    ? ` · ${dz.poly.pts.length} corner${dz.poly.pts.length === 1 ? '' : 's'} — double-click or Enter to close`
+    : ` · ${dz.poly.pts.length} point${dz.poly.pts.length === 1 ? '' : 's'}, ${fmt(dz.poly.pts.reduce((a, q, i, arr) => a + (i ? Math.hypot(q[0] - arr[i - 1][0], q[1] - arr[i - 1][1]) : 0), 0) * dz.site.toOut, 0)} ${u} — double-click or Enter to finish`;
   el.hidden = false;
   el.innerHTML = `Existing <b>${ex.toFixed(2)}</b> · Proposed <b>${pr.toFixed(2)}</b> · ${Math.abs(d) < 0.01 ? 'no change' : `<span class="${d > 0 ? 'fill' : 'cut'}">${d > 0 ? 'Fill +' : 'Cut −'}${Math.abs(d).toFixed(2)}</span>`}${extra}`;
 }
@@ -2678,7 +2752,7 @@ function dzHit(cp) {
   };
   for (let n = des.features.length - 1; n >= 0; n--) {
     const f = des.features[n];
-    const pts = (f.type === 'pad' ? Design.padOutline(f.geom, f.p.rot) : [f.geom.a, f.geom.b]).map(q => toScreen(M, ...q));
+    const pts = (f.type === 'pad' ? Design.padOutline(f.geom, f.p.rot) : []).map(q => toScreen(M, ...q));
     if (f.type === 'pad') {
       let inside = false, near = Infinity;
       for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
@@ -2688,7 +2762,10 @@ function dzHit(cp) {
       }
       if (near < 7) return { f, handle: -1, edge: true };
       if (inside) return { f, handle: -1, edge: false };
-    } else if (segDist(pts[0], pts[1]) < 8) return { f, handle: -1, edge: true };
+    } else {
+      const pp = featPath(f).map(q => toScreen(M, ...q));
+      for (let i = 1; i < pp.length; i++) if (segDist(pp[i - 1], pp[i]) < 8) return { f, handle: -1, edge: true };
+    }
   }
   return null;
 }
@@ -2704,11 +2781,12 @@ map.getContainer().addEventListener('contextmenu', e => {
 
 // Ctrl + wheel: brush size (brush tools) or corridor width (Slope tool), instead of zooming.
 map.getContainer().addEventListener('wheel', e => {
-  if (dz.mode !== 'design' || !e.ctrlKey || !dz.design || !(BRUSHES.includes(dz.tool) || dz.tool === 'slope')) return;
+  if (dz.mode !== 'design' || !e.ctrlKey || !dz.design || !(BRUSHES.includes(dz.tool) || PATHS.includes(dz.tool))) return;
   e.preventDefault(); e.stopPropagation();
   const k = Math.pow(1.1, -Math.sign(e.deltaY) * Math.min(3, Math.max(1, Math.abs(e.deltaY) / 100)));
-  if (dz.tool === 'slope') {
-    dz.params.width = Math.max(1, Math.min(500, Math.round(dz.params.width * k * 10) / 10));
+  if (PATHS.includes(dz.tool)) {
+    const key = dz.tool === 'swale' ? 'swidth' : 'width';
+    dz.params[key] = Math.max(1, Math.min(500, Math.round(dz.params[key] * k * 10) / 10));
     dzFieldsChanged();
   } else {
     const mn = Number($('dz-size').min), mx = Number($('dz-size').max);
@@ -2739,7 +2817,7 @@ map.on('mousedown', e => {
   // Polygon pad in progress: each click adds a corner; clicking the first corner closes it.
   if (dz.poly) {
     const M = dzAffine(dz.site), [fx, fy] = toScreen(M, ...dz.poly.pts[0]);
-    if (dz.poly.pts.length >= 3 && Math.hypot(fx - e.containerPoint.x, fy - e.containerPoint.y) < 10) dzFinishPoly();
+    if (dz.poly.kind === 'pad' && dz.poly.pts.length >= 3 && Math.hypot(fx - e.containerPoint.x, fy - e.containerPoint.y) < 10) dzFinishPoly();
     else dz.poly.pts.push(e.originalEvent.shiftKey ? orthoSnap(dz.poly.pts.at(-1), xy) : xy);
     dzDraw();
     return;
@@ -2753,7 +2831,8 @@ map.on('mousedown', e => {
   }
   if (shapeTool) {
     if (dz.sel) { dz.sel = null; dzApplyTool(); dzFeatureList(); }
-    if (dz.tool === 'pad' && dz.params.pshape === 'poly') { dz.poly = { pts: [xy] }; dzDraw(); return; }
+    if (dz.tool === 'pad' && dz.params.pshape === 'poly') { dz.poly = { kind: 'pad', pts: [xy] }; dzDraw(); return; }
+    if (PATHS.includes(dz.tool) && dz.params.path !== 'line') { dz.poly = { kind: dz.tool, pts: [xy] }; dzDraw(); return; }
     dz.drawing = { kind: dz.tool, shape: dz.tool === 'pad' ? dz.params.pshape : null, a: xy, b: xy };
     dzDraw();
     return;
@@ -2787,6 +2866,7 @@ function dzEditMove(xy, shift = false) {
   if (shift) {
     const g = ed.geom0;
     if (ed.handle < 0) xy = orthoSnap(ed.from, xy);
+    else if (f.type !== 'pad' && g.pts) xy = orthoSnap(g.pts[ed.handle === 0 ? 1 : ed.handle - 1], xy);
     else if (f.type !== 'pad') xy = orthoSnap(ed.handle === 0 ? g.b : g.a, xy);
     else if (g.shape === 'poly') xy = orthoSnap(g.pts[(ed.handle - 1 + g.pts.length) % g.pts.length], xy);
   }
@@ -2795,7 +2875,7 @@ function dzEditMove(xy, shift = false) {
   if (!ed.moved) { dz.design.checkpoint(); ed.moved = true; }
   const g0 = ed.geom0;
   let geom;
-  const sh = f.type === 'pad' ? (g0.shape || 'rect') : null;
+  const sh = f.type === 'pad' ? (g0.shape || 'rect') : g0.pts ? 'poly' : null;
   if (sh === 'poly') {
     geom = ed.handle < 0 ? { pts: g0.pts.map(q => [q[0] + dx, q[1] + dy]) } : { pts: g0.pts.map((q, i) => (i === ed.handle ? xy : q.slice())) };
   } else if (sh === 'circle') {
@@ -2832,8 +2912,16 @@ map.on('mouseout', () => { if (dz.mode === 'design') { dz.cursor = null; dzDraw(
 function dzFinishPoly() {
   const pts = [];
   for (const q of dz.poly?.pts || []) if (!pts.length || Math.hypot(q[0] - pts.at(-1)[0], q[1] - pts.at(-1)[1]) > dz.site.grid.s / 2) pts.push(q);
-  if (pts.length > 2 && Math.hypot(pts[0][0] - pts.at(-1)[0], pts[0][1] - pts.at(-1)[1]) < dz.site.grid.s / 2) pts.pop();
+  const kind = dz.poly?.kind || 'pad';
   dz.poly = null;
+  if (kind !== 'pad') {
+    if (pts.length < 2) { setStatus(`A ${FEATURE_NAMES[kind].toLowerCase()} needs at least 2 points.`, true); dzDraw(); return; }
+    const f = dz.design.addFeature(kind, { pts, smooth: dz.params.path === 'curve' && pts.length > 2 }, dzShapeParams(kind));
+    dzSelect(f.id);
+    dzAfterChange();
+    return;
+  }
+  if (pts.length > 2 && Math.hypot(pts[0][0] - pts.at(-1)[0], pts[0][1] - pts.at(-1)[1]) < dz.site.grid.s / 2) pts.pop();
   if (pts.length < 3) { setStatus('A polygon pad needs at least 3 corners.', true); dzDraw(); return; }
   const f = dz.design.addFeature('pad', { shape: 'poly', pts, smooth: !!dz.params.psmooth }, dzShapeParams('pad'));
   dzSelect(f.id);
@@ -3019,16 +3107,39 @@ function makeNewDxf(site, v) {
       // Top / bottom of wall at each end.
       for (const [pt, en] of [[a, e0], [b, e2]]) d.text('C-WALL-TEXT', ...P(pt[0], pt[1], en.tw), h * 0.55, `TW ${en.tw.toFixed(2)} BW ${en.bw.toFixed(2)}`, up);
     } else {
-      d.layer('C-GRAD-ARRW', 5).layer('C-GRAD-ARRW-TEXT', 5);
-      const [a, b] = [f.geom.a, f.geom.b];
-      const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+      // Slope runs and swales: 3D centre line along the path (flowline for swales), arrow at the low end, label.
+      const swale = f.type === 'swale';
+      const pts = Design.pathPoints(f.geom);
+      const z0 = swale ? o.fA : o.zA, z1 = swale ? o.fB : o.zB;
+      const cum = [0];
+      for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+      const tot = cum.at(-1) || 1, zAt = i => z0 + (z1 - z0) * cum[i] / tot;
+      const [ly, lt] = swale ? ['C-SWAL-FLOW', 'C-SWAL-TEXT'] : ['C-GRAD-ARRW', 'C-GRAD-ARRW-TEXT'];
+      d.layer(ly, swale ? 150 : 5).layer(lt, swale ? 150 : 5);
+      d.polyline3d(ly, pts.map((q, i) => P(q[0], q[1], zAt(i))));
+      const b = pts.at(-1), a = pts.at(-2), L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
       const ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L, ah = h * 1.5 / site.toOut;
-      d.polyline3d('C-GRAD-ARRW', [P(...a, o.zA), P(...b, o.zB)]);
-      d.polyline3d('C-GRAD-ARRW', [P(b[0] - ux * ah - uy * ah * 0.5, b[1] - uy * ah + ux * ah * 0.5, o.zB), P(...b, o.zB), P(b[0] - ux * ah + uy * ah * 0.5, b[1] - uy * ah - ux * ah * 0.5, o.zB)]);
-      const [p1, p2] = [outXY(site, ...a), outXY(site, ...b)];
+      d.polyline3d(ly, [P(b[0] - ux * ah - uy * ah * 0.5, b[1] - uy * ah + ux * ah * 0.5, z1), P(...b, z1), P(b[0] - ux * ah + uy * ah * 0.5, b[1] - uy * ah - ux * ah * 0.5, z1)]);
+      if (swale) {
+        // Top of bank both sides, draped on the proposed surface.
+        d.layer('C-SWAL-BANK', 150);
+        const hw = f.p.width / 2 / site.toOut;
+        for (const sgn of [1, -1]) d.polyline3d('C-SWAL-BANK', pts.map((q, i) => {
+          const pa = pts[Math.max(0, i - 1)], pb = pts[Math.min(pts.length - 1, i + 1)];
+          const LL = Math.hypot(pb[0] - pa[0], pb[1] - pa[1]) || 1;
+          const x = q[0] - (pb[1] - pa[1]) / LL * hw * sgn, y = q[1] + (pb[0] - pa[0]) / LL * hw * sgn;
+          return P(x, y, zAt(i) + o.depth);
+        }));
+      }
+      const mid = pathMid(pts);
+      const [p1, p2] = [outXY(site, 0, 0), outXY(site, mid.dir[0], mid.dir[1])];
       let ang = Math.atan2(p2[1] - p1[1], p2[0] - p1[0]) * 180 / Math.PI;
       if (ang > 90 || ang < -90) ang += 180;
-      d.text('C-GRAD-ARRW-TEXT', ...P((a[0] + b[0]) / 2 - uy * h / site.toOut, (a[1] + b[1]) / 2 + ux * h / site.toOut, (o.zA + o.zB) / 2), h * 0.7, `${(f.p.slope * 100).toFixed(2).replace(/\.?0+$/, '')}%`, ang);
+      const DL = Math.hypot(...mid.dir) || 1, nx = -mid.dir[1] / DL, ny = mid.dir[0] / DL;
+      const pct = `${(f.p.slope * 100).toFixed(2).replace(/\.?0+$/, '')}%`;
+      const txt = swale ? `SWALE ${pct}  FL ${z0.toFixed(2)} TO ${z1.toFixed(2)}  (${f.p.width}' W x ${f.p.depth}' D)` : pct;
+      d.text(lt, ...P(mid.pt[0] + nx * h / site.toOut, mid.pt[1] + ny * h / site.toOut, (z0 + z1) / 2), h * 0.7, txt, ang);
+      if (swale) for (const [q, z] of [[pts[0], z0], [b, z1]]) d.text(lt, ...P(q[0], q[1], z), h * 0.55, `FL ${z.toFixed(2)}`, ang);
     }
   }
   return d.toString();
