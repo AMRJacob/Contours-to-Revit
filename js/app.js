@@ -2604,9 +2604,8 @@ function setMode(mode) {
   map.getContainer().classList.toggle('design-mode', design);
   if (design) map.doubleClickZoom.disable(); else { map.doubleClickZoom.enable(); dz.poly = null; }
   if (design) dzEnsure().then(() => { dzApplyTool(); dzRefresh(true); v3Dirty(); });
-  else v3Dirty();
+  else { map.dragging.enable(); map.getContainer().classList.remove('sculpting'); $('dz-readout').hidden = true; dzPop.hidden = true; dzPopId = null; v3Dirty(); }
   flowKick();
-  else { map.dragging.enable(); map.getContainer().classList.remove('sculpting'); $('dz-readout').hidden = true; dzPop.hidden = true; dzPopId = null; }
 }
 document.querySelectorAll('.mode').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
 
