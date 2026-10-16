@@ -1,14 +1,14 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.18.0';
-import { fetchElevation, sample } from './dem.js?v=0.18.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.18.0';
-import { Dxf } from './dxf.js?v=0.18.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.18.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.18.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.18.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.18.1';
+import { fetchElevation, sample } from './dem.js?v=0.18.1';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.18.1';
+import { Dxf } from './dxf.js?v=0.18.1';
+import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.18.1';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.18.1';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.18.1';
 
-const VERSION = '0.18.0';
+const VERSION = '0.18.1';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -2165,6 +2165,9 @@ L.DomEvent.disableClickPropagation(dzPop);
 L.DomEvent.disableScrollPropagation(dzPop);
 dzPop.addEventListener('mousedown', e => e.stopPropagation());
 let dzPopId = null;
+// Where the user dragged the editor to (container px), kept for later openings; null = follow the feature.
+let dzPopPin = (() => { try { return JSON.parse(localStorage.getItem('c2r-poppin') || 'null'); } catch { return null; } })();
+const saveDzPopPin = () => { try { if (dzPopPin) localStorage.setItem('c2r-poppin', JSON.stringify(dzPopPin)); else localStorage.removeItem('c2r-poppin'); } catch { /* ignore */ } };
 
 function popAnchor(f) {
   if (f.type === 'pad') return centroidOf(Design.padOutline(f.geom, f.p.rot));
@@ -2199,9 +2202,22 @@ function dzPopBuild() {
     body = `<div class="pop-row">${num('za', `Start A (${u})`)}${num('zb', `End B (${u})`)}</div><div class="pop-row">${num('pct', 'Slope %')}${num('width', `Width (${u})`)}</div>
       ${f.geom.pts?.length > 2 ? '<label class="pop-check"><input type="checkbox" data-k="smooth"> Curved through the points</label>' : ''}`;
   }
-  dzPop.innerHTML = `<div class="pop-head"><span>${FEATURE_NAMES[f.type]}</span><button type="button" class="pop-x" title="Close (Esc)">×</button></div>${body}
+  dzPop.innerHTML = `<div class="pop-head" title="Drag to move · double-click to keep it beside the feature"><span><i class="pop-grip" aria-hidden="true">⠿</i>${FEATURE_NAMES[f.type]}</span><button type="button" class="pop-x" title="Close (Esc)">×</button></div>${body}
     <div class="pop-foot"><button type="button" class="pop-btn pop-del" data-act="del">Delete</button></div>`;
   dzPop.querySelector('.pop-x').addEventListener('click', dzPopClose);
+  const head = dzPop.querySelector('.pop-head');
+  head.addEventListener('mousedown', e => {
+    if (e.button !== 0 || e.target.closest('.pop-x')) return;
+    e.preventDefault();
+    const box = map.getContainer().getBoundingClientRect(), r = dzPop.getBoundingClientRect();
+    const off = [e.clientX - r.left, e.clientY - r.top];
+    dzPop.classList.add('dragging');
+    const move = ev => { dzPopPin = { x: ev.clientX - box.left - off[0], y: ev.clientY - box.top - off[1] }; dzPopPlace(); };
+    const up = () => { document.removeEventListener('mousemove', move, true); document.removeEventListener('mouseup', up, true); dzPop.classList.remove('dragging'); saveDzPopPin(); };
+    document.addEventListener('mousemove', move, true);
+    document.addEventListener('mouseup', up, true);
+  });
+  head.addEventListener('dblclick', e => { if (e.target.closest('.pop-x')) return; dzPopPin = null; saveDzPopPin(); dzPopPlace(); });
   dzPop.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
     const ff = dz.sel && dz.design.feature(dz.sel);
     if (!ff) return;
@@ -2257,6 +2273,7 @@ function dzPopPlace() {
   const pw = dzPop.offsetWidth || 220, ph = dzPop.offsetHeight || 120;
   let x = sx + 24, y = sy - ph / 2;
   if (x + pw > W - 8) x = sx - pw - 24;
+  if (dzPopPin) { x = dzPopPin.x; y = dzPopPin.y; }
   x = Math.max(8, Math.min(W - pw - 8, x)); y = Math.max(8, Math.min(H - ph - 8, y));
   dzPop.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
 }

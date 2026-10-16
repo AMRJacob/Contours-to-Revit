@@ -346,3 +346,8 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .feat-dot.swale { background: #60a5fa; border-radius: 50% 50% 2px 2px; }
 .tool[data-tool="swale"].active { background: #2563eb; border-color: #2563eb; color: #fff; }
 #sslope-chips button.on { background: #2563eb; border-color: #2563eb; color: #fff; }
+
+.dz-pop .pop-head { cursor: move; user-select: none; margin: -8px -10px 6px; padding: 7px 10px 6px; border-radius: 8px 8px 0 0; }
+.dz-pop .pop-head:hover { background: rgba(232,145,63,0.08); }
+.dz-pop .pop-grip { font-style: normal; color: #8c877e; margin-right: 6px; font-size: 12px; letter-spacing: 0; }
+.dz-pop.dragging { opacity: 0.92; box-shadow: 0 12px 32px rgba(0,0,0,0.5); }
