@@ -1,14 +1,14 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.18.1';
-import { fetchElevation, sample } from './dem.js?v=0.18.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.18.1';
-import { Dxf } from './dxf.js?v=0.18.1';
-import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.18.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.18.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.18.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.19.0';
+import { fetchElevation, sample } from './dem.js?v=0.19.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.19.0';
+import { Dxf } from './dxf.js?v=0.19.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.19.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.19.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.19.0';
 
-const VERSION = '0.18.1';
+const VERSION = '0.19.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -31,14 +31,14 @@ const state = {
 // ---------- Settings persistence (per-browser convenience only) ----------
 const store = {
   get() { try { return JSON.parse(localStorage.getItem('c2r-settings') || '{}'); } catch { return {}; } },
-  set(v) { try { localStorage.setItem('c2r-settings', JSON.stringify(v)); } catch { /* ignore */ } },
+  set(v) { try { localStorage.setItem('c2r-settings', JSON.stringify(v)); } catch { /* ignore */ } projTouch(); },
 };
 
 // ---------- Map ----------
 // Remembered per browser: last map view, site boundary and picked origin (survive a refresh).
 const session = {
   get(k) { try { return JSON.parse(localStorage.getItem('c2r-' + k) || 'null'); } catch { return null; } },
-  set(k, v) { try { if (v === null) localStorage.removeItem('c2r-' + k); else localStorage.setItem('c2r-' + k, JSON.stringify(v)); } catch { /* ignore */ } },
+  set(k, v) { try { if (v === null) localStorage.removeItem('c2r-' + k); else localStorage.setItem('c2r-' + k, JSON.stringify(v)); } catch { /* ignore */ } if (k !== 'view') projTouch(); },
 };
 const savedView = session.get('view');
 const map = L.map('map', { zoomControl: true, preferCanvas: true })
@@ -802,6 +802,7 @@ const LayersControl = L.Control.extend({
     el.querySelectorAll('.lp-row').forEach(row => row.querySelector('input').addEventListener('change', e => {
       visibility[row.dataset.key] = e.target.checked;
       try { localStorage.setItem('c2r-layers', JSON.stringify(visibility)); } catch { /* ignore */ }
+      projTouch();
       applyVisibility();
     }));
     return el;
@@ -2425,6 +2426,7 @@ function dzSave() {
     const des = dz.design, site = dz.site;
     if (!des || !site) return;
     idb.set(designKey(site.grid, site.zone.code), des.changed ? des.serialize() : undefined).catch(() => {});
+    projTouch();
   }, 600);
 }
 
@@ -2523,6 +2525,7 @@ function dzSelect(id, fromList = false) {
 function setMode(mode) {
   if (pick.active) stopPick();
   dz.mode = mode;
+  projTouch();
   $('panel').classList.toggle('mode-design', mode === 'design');
   document.querySelectorAll('.mode').forEach(b => { const on = b.dataset.mode === mode; b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on)); });
   const design = mode === 'design';
@@ -3178,6 +3181,223 @@ function makeNewCsv(site) {
 MAKERS.newDxf = (s, v) => ({ name: `${baseName(s)}_new.dxf`, data: makeNewDxf(s, v), type: 'application/dxf' });
 MAKERS.newCsv = (s, v) => ({ name: `${baseName(s)}_new_points.csv`, data: makeNewCsv(s), type: 'text/csv' });
 
+// =====================================================================================================
+// ---------- Projects: named, saved work sessions kept in this browser (IndexedDB) ----------
+// =====================================================================================================
+// A project holds the site boundary, options, origin / project north / datum, layer choices, the tab in use and
+// the site design. While a project is open it saves itself as you work.
+var PROJ = { current: null, list: [], timer: 0, opening: false, savedAt: null, confirmDel: null, renaming: null };
+
+async function projLoadList() {
+  try { PROJ.list = (await idb.get('projects')) || []; } catch { PROJ.list = []; }
+  PROJ.list.sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
+  return PROJ.list;
+}
+async function projStoreList() { try { await idb.set('projects', PROJ.list.map(({ design, ...meta }) => meta)); } catch { /* ignore */ } }
+const projDataKey = id => `project:${id}`;
+
+/** Everything needed to put the work back. */
+function projSnapshot() {
+  const b = state.rect?.getBounds();
+  const c = map.getCenter();
+  const site = state.result;
+  const des = dz.design && dz.site === site ? dz.design : null;
+  return {
+    rect: b ? [[b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]] : null,
+    settings: store.get(),
+    origin: state.origin ? { ...state.origin } : null,
+    align: { ...align },
+    layers: { ...visibility },
+    prefix: folder.prefix,
+    mode: dz.mode,
+    view: { lat: c.lat, lng: c.lng, zoom: map.getZoom() },
+    designKey: des ? designKey(site.grid, site.zone.code) : null,
+    design: des && des.changed ? des.serialize() : null,
+    summary: des ? { features: des.features.length } : null,
+  };
+}
+
+/** Something changed: save the open project shortly. */
+function projTouch() {
+  if (!PROJ || !PROJ.current || PROJ.opening) return;
+  clearTimeout(PROJ.timer);
+  PROJ.timer = setTimeout(projSaveNow, 1200);
+}
+
+async function projSaveNow() {
+  const meta = PROJ.list.find(p => p.id === PROJ.current);
+  if (!meta || PROJ.opening) return;
+  const snap = projSnapshot();
+  // Keep the last good design if this site hasn't been generated yet in this session.
+  if (!snap.designKey) {
+    const old = await idb.get(projDataKey(meta.id)).catch(() => null);
+    if (old?.designKey && snap.rect && JSON.stringify(old.rect) === JSON.stringify(snap.rect)) { snap.designKey = old.designKey; snap.design = old.design; snap.summary = old.summary; }
+  }
+  await idb.set(projDataKey(meta.id), snap).catch(() => {});
+  meta.updated = new Date().toISOString();
+  meta.place = state.rect ? fmtLatLon(state.rect.getBounds().getCenter().lat, state.rect.getBounds().getCenter().lng) : '';
+  meta.features = snap.summary?.features ?? meta.features ?? 0;
+  await projStoreList();
+  PROJ.savedAt = new Date();
+  projRender();
+}
+
+async function projSaveAs(name) {
+  name = (name || '').trim() || `Site ${new Date().toLocaleDateString()}`;
+  await projLoadList();
+  const id = `p${Date.now().toString(36)}`;
+  PROJ.list.unshift({ id, name, created: new Date().toISOString(), updated: new Date().toISOString(), place: '', features: 0 });
+  PROJ.current = id;
+  try { localStorage.setItem('c2r-project', id); } catch { /* ignore */ }
+  await projSaveNow();
+  setStatus(`Saved as project “${name}”. It now saves itself as you work.`);
+}
+
+async function projOpen(id) {
+  const meta = PROJ.list.find(p => p.id === id);
+  const snap = await idb.get(projDataKey(id)).catch(() => null);
+  if (!meta || !snap) { setStatus('That project could not be opened.', true); return; }
+  if (PROJ.current) await projSaveNow();
+  PROJ.opening = true;
+  PROJ.current = id;
+  try { localStorage.setItem('c2r-project', id); } catch { /* ignore */ }
+  try {
+    if (pick.active) stopPick();
+    if (dz.mode === 'design') setMode('existing');
+    // Design first, so it loads when the site is generated.
+    if (snap.designKey && snap.design) await idb.set(snap.designKey, snap.design);
+    // Options
+    store.set(snap.settings || {});
+    restoreSettings();
+    // Origin / project north / datum
+    state.origin = snap.origin || null; session.set('origin', state.origin);
+    Object.assign(align, { rot: 0, datum: null, northRef: 'grid' }, snap.align || {}); saveAlign();
+    $('rot-deg').value = String(align.rot || 0); $('datum').value = align.datum != null ? String(align.datum) : '';
+    // Layers
+    if (snap.layers) {
+      Object.assign(visibility, snap.layers);
+      try { localStorage.setItem('c2r-layers', JSON.stringify(visibility)); } catch { /* ignore */ }
+      document.querySelectorAll('.layers-panel .lp-row').forEach(row => { row.querySelector('input').checked = !!visibility[row.dataset.key]; });
+    }
+    if (snap.prefix) { folder.prefix = snap.prefix; $('folder-prefix').value = snap.prefix; try { localStorage.setItem('c2r-prefix', snap.prefix); } catch { /* ignore */ } updateFolderUi(); }
+    // Site boundary
+    drawn.clearLayers();
+    state.result = null;
+    for (const g of Object.values(state.mapGroups || {})) map.removeLayer(g);
+    state.mapGroups = {};
+    $('step-results').hidden = true;
+    if (snap.rect) {
+      state.rect = L.rectangle(snap.rect, drawControl.options.draw.rectangle.shapeOptions);
+      drawn.addLayer(state.rect);
+    } else state.rect = null;
+    saveRect();
+    if (snap.view) map.setView([snap.view.lat, snap.view.lng], snap.view.zoom, { animate: false });
+    else if (state.rect) map.fitBounds(state.rect.getBounds(), { padding: [30, 30] });
+    await onSiteChanged(true);
+    applyOrigin();
+    projRender();
+    if (state.rect) {
+      setStatus(`Opening “${meta.name}” — generating the site…`);
+      $('generate').disabled = true;
+      try { await generate(); } catch (err) { console.error(err); setStatus(`Opened “${meta.name}”, but generating failed: ${err.message || err}. Click Generate to try again.`, true); }
+      finally { $('generate').disabled = !state.rect; }
+      if (state.result && snap.mode === 'design') { setMode('design'); await dzEnsure(); }
+      if (state.result) setStatus(`Opened “${meta.name}”.`);
+    } else setStatus(`Opened “${meta.name}” (no site boundary yet).`);
+  } finally {
+    PROJ.opening = false;
+  }
+}
+
+async function projDelete(id) {
+  const meta = PROJ.list.find(p => p.id === id);
+  PROJ.list = PROJ.list.filter(p => p.id !== id);
+  await idb.set(projDataKey(id), undefined).catch(() => {});
+  await projStoreList();
+  if (PROJ.current === id) { PROJ.current = null; try { localStorage.removeItem('c2r-project'); } catch { /* ignore */ } }
+  PROJ.confirmDel = null;
+  projRender();
+  if (meta) setStatus(`Deleted project “${meta.name}”. Your current work on the map is unchanged.`);
+}
+
+async function projRename(id, name) {
+  const meta = PROJ.list.find(p => p.id === id);
+  name = (name || '').trim();
+  PROJ.renaming = null;
+  if (meta && name) { meta.name = name; await projStoreList(); }
+  projRender();
+}
+
+/** Leave the open project (it stays saved); work continues as unsaved. */
+function projDetach(msg) {
+  const meta = PROJ.list.find(p => p.id === PROJ.current);
+  PROJ.current = null;
+  try { localStorage.removeItem('c2r-project'); } catch { /* ignore */ }
+  projRender();
+  if (msg && meta) setStatus(`${msg} “${meta.name}” is still saved — open it from Projects.`);
+}
+
+function projRender() {
+  const meta = PROJ.list.find(p => p.id === PROJ.current);
+  $('proj-name').textContent = meta ? meta.name : 'Unsaved work';
+  $('proj-bar').classList.toggle('has-project', !!meta);
+  $('proj-state').textContent = meta ? (PROJ.savedAt ? `saved ${PROJ.savedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'saves as you work') : '';
+  $('proj-save-as').textContent = meta ? 'Save a copy' : 'Save as project';
+  const ul = $('proj-list');
+  if (!PROJ.list.length) { ul.innerHTML = '<li class="proj-empty">No saved projects yet.</li>'; return; }
+  const when = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
+  ul.innerHTML = PROJ.list.map(p => {
+    const cur = p.id === PROJ.current;
+    const name = PROJ.renaming === p.id
+      ? `<input class="proj-rename" value="${escapeHtml(p.name)}" data-id="${p.id}">`
+      : `<button type="button" class="proj-open" data-id="${p.id}" title="${cur ? 'Open now' : 'Open this project'}"><b>${escapeHtml(p.name)}</b><span>${escapeHtml([p.place, p.features ? `${p.features} feature${p.features === 1 ? '' : 's'}` : '', when(p.updated)].filter(Boolean).join(' · '))}</span></button>`;
+    return `<li class="proj-item${cur ? ' cur' : ''}">${name}
+      <button type="button" class="proj-act" data-act="rename" data-id="${p.id}" title="Rename">✎</button>
+      <button type="button" class="proj-act proj-del${PROJ.confirmDel === p.id ? ' confirm' : ''}" data-act="delete" data-id="${p.id}" title="Delete">${PROJ.confirmDel === p.id ? 'Delete?' : '🗑'}</button></li>`;
+  }).join('');
+  ul.querySelectorAll('.proj-open').forEach(b => b.addEventListener('click', () => { $('proj-menu').hidden = true; if (b.dataset.id !== PROJ.current || !state.result) projOpen(b.dataset.id); }));
+  ul.querySelectorAll('.proj-act').forEach(b => b.addEventListener('click', () => {
+    const id = b.dataset.id;
+    if (b.dataset.act === 'rename') { PROJ.renaming = id; PROJ.confirmDel = null; projRender(); const i = ul.querySelector('.proj-rename'); i?.focus(); i?.select(); return; }
+    if (PROJ.confirmDel === id) projDelete(id); else { PROJ.confirmDel = id; projRender(); setTimeout(() => { if (PROJ.confirmDel === id) { PROJ.confirmDel = null; projRender(); } }, 4000); }
+  }));
+  const ri = ul.querySelector('.proj-rename');
+  if (ri) {
+    ri.addEventListener('keydown', e => { if (e.key === 'Enter') projRename(ri.dataset.id, ri.value); else if (e.key === 'Escape') { PROJ.renaming = null; projRender(); } e.stopPropagation(); });
+    ri.addEventListener('blur', () => projRename(ri.dataset.id, ri.value));
+  }
+}
+
+$('proj-toggle').addEventListener('click', async () => {
+  const menu = $('proj-menu');
+  if (menu.hidden) { await projLoadList(); projRender(); }
+  menu.hidden = !menu.hidden;
+  if (!menu.hidden && !PROJ.current) $('proj-new-name').focus();
+});
+document.addEventListener('mousedown', e => { if (!$('proj-menu').hidden && !e.target.closest('#proj-bar')) $('proj-menu').hidden = true; });
+$('proj-save-as').addEventListener('click', async () => {
+  const meta = PROJ.list.find(p => p.id === PROJ.current);
+  const name = $('proj-new-name').value || (meta ? `${meta.name} copy` : '');
+  $('proj-new-name').value = '';
+  await projSaveAs(name);
+  $('proj-menu').hidden = true;
+});
+$('proj-new-name').addEventListener('keydown', e => { if (e.key === 'Enter') $('proj-save-as').click(); e.stopPropagation(); });
+$('proj-new').addEventListener('click', () => {
+  $('proj-menu').hidden = true;
+  const had = PROJ.current;
+  projDetach();
+  if (dz.mode === 'design') setMode('existing');
+  clearAll();
+  if (had) setStatus('Started fresh. Your previous project is still saved — open it from Projects.');
+});
+
+(async () => {
+  await projLoadList();
+  try { const id = localStorage.getItem('c2r-project'); if (id && PROJ.list.some(p => p.id === id)) PROJ.current = id; } catch { /* ignore */ }
+  projRender();
+})();
+
 // ---------- Utils ----------
 function fmt(v, dec = 0) {
   return Number(v).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
@@ -3221,7 +3441,7 @@ const ClearControl = L.Control.extend({
     const el = L.DomUtil.create('div', 'leaflet-bar clear-control');
     el.innerHTML = '<a href="#" role="button" title="Clear site, layers and origin" aria-label="Clear all">Clear</a>';
     L.DomEvent.disableClickPropagation(el);
-    el.querySelector('a').addEventListener('click', e => { e.preventDefault(); clearAll(); });
+    el.querySelector('a').addEventListener('click', e => { e.preventDefault(); clearAll(); if (PROJ.current) projDetach('Cleared.'); });
     return el;
   },
 });

@@ -351,3 +351,33 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .dz-pop .pop-head:hover { background: rgba(232,145,63,0.08); }
 .dz-pop .pop-grip { font-style: normal; color: #8c877e; margin-right: 6px; font-size: 12px; letter-spacing: 0; }
 .dz-pop.dragging { opacity: 0.92; box-shadow: 0 12px 32px rgba(0,0,0,0.5); }
+
+/* Projects */
+.proj-bar { position: relative; padding: 10px 20px 0; }
+.proj-toggle { width: 100%; display: flex; align-items: center; gap: 8px; font: inherit; font-size: 13px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; cursor: pointer; text-align: left; }
+.proj-toggle:hover { border-color: var(--ink-3); }
+.proj-toggle svg { width: 17px; height: 17px; flex: none; fill: none; stroke: var(--ink-3); stroke-width: 1.6; }
+.proj-bar.has-project .proj-toggle svg { stroke: var(--accent); }
+.proj-name { font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.proj-bar:not(.has-project) .proj-name { color: var(--ink-3); font-weight: 500; }
+.proj-state { font-size: 11px; color: var(--ink-3); font-family: var(--mono); white-space: nowrap; }
+.proj-caret { color: var(--ink-3); font-size: 11px; }
+.proj-menu { position: absolute; left: 20px; right: 20px; top: calc(100% + 4px); z-index: 30; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; box-shadow: 0 12px 32px rgba(0,0,0,0.18); }
+.proj-save-row { display: flex; gap: 6px; }
+.proj-save-row input { flex: 1; min-width: 0; font: inherit; font-size: 13px; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+.proj-save-row input:focus, .proj-rename:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.proj-save-row .btn { padding: 6px 10px; font-size: 12.5px; white-space: nowrap; }
+.proj-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--ink-3); margin: 12px 0 6px; }
+.proj-list { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 4px; max-height: 280px; overflow: auto; }
+.proj-item { display: flex; align-items: stretch; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.proj-item.cur { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.proj-open { all: unset; flex: 1; min-width: 0; cursor: pointer; padding: 6px 9px; display: grid; gap: 1px; }
+.proj-open:hover { background: var(--accent-soft); }
+.proj-open b { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.proj-open span { font-size: 11px; color: var(--ink-3); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.proj-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.proj-rename { flex: 1; min-width: 0; font: inherit; font-size: 13px; color: var(--ink); background: var(--paper); border: 0; padding: 6px 9px; }
+.proj-act { all: unset; cursor: pointer; padding: 0 9px; color: var(--ink-3); font-size: 13px; border-left: 1px solid var(--line); display: grid; place-items: center; }
+.proj-act:hover { color: var(--ink); background: var(--paper); }
+.proj-del.confirm { color: #fff; background: #dc2626; font-size: 11.5px; font-weight: 600; }
+.proj-empty { font-size: 12.5px; color: var(--ink-3); padding: 2px 0 4px; }
