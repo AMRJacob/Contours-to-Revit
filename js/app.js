@@ -1,14 +1,14 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.19.3';
-import { fetchElevation, sample } from './dem.js?v=0.19.3';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.19.3';
-import { Dxf } from './dxf.js?v=0.19.3';
-import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.19.3';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.19.3';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.19.3';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.20.0';
+import { fetchElevation, sample } from './dem.js?v=0.20.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.20.0';
+import { Dxf } from './dxf.js?v=0.20.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.20.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.20.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.20.0';
 
-const VERSION = '0.19.3';
+const VERSION = '0.20.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -1396,6 +1396,7 @@ const FOLDER_OK = 'showDirectoryPicker' in window;
 const idb = {
   open() { return new Promise((res, rej) => { const r = indexedDB.open('c2r', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); },
   async get(k) { const db = await this.open(); return new Promise(res => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => res(undefined); }); },
+  async keys() { const db = await this.open(); return new Promise(res => { const q = db.transaction('kv').objectStore('kv').getAllKeys(); q.onsuccess = () => res(q.result || []); q.onerror = () => res([]); }); },
   async set(k, v) { const db = await this.open(); return new Promise(res => { const t = db.transaction('kv', 'readwrite'); if (v === undefined) t.objectStore('kv').delete(k); else t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = res; }); },
 };
 const folder = { handle: null, prefix: (() => { try { return localStorage.getItem('c2r-prefix') || 'site'; } catch { return 'site'; } })() };
@@ -2457,8 +2458,17 @@ async function dzEnsure() {
   dz.prop = dz.exist; dz.contourVer = dz.design.version;
   dz.raster = null;
   try {
-    const saved = await idb.get(designKey(site.grid, site.zone.code));
-    if (saved && dz.site === site && dz.design.load(saved)) { dz.contourVer = -1; setStatus('Restored your saved design for this site.'); }
+    const key = designKey(site.grid, site.zone.code);
+    const saved = await idb.get(key);
+    let ok = saved && dz.site === site && dz.design.load(saved);
+    // A project's design saved on a slightly different grid (boundary or settings changed): fit it to this one.
+    const pend = PROJ?.pending;
+    if (!ok && pend && dz.site === site && pend.key !== key) {
+      const og = parseDesignKey(pend.key);
+      if (og && og.zone === site.zone.code && dz.design.loadResampled(pend.design, og)) ok = true;
+    }
+    if (pend) PROJ.pending = null;
+    if (ok) { dz.contourVer = -1; setStatus('Restored your saved design for this site.'); }
   } catch { /* ignore */ }
   dzUpdateRaster(true);
   dzSyncUi();
@@ -3253,16 +3263,16 @@ MAKERS.newCsv = (s, v) => ({ name: `${baseName(s)}_new_points.csv`, data: makeNe
 // =====================================================================================================
 // ---------- Projects: named, saved work sessions kept in this browser (IndexedDB) ----------
 // =====================================================================================================
-// A project holds the site boundary, options, origin / project north / datum, layer choices, the tab in use and
-// the site design. While a project is open it saves itself as you work.
-var PROJ = { current: null, list: [], timer: 0, opening: false, savedAt: null, confirmDel: null, renaming: null };
+// Saving is manual: Save overwrites the open project, Save as new makes another. Changes since the last save are
+// flagged in the bar. Opening another project first offers to save the current work, then zooms to the project.
+var PROJ = { current: null, list: [], dirty: false, opening: false, savedAt: null, confirmDel: null, renaming: null, pending: null, recover: null };
 
 async function projLoadList() {
   try { PROJ.list = (await idb.get('projects')) || []; } catch { PROJ.list = []; }
   PROJ.list.sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
   return PROJ.list;
 }
-async function projStoreList() { try { await idb.set('projects', PROJ.list.map(({ design, ...meta }) => meta)); } catch { /* ignore */ } }
+async function projStoreList() { try { await idb.set('projects', PROJ.list); } catch { /* ignore */ } }
 const projDataKey = id => `project:${id}`;
 
 /** Everything needed to put the work back. */
@@ -3286,27 +3296,31 @@ function projSnapshot() {
   };
 }
 
-/** Something changed: save the open project shortly. */
+/** Something changed since the last save or open. */
 function projTouch() {
-  if (!PROJ || !PROJ.current || PROJ.opening) return;
-  clearTimeout(PROJ.timer);
-  PROJ.timer = setTimeout(projSaveNow, 1200);
+  if (!PROJ || PROJ.opening) return;
+  if (!PROJ.dirty) { PROJ.dirty = true; projRender(); }
 }
 
-async function projSaveNow() {
-  const meta = PROJ.list.find(p => p.id === PROJ.current);
-  if (!meta || PROJ.opening) return;
+/** Write the current work into project `id` (manual save / overwrite). */
+async function projWrite(id) {
+  const meta = PROJ.list.find(p => p.id === id);
+  if (!meta) return;
   const snap = projSnapshot();
-  // Keep the last good design if this site hasn't been generated yet in this session.
-  if (!snap.designKey) {
-    const old = await idb.get(projDataKey(meta.id)).catch(() => null);
-    if (old?.designKey && snap.rect && JSON.stringify(old.rect) === JSON.stringify(snap.rect)) { snap.designKey = old.designKey; snap.design = old.design; snap.summary = old.summary; }
+  // A design not yet loaded in this session (site not generated since opening): keep the saved one.
+  if (!snap.designKey && PROJ.current === id) {
+    const old = await idb.get(projDataKey(id)).catch(() => null);
+    if (old?.designKey && JSON.stringify(old.rect) === JSON.stringify(snap.rect)) { snap.designKey = old.designKey; snap.design = old.design; snap.summary = old.summary; }
   }
-  await idb.set(projDataKey(meta.id), snap).catch(() => {});
+  await idb.set(projDataKey(id), snap).catch(() => {});
   meta.updated = new Date().toISOString();
   meta.place = state.rect ? fmtLatLon(state.rect.getBounds().getCenter().lat, state.rect.getBounds().getCenter().lng) : '';
+  meta.rect = snap.rect;
   meta.features = snap.summary?.features ?? meta.features ?? 0;
   await projStoreList();
+  PROJ.current = id;
+  try { localStorage.setItem('c2r-project', id); } catch { /* ignore */ }
+  PROJ.dirty = false;
   PROJ.savedAt = new Date();
   projRender();
 }
@@ -3316,54 +3330,78 @@ async function projSaveAs(name) {
   await projLoadList();
   const id = `p${Date.now().toString(36)}`;
   PROJ.list.unshift({ id, name, created: new Date().toISOString(), updated: new Date().toISOString(), place: '', features: 0 });
-  PROJ.current = id;
-  try { localStorage.setItem('c2r-project', id); } catch { /* ignore */ }
-  await projSaveNow();
-  setStatus(`Saved as project “${name}”. It now saves itself as you work.`);
+  await projWrite(id);
+  setStatus(`Saved as project “${name}”.`);
+}
+
+async function projSave() {
+  const meta = PROJ.list.find(p => p.id === PROJ.current);
+  if (!meta) return;
+  await projWrite(meta.id);
+  setStatus(`Saved “${meta.name}”.`);
+}
+
+/** Ask what to do with unsaved work before leaving it. Resolves to true to continue, false to cancel. */
+function projAskSave(nextLabel) {
+  if (!PROJ.dirty || !state.rect) return Promise.resolve(true);
+  const meta = PROJ.list.find(p => p.id === PROJ.current);
+  const box = $('proj-ask');
+  box.innerHTML = `<div class="pa-title">Save your current work first?</div>
+    <p class="pa-text">You have unsaved changes${meta ? ` to “${escapeHtml(meta.name)}”` : ''}. ${escapeHtml(nextLabel)}</p>
+    <div class="proj-save-row"><input type="text" class="pa-name" placeholder="New project name" spellcheck="false"><button type="button" class="btn" data-a="new">Save as new</button></div>
+    <div class="pa-btns">${meta ? `<button type="button" class="btn" data-a="over">Overwrite “${escapeHtml(meta.name)}”</button>` : ''}<button type="button" class="btn btn-quiet" data-a="skip">Don't save</button><button type="button" class="btn btn-quiet" data-a="cancel">Cancel</button></div>`;
+  box.hidden = false;
+  box.querySelector('.pa-name').focus();
+  return new Promise(resolve => {
+    const done = async a => {
+      if (a === 'new') await projSaveAs(box.querySelector('.pa-name').value);
+      if (a === 'over' && meta) await projWrite(meta.id);
+      box.hidden = true;
+      resolve(a !== 'cancel');
+    };
+    box.querySelectorAll('[data-a]').forEach(b => b.addEventListener('click', () => done(b.dataset.a)));
+    box.querySelector('.pa-name').addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') done('new'); if (e.key === 'Escape') done('cancel'); });
+  });
 }
 
 async function projOpen(id) {
   const meta = PROJ.list.find(p => p.id === id);
   const snap = await idb.get(projDataKey(id)).catch(() => null);
   if (!meta || !snap) { setStatus('That project could not be opened.', true); return; }
-  if (PROJ.current) await projSaveNow();
   PROJ.opening = true;
   PROJ.current = id;
   try { localStorage.setItem('c2r-project', id); } catch { /* ignore */ }
   try {
     if (pick.active) stopPick();
     if (dz.mode === 'design') setMode('existing');
-    // Design first, so it loads when the site is generated.
-    if (snap.designKey && snap.design) await idb.set(snap.designKey, snap.design);
-    // Options
+    // Design: stored under its key, and kept as "pending" so it can be fitted to a slightly different grid.
+    PROJ.pending = snap.designKey && snap.design ? { key: snap.designKey, design: snap.design } : null;
+    if (PROJ.pending) await idb.set(snap.designKey, snap.design);
     store.set(snap.settings || {});
     restoreSettings();
-    // Origin / project north / datum
     state.origin = snap.origin || null; session.set('origin', state.origin);
     Object.assign(align, { rot: 0, datum: null, northRef: 'grid' }, snap.align || {}); saveAlign();
     $('rot-deg').value = String(align.rot || 0); $('datum').value = align.datum != null ? String(align.datum) : '';
-    // Layers
     if (snap.layers) {
       Object.assign(visibility, snap.layers);
       try { localStorage.setItem('c2r-layers', JSON.stringify(visibility)); } catch { /* ignore */ }
       document.querySelectorAll('.layers-panel .lp-row').forEach(row => { row.querySelector('input').checked = !!visibility[row.dataset.key]; });
     }
     if (snap.prefix) { folder.prefix = snap.prefix; $('folder-prefix').value = snap.prefix; try { localStorage.setItem('c2r-prefix', snap.prefix); } catch { /* ignore */ } updateFolderUi(); }
-    // Site boundary
     drawn.clearLayers();
     state.result = null;
     for (const g of Object.values(state.mapGroups || {})) map.removeLayer(g);
     state.mapGroups = {};
     $('step-results').hidden = true;
-    if (snap.rect) {
-      state.rect = L.rectangle(snap.rect, drawControl.options.draw.rectangle.shapeOptions);
-      drawn.addLayer(state.rect);
-    } else state.rect = null;
+    if (snap.rect) { state.rect = L.rectangle(snap.rect, drawControl.options.draw.rectangle.shapeOptions); drawn.addLayer(state.rect); }
+    else state.rect = null;
     saveRect();
-    if (snap.view) map.setView([snap.view.lat, snap.view.lng], snap.view.zoom, { animate: false });
-    else if (state.rect) map.fitBounds(state.rect.getBounds(), { padding: [30, 30] });
+    // Zoom to the project's extents.
+    if (state.rect) map.fitBounds(state.rect.getBounds(), { padding: [30, 30], animate: false });
+    else if (snap.view) map.setView([snap.view.lat, snap.view.lng], snap.view.zoom, { animate: false });
     await onSiteChanged(true);
     applyOrigin();
+    PROJ.dirty = false;
     projRender();
     if (state.rect) {
       setStatus(`Opening “${meta.name}” — generating the site…`);
@@ -3375,7 +3413,18 @@ async function projOpen(id) {
     } else setStatus(`Opened “${meta.name}” (no site boundary yet).`);
   } finally {
     PROJ.opening = false;
+    PROJ.dirty = false;
+    projRender();
   }
+}
+
+/** Click on a project: offer to save the current work, then open it (zooming to its extents). */
+async function projRequestOpen(id) {
+  const meta = PROJ.list.find(p => p.id === id);
+  if (!meta) return;
+  $('proj-menu').hidden = true;
+  if (!(await projAskSave(`Opening “${meta.name}” replaces what's on the map.`))) return;
+  await projOpen(id);
 }
 
 async function projDelete(id) {
@@ -3397,34 +3446,86 @@ async function projRename(id, name) {
   projRender();
 }
 
-/** Leave the open project (it stays saved); work continues as unsaved. */
-function projDetach(msg) {
-  const meta = PROJ.list.find(p => p.id === PROJ.current);
+/** Leave the open project without saving (it stays as last saved); work continues as unsaved. */
+function projDetach() {
   PROJ.current = null;
   try { localStorage.removeItem('c2r-project'); } catch { /* ignore */ }
   projRender();
-  if (msg && meta) setStatus(`${msg} “${meta.name}” is still saved — open it from Projects.`);
+}
+
+// ----- Recovering autosaved designs that aren't in a saved project -----
+async function projFindOrphans() {
+  const keys = (await idb.keys().catch(() => [])).filter(k => typeof k === 'string' && k.startsWith('design:'));
+  const used = new Set();
+  for (const p of PROJ.list) { const snap = await idb.get(projDataKey(p.id)).catch(() => null); if (snap?.designKey) used.add(snap.designKey); }
+  const out = [];
+  for (const key of keys) {
+    if (used.has(key)) continue;
+    const g = parseDesignKey(key), zone = g && zoneByCode(g.zone);
+    if (!zone) continue;
+    const saved = await idb.get(key).catch(() => null);
+    if (!saved) continue;
+    const pr = projector(zone);
+    const corners = [[g.x0, g.y0], [g.x0 + (g.nx - 1) * g.s, g.y0], [g.x0 + (g.nx - 1) * g.s, g.y0 + (g.ny - 1) * g.s], [g.x0, g.y0 + (g.ny - 1) * g.s]].map(q => pr.inv(q));
+    const lons = corners.map(q => q[0]), lats = corners.map(q => q[1]);
+    const pad = 0.00002;
+    const rect = [[Math.min(...lats) - pad, Math.min(...lons) - pad], [Math.max(...lats) + pad, Math.max(...lons) + pad]];
+    const feats = saved.features?.length || 0, brushed = (saved.brush || []).some?.(v => v !== 0);
+    if (!feats && !brushed) continue;
+    out.push({ key, g, zone, rect, feats, brushed, saved });
+  }
+  return out;
+}
+
+async function projRecover(o) {
+  const name = `Recovered ${fmtLatLon((o.rect[0][0] + o.rect[1][0]) / 2, (o.rect[0][1] + o.rect[1][1]) / 2)}`;
+  const id = `p${Date.now().toString(36)}`;
+  const k = o.saved.features?.find(f => f.p?.k)?.p.k;
+  const settings = { ...store.get(), zone: String(o.zone.code), units: k && Math.abs(k - 1) > 1e-6 ? 'm' : 'ft' };
+  const snap = { rect: o.rect, settings, origin: null, align: { ...align }, layers: { ...visibility }, prefix: folder.prefix, mode: 'design', view: null, designKey: o.key, design: o.saved, summary: { features: o.feats } };
+  await idb.set(projDataKey(id), snap);
+  PROJ.list.unshift({ id, name, created: new Date().toISOString(), updated: new Date().toISOString(), place: fmtLatLon((o.rect[0][0] + o.rect[1][0]) / 2, (o.rect[0][1] + o.rect[1][1]) / 2), rect: o.rect, features: o.feats });
+  await projStoreList();
+  PROJ.recover = null;
+  projRender();
+  setStatus(`Made “${name}” from an autosaved design. Click it to open (rename it with ✎).`);
+}
+
+// ----- Bar / menu -----
+let projOutline = null;
+function projShowOutline(rect) {
+  if (projOutline) { map.removeLayer(projOutline); projOutline = null; }
+  if (rect) projOutline = L.rectangle(rect, { color: '#38bdf8', weight: 2, dashArray: '6 4', fill: false, interactive: false }).addTo(map);
 }
 
 function projRender() {
+  if (!$('proj-name')) return;
   const meta = PROJ.list.find(p => p.id === PROJ.current);
   $('proj-name').textContent = meta ? meta.name : 'Unsaved work';
   $('proj-bar').classList.toggle('has-project', !!meta);
-  $('proj-state').textContent = meta ? (PROJ.savedAt ? `saved ${PROJ.savedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'saves as you work') : '';
-  $('proj-save-as').textContent = meta ? 'Save a copy' : 'Save as project';
+  $('proj-bar').classList.toggle('dirty', !!PROJ.dirty && !!state.rect);
+  $('proj-state').textContent = meta
+    ? (PROJ.dirty ? '● unsaved changes' : PROJ.savedAt ? `saved ${PROJ.savedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'saved')
+    : (state.rect ? 'not saved' : '');
+  $('proj-save').hidden = !meta;
+  $('proj-save').textContent = meta ? `Save “${meta.name}”` : 'Save';
   const ul = $('proj-list');
-  if (!PROJ.list.length) { ul.innerHTML = '<li class="proj-empty">No saved projects yet.</li>'; return; }
   const when = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
-  ul.innerHTML = PROJ.list.map(p => {
+  ul.innerHTML = PROJ.list.length ? PROJ.list.map(p => {
     const cur = p.id === PROJ.current;
     const name = PROJ.renaming === p.id
       ? `<input class="proj-rename" value="${escapeHtml(p.name)}" data-id="${p.id}">`
-      : `<button type="button" class="proj-open" data-id="${p.id}" title="${cur ? 'Open now' : 'Open this project'}"><b>${escapeHtml(p.name)}</b><span>${escapeHtml([p.place, p.features ? `${p.features} feature${p.features === 1 ? '' : 's'}` : '', when(p.updated)].filter(Boolean).join(' · '))}</span></button>`;
-    return `<li class="proj-item${cur ? ' cur' : ''}">${name}
+      : `<button type="button" class="proj-open" data-id="${p.id}" title="Open and zoom to this project"><b>${escapeHtml(p.name)}${cur ? ' <i class="proj-cur">open</i>' : ''}</b><span>${escapeHtml([p.place, p.features ? `${p.features} feature${p.features === 1 ? '' : 's'}` : '', when(p.updated)].filter(Boolean).join(' · '))}</span></button>`;
+    return `<li class="proj-item${cur ? ' cur' : ''}" data-id="${p.id}">${name}
       <button type="button" class="proj-act" data-act="rename" data-id="${p.id}" title="Rename">✎</button>
       <button type="button" class="proj-act proj-del${PROJ.confirmDel === p.id ? ' confirm' : ''}" data-act="delete" data-id="${p.id}" title="Delete">${PROJ.confirmDel === p.id ? 'Delete?' : '🗑'}</button></li>`;
-  }).join('');
-  ul.querySelectorAll('.proj-open').forEach(b => b.addEventListener('click', () => { $('proj-menu').hidden = true; if (b.dataset.id !== PROJ.current || !state.result) projOpen(b.dataset.id); }));
+  }).join('') : '<li class="proj-empty">No saved projects yet.</li>';
+  ul.querySelectorAll('.proj-open').forEach(b => b.addEventListener('click', () => projRequestOpen(b.dataset.id)));
+  ul.querySelectorAll('.proj-item').forEach(li => {
+    const p = PROJ.list.find(q => q.id === li.dataset.id);
+    li.addEventListener('mouseenter', () => projShowOutline(p?.rect));
+    li.addEventListener('mouseleave', () => projShowOutline(null));
+  });
   ul.querySelectorAll('.proj-act').forEach(b => b.addEventListener('click', () => {
     const id = b.dataset.id;
     if (b.dataset.act === 'rename') { PROJ.renaming = id; PROJ.confirmDel = null; projRender(); const i = ul.querySelector('.proj-rename'); i?.focus(); i?.select(); return; }
@@ -3435,15 +3536,28 @@ function projRender() {
     ri.addEventListener('keydown', e => { if (e.key === 'Enter') projRename(ri.dataset.id, ri.value); else if (e.key === 'Escape') { PROJ.renaming = null; projRender(); } e.stopPropagation(); });
     ri.addEventListener('blur', () => projRename(ri.dataset.id, ri.value));
   }
+  // Recovery list
+  const rl = $('proj-recover-list');
+  if (PROJ.recover) {
+    rl.hidden = false;
+    rl.innerHTML = PROJ.recover.length ? PROJ.recover.map((o, i) => `<li class="proj-item"><button type="button" class="proj-open" data-i="${i}" title="Make this into a project"><b>${escapeHtml(fmtLatLon((o.rect[0][0] + o.rect[1][0]) / 2, (o.rect[0][1] + o.rect[1][1]) / 2))}</b><span>${o.feats} feature${o.feats === 1 ? '' : 's'}${o.brushed ? ' + brush grading' : ''} · ${escapeHtml(o.zone.name)}</span></button><button type="button" class="proj-act" data-i="${i}" title="Make project">＋</button></li>`).join('')
+      : '<li class="proj-empty">Nothing to recover — every autosaved design is in a project.</li>';
+    rl.querySelectorAll('[data-i]').forEach(b => b.addEventListener('click', () => projRecover(PROJ.recover[+b.dataset.i])));
+    rl.querySelectorAll('.proj-item').forEach((li, i) => {
+      li.addEventListener('mouseenter', () => projShowOutline(PROJ.recover[i]?.rect));
+      li.addEventListener('mouseleave', () => projShowOutline(null));
+    });
+  } else rl.hidden = true;
 }
 
 $('proj-toggle').addEventListener('click', async () => {
   const menu = $('proj-menu');
-  if (menu.hidden) { await projLoadList(); projRender(); }
+  if (menu.hidden) { await projLoadList(); PROJ.recover = null; projRender(); }
   menu.hidden = !menu.hidden;
-  if (!menu.hidden && !PROJ.current) $('proj-new-name').focus();
+  if (menu.hidden) projShowOutline(null);
 });
-document.addEventListener('mousedown', e => { if (!$('proj-menu').hidden && !e.target.closest('#proj-bar')) $('proj-menu').hidden = true; });
+document.addEventListener('mousedown', e => { if (!$('proj-menu').hidden && !e.target.closest('#proj-bar')) { $('proj-menu').hidden = true; projShowOutline(null); } });
+$('proj-save').addEventListener('click', async () => { await projSave(); $('proj-menu').hidden = true; });
 $('proj-save-as').addEventListener('click', async () => {
   const meta = PROJ.list.find(p => p.id === PROJ.current);
   const name = $('proj-new-name').value || (meta ? `${meta.name} copy` : '');
@@ -3452,18 +3566,27 @@ $('proj-save-as').addEventListener('click', async () => {
   $('proj-menu').hidden = true;
 });
 $('proj-new-name').addEventListener('keydown', e => { if (e.key === 'Enter') $('proj-save-as').click(); e.stopPropagation(); });
-$('proj-new').addEventListener('click', () => {
+$('proj-new').addEventListener('click', async () => {
   $('proj-menu').hidden = true;
-  const had = PROJ.current;
+  if (!(await projAskSave('Starting a new project clears the map.'))) return;
   projDetach();
   if (dz.mode === 'design') setMode('existing');
   clearAll();
-  if (had) setStatus('Started fresh. Your previous project is still saved — open it from Projects.');
+  PROJ.dirty = false; projRender();
+  setStatus('Started a new blank project. Draw a site boundary to begin.');
+});
+$('proj-recover').addEventListener('click', async () => {
+  $('proj-recover').disabled = true;
+  try { PROJ.recover = await projFindOrphans(); } finally { $('proj-recover').disabled = false; }
+  projRender();
 });
 
 (async () => {
   await projLoadList();
   try { const id = localStorage.getItem('c2r-project'); if (id && PROJ.list.some(p => p.id === id)) PROJ.current = id; } catch { /* ignore */ }
+  // Older saves didn't keep the boundary in the index; fill it in for the hover outline.
+  for (const p of PROJ.list) if (!p.rect) { const snap = await idb.get(projDataKey(p.id)).catch(() => null); if (snap?.rect) p.rect = snap.rect; }
+  PROJ.dirty = false;
   projRender();
 })();
 
@@ -3510,7 +3633,7 @@ const ClearControl = L.Control.extend({
     const el = L.DomUtil.create('div', 'leaflet-bar clear-control');
     el.innerHTML = '<a href="#" role="button" title="Clear site, layers and origin" aria-label="Clear all">Clear</a>';
     L.DomEvent.disableClickPropagation(el);
-    el.querySelector('a').addEventListener('click', e => { e.preventDefault(); clearAll(); if (PROJ.current) projDetach('Cleared.'); });
+    el.querySelector('a').addEventListener('click', e => { e.preventDefault(); clearAll(); if (PROJ.current) { const n = PROJ.list.find(p => p.id === PROJ.current)?.name; projDetach(); setStatus(`Cleared. “${n}” is unchanged — open it from Projects.`); } });
     return el;
   },
 });

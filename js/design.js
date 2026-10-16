@@ -75,6 +75,31 @@ export class Design {
   }
 
   // ----- Saving -----
+  /**
+   * Restore a design saved on a different (overlapping) grid: features carry over as-is (they are in State Plane
+   * coordinates); the brush layer is resampled bilinearly onto this grid (0 where the old grid didn't reach).
+   * oldGrid: { x0, y0, s, nx, ny }.
+   */
+  loadResampled(saved, oldGrid) {
+    const ob = saved?.brush || saved?.delta || saved;
+    if (!ob || ob.length !== oldGrid.nx * oldGrid.ny) return false;
+    const { x0, y0, s, nx, ny } = this.g;
+    const B = new Float32Array(nx * ny);
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const fx = (x0 + i * s - oldGrid.x0) / oldGrid.s, fy = (y0 + j * s - oldGrid.y0) / oldGrid.s;
+      const ii = Math.floor(fx), jj = Math.floor(fy);
+      if (ii < 0 || jj < 0 || ii >= oldGrid.nx - 1 || jj >= oldGrid.ny - 1) continue;
+      const tx = fx - ii, ty = fy - jj, k = jj * oldGrid.nx + ii;
+      const v = (ob[k] * (1 - tx) + ob[k + 1] * tx) * (1 - ty) + (ob[k + oldGrid.nx] * (1 - tx) + ob[k + oldGrid.nx + 1] * tx) * ty;
+      if (Number.isFinite(v)) B[j * nx + i] = v;
+    }
+    this.brush = B;
+    this.features = saved.v === 2 ? (saved.features || []) : [];
+    for (const f of this.features) nextId = Math.max(nextId, (f.id || 0) + 1);
+    this.rebuild();
+    return true;
+  }
+
   serialize() { return { v: 2, brush: this.brush, features: this.features.map(({ out, ...r }) => r) }; }
   /** Restore { brush, features } (v2) or a bare delta array (older saves). */
   load(saved) {
@@ -610,6 +635,11 @@ const SEGS = {
 /** Per-site storage key (IndexedDB), from the grid's position and size. */
 export function designKey(g, zoneCode) {
   return `design:${zoneCode}:${g.x0.toFixed(2)}:${g.y0.toFixed(2)}:${g.s.toFixed(4)}:${g.nx}x${g.ny}`;
+}
+/** Inverse of designKey: { zone, x0, y0, s, nx, ny } or null. */
+export function parseDesignKey(key) {
+  const m = /^design:(\d+):(-?[\d.]+):(-?[\d.]+):([\d.]+):(\d+)x(\d+)$/.exec(key || '');
+  return m ? { zone: Number(m[1]), x0: +m[2], y0: +m[3], s: +m[4], nx: +m[5], ny: +m[6] } : null;
 }
 
 /** Float32Array <-> base64 for design files. */

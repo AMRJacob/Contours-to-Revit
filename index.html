@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.19.3">
+  <link rel="stylesheet" href="css/app.css?v=0.20.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -33,15 +33,19 @@
           <span class="proj-state" id="proj-state"></span>
           <span class="proj-caret" aria-hidden="true">▾</span>
         </button>
+        <div class="proj-ask" id="proj-ask" hidden></div>
         <div class="proj-menu" id="proj-menu" hidden>
+          <button type="button" class="btn btn-block proj-save-btn" id="proj-save" hidden>Save</button>
           <div class="proj-save-row">
             <input type="text" id="proj-new-name" placeholder="Project name (e.g. Mena clinic)" spellcheck="false">
-            <button type="button" class="btn" id="proj-save-as">Save as project</button>
+            <button type="button" class="btn" id="proj-save-as">Save as new</button>
           </div>
           <div class="proj-title">Projects</div>
           <ul class="proj-list" id="proj-list"></ul>
           <button type="button" class="btn btn-quiet btn-block" id="proj-new">Start a new blank project</button>
-          <p class="hint">An open project saves itself as you work: site, options, origin and north, layers and the whole site design. Projects are kept in this browser on this computer — use <em>Save design</em> for a file you can move.</p>
+          <button type="button" class="btn btn-quiet btn-block" id="proj-recover" title="Find site designs the app autosaved that aren't in any saved project">Recover autosaved designs…</button>
+          <ul class="proj-list" id="proj-recover-list" hidden></ul>
+          <p class="hint">Click a project to open it and zoom to it (hover to see where it is). Saving is manual — <strong>Save</strong> overwrites the open project, <strong>Save as new</strong> makes another. A project keeps the site, options, origin and north, layers and the whole site design, in this browser on this computer; use <em>Save design</em> for a file you can move.</p>
         </div>
       </section>
 
@@ -440,6 +444,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.19.3"></script>
+  <script type="module" src="js/app.js?v=0.20.0"></script>
 </body>
 </html>
