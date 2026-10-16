@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.20.0">
+  <link rel="stylesheet" href="css/app.css?v=0.21.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -425,7 +425,11 @@
       <div class="view-tabs" role="tablist">
         <button role="tab" class="tab active" data-view="map" aria-selected="true">Map</button>
         <button role="tab" class="tab" data-view="preview" aria-selected="false" disabled>Preview</button>
+        <button role="tab" class="tab" data-view="3d" aria-selected="false" disabled title="Orbit the site in 3D">3D</button>
+        <span class="tab-sep" aria-hidden="true"></span>
+        <button type="button" class="tab tab-toggle" id="flow-toggle" aria-pressed="false" disabled title="Animate where rain would run off, and mark low spots where it would pond">Water flow</button>
       </div>
+      <div class="flow-legend" id="flow-legend" hidden><i></i>Runoff direction <b></b>Ponding <small id="flow-note"></small></div>
       <div id="map"></div>
       <div id="preview" class="preview" hidden>
         <div class="preview-bar">
@@ -436,6 +440,19 @@
         </div>
         <canvas id="preview-canvas"></canvas>
       </div>
+      <div id="view3d" class="view3d" hidden>
+        <div class="v3-bar">
+          <div class="seg seg-dark" role="radiogroup" id="v3-surf">
+            <label><input type="radio" name="v3s" value="prop" checked><span>Proposed</span></label>
+            <label><input type="radio" name="v3s" value="exist"><span>Existing</span></label>
+          </div>
+          <label class="v3-ex">Vertical × <input type="range" id="v3-ex" min="1" max="5" step="0.5" value="2"><output id="v3-ex-v">2</output></label>
+          <button type="button" class="btn btn-quiet v3-btn" id="v3-reset">Reset view</button>
+        </div>
+        <div class="v3-stage" id="v3-stage"></div>
+        <p class="v3-hint">Drag to orbit · right-drag to pan · wheel to zoom</p>
+        <p class="v3-msg" id="v3-msg" hidden></p>
+      </div>
     </main>
   </div>
 
@@ -444,6 +461,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.20.0"></script>
+  <script type="module" src="js/app.js?v=0.21.0"></script>
 </body>
 </html>

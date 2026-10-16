@@ -1,14 +1,15 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.20.0';
-import { fetchElevation, sample } from './dem.js?v=0.20.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.20.0';
-import { Dxf } from './dxf.js?v=0.20.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.20.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.20.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.20.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.21.0';
+import { fetchElevation, sample } from './dem.js?v=0.21.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.21.0';
+import { Dxf } from './dxf.js?v=0.21.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.21.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.21.0';
+import { Flow } from './flow.js?v=0.21.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.21.0';
 
-const VERSION = '0.20.0';
+const VERSION = '0.21.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -452,6 +453,8 @@ async function generate() {
   applyOrigin();
   drawUnderlayThumb();
   renderPreview();
+  v3Dirty();
+  flowKick();
   const missing = pStats.missing;
   setStatus(missing
     ? `Done, but ${fmt(missing, 0)} grid points had no elevation data and were left out of the CSV/DXF.`
@@ -761,6 +764,8 @@ function showResults(site) {
   }
   src.innerHTML = html;
   document.querySelector('.tab[data-view="preview"]').disabled = false;
+  document.querySelector('.tab[data-view="3d"]').disabled = false;
+  $('flow-toggle').disabled = false;
 }
 
 // ---------- Layer visibility (map "Layers" panel drives the map, preview, PNG and DXF) ----------
@@ -901,12 +906,17 @@ function renderPreview() {
   drawMap(canvas, site, 'preview');
 }
 
-document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+const curView = () => document.querySelector('.tab[data-view].active')?.dataset.view || 'map';
+document.querySelectorAll('.tab[data-view]').forEach(t => t.addEventListener('click', () => {
   if (t.disabled) return;
-  document.querySelectorAll('.tab').forEach(o => { o.classList.toggle('active', o === t); o.setAttribute('aria-selected', String(o === t)); });
-  const pv = t.dataset.view === 'preview';
-  $('preview').hidden = !pv;
-  if (pv) renderPreview(); else map.invalidateSize();
+  document.querySelectorAll('.tab[data-view]').forEach(o => { o.classList.toggle('active', o === t); o.setAttribute('aria-selected', String(o === t)); });
+  const v = t.dataset.view;
+  $('preview').hidden = v !== 'preview';
+  $('view3d').hidden = v !== '3d';
+  if (v === 'preview') renderPreview();
+  else if (v === 'map') map.invalidateSize();
+  if (v === '3d') v3Open(); else v3?.show(false);
+  flowKick();
 }));
 document.querySelectorAll('input[name="pv"]').forEach(r => r.addEventListener('change', renderPreview));
 window.addEventListener('resize', () => { if (!$('preview').hidden) renderPreview(); });
@@ -1783,7 +1793,7 @@ function startPick(mode = 'origin') {
     setStatus('Set a local origin first (Pick on map) — project north is measured from it.', true);
     return;
   }
-  if (!$('preview').hidden) document.querySelector('.tab[data-view="map"]').click();
+  if (curView() !== 'map') document.querySelector('.tab[data-view="map"]').click();
   pick.active = true;
   pick.mode = mode;
   buildSnapTargets();
@@ -2489,6 +2499,7 @@ function dzSave() {
 /** After any edit: earthwork, feature list, autosave, redraw. */
 function dzAfterChange(save = true) {
   if (!dz.design) return;
+  v3Dirty();
   if (dz.sel && !dz.design.feature(dz.sel)) dz.sel = null;
   setTimeout(dzPopRefresh, 0);
   dzEarthwork();
@@ -2592,7 +2603,9 @@ function setMode(mode) {
   if (drawn) { if (design) map.removeLayer(drawn); else drawn.addTo(map); }
   map.getContainer().classList.toggle('design-mode', design);
   if (design) map.doubleClickZoom.disable(); else { map.doubleClickZoom.enable(); dz.poly = null; }
-  if (design) dzEnsure().then(() => { dzApplyTool(); dzRefresh(true); });
+  if (design) dzEnsure().then(() => { dzApplyTool(); dzRefresh(true); v3Dirty(); });
+  else v3Dirty();
+  flowKick();
   else { map.dragging.enable(); map.getContainer().classList.remove('sculpting'); $('dz-readout').hidden = true; dzPop.hidden = true; dzPopId = null; }
 }
 document.querySelectorAll('.mode').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
@@ -3619,8 +3632,10 @@ function clearAll() {
   $('rot-deg').value = '0'; $('datum').value = '';
   state.result = null;
   $('step-results').hidden = true;
-  if (!$('preview').hidden) document.querySelector('.tab[data-view="map"]').click();
+  if (curView() !== 'map') document.querySelector('.tab[data-view="map"]').click();
   document.querySelector('.tab[data-view="preview"]').disabled = true;
+  document.querySelector('.tab[data-view="3d"]').disabled = true;
+  flowSet(false); $('flow-toggle').disabled = true;
   updateLayerCounts(null);
   onSiteChanged(false);
   applyOrigin();
@@ -3750,4 +3765,218 @@ $('datum').value = align.datum != null ? String(align.datum) : '';
 updateTopoSummary();
 applyOrigin();
 updateZoneHint();
-window.c2r = { state, map, makers: MAKERS, dz }; // for debugging in the console
+// ---------- 3D view ----------
+// three.js is only downloaded the first time the 3D tab is opened.
+var v3 = null, v3Loading = null, v3Timer = 0, v3ExistSegs = null;
+const v3Design = () => { const site = state.result; return site && dz.site === site && dz.design?.changed ? dz.design : null; };
+const v3Surf = () => (document.querySelector('input[name="v3s"]:checked')?.value === 'exist' || !v3Design() ? 'exist' : 'prop');
+
+async function v3Open() {
+  if (!state.result) return;
+  if (!v3) {
+    const msg = $('v3-msg');
+    msg.hidden = false; msg.textContent = 'Loading the 3D viewer…';
+    try {
+      v3Loading = v3Loading || import(`./view3d.js?v=${VERSION}`);
+      const m = await v3Loading;
+      if (!v3) { v3 = new m.SiteView3D($('v3-stage')); v3.setExaggeration(Number($('v3-ex').value)); }
+      msg.hidden = true;
+    } catch (e) {
+      console.error(e);
+      msg.textContent = 'The 3D view could not start — this browser may have WebGL turned off.';
+      return;
+    }
+  }
+  if (curView() !== '3d') return;
+  v3.show(true);
+  v3Build();
+  flowKick();
+}
+
+function v3Dirty() {
+  if (!v3 || curView() !== '3d') return;
+  clearTimeout(v3Timer);
+  v3Timer = setTimeout(() => { v3Build(); flowKick(); }, 120);
+}
+
+function v3Build(resetView = false) {
+  const site = state.result;
+  if (!v3 || !site) return;
+  const des = v3Design();
+  const seg = $('v3-surf');
+  seg.querySelectorAll('input').forEach(i => { i.disabled = !des; });
+  seg.title = des ? '' : 'No design changes yet — draw something in Site design to compare.';
+  const prop = v3Surf() === 'prop';
+  if (!prop && (!v3ExistSegs || v3ExistSegs.site !== site)) {
+    v3ExistSegs = { site, ...contourSegments(site.grid, contourLevels(site.stats.min, site.stats.max, site.interval), L => isMajor(L, site.interval)) };
+  }
+  let segs = prop ? dz.prop : v3ExistSegs;
+  if (prop && dz.contourVer !== des.version) {
+    const pg = des.grid();
+    segs = contourSegments(pg, dzLevels(pg), L => isMajor(L, site.interval));
+  }
+  const fresh = v3.site !== site;
+  v3.setSurface({
+    g: site.grid, z: prop ? des.z : site.grid.z, delta: prop && dz.showCf ? des.delta : null, box: site.box, k: site.toOut,
+    image: site.imagery, cutFillScale: dz.site === site ? dzScale() : 5, major: segs?.major, majorLv: segs?.majorLv,
+    resetZ: fresh, resetView: fresh || resetView,
+  });
+  v3.site = site;
+  v3.setFeatures(prop ? v3Features(des, site) : []);
+}
+
+/** Design features for the 3D view: walls as panels, everything else as lines draped on the proposed grade. */
+function v3Features(des, site) {
+  const g = site.grid, k = site.toOut;
+  const zAt = (x, y) => {
+    const fx = (x - g.x0) / g.s, fy = (y - g.y0) / g.s, i = Math.max(0, Math.min(g.nx - 2, Math.floor(fx))), j = Math.max(0, Math.min(g.ny - 2, Math.floor(fy)));
+    const tx = Math.max(0, Math.min(1, fx - i)), ty = Math.max(0, Math.min(1, fy - j)), q = j * g.nx + i, z = des.z;
+    return (z[q] * (1 - tx) + z[q + 1] * tx) * (1 - ty) + (z[q + g.nx] * (1 - tx) + z[q + g.nx + 1] * tx) * ty;
+  };
+  const dense = (pts, step) => {
+    const out = [pts[0]];
+    for (let i = 1; i < pts.length; i++) {
+      const [ax, ay] = pts[i - 1], [bx, by] = pts[i], n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / step));
+      for (let t = 1; t <= n; t++) out.push([ax + (bx - ax) * t / n, ay + (by - ay) * t / n]);
+    }
+    return out;
+  };
+  const items = [];
+  for (const f of des.features) {
+    const path = featPath(f);
+    if (!path?.length) continue;
+    if (f.type === 'wall') {
+      const pts = dense(path, g.s), half = (Number(f.p.thick) || 1) / 2 / k + g.s;
+      const bot = [], top = [];
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+        const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, nx = -(b[1] - a[1]) / L, ny = (b[0] - a[0]) / L;
+        const zs = [zAt(pts[i][0], pts[i][1]), zAt(pts[i][0] + nx * half, pts[i][1] + ny * half), zAt(pts[i][0] - nx * half, pts[i][1] - ny * half)].filter(Number.isFinite);
+        if (!zs.length) continue;
+        bot.push([pts[i][0], pts[i][1], Math.min(...zs)]);
+        top.push([pts[i][0], pts[i][1], Math.max(...zs)]);
+      }
+      if (bot.length > 1) items.push({ kind: 'wall', pts: bot, top });
+    } else if (f.type === 'pad') {
+      const el = f.out?.elev;
+      items.push({ kind: 'line', closed: true, color: 0xffffff, pts: dense(path, g.s * 2).map(([x, y]) => [x, y, Number.isFinite(el) ? el : zAt(x, y)]) });
+    } else {
+      items.push({ kind: 'line', color: f.type === 'swale' ? 0x60a5fa : 0x22d3ee, pts: dense(path, g.s).map(([x, y]) => [x, y, zAt(x, y)]).filter(p => Number.isFinite(p[2])) });
+    }
+  }
+  return items;
+}
+
+$('v3-ex').addEventListener('input', e => {
+  $('v3-ex-v').textContent = e.target.value;
+  if (v3) { v3.setExaggeration(Number(e.target.value)); v3Build(); }
+});
+document.querySelectorAll('input[name="v3s"]').forEach(r => r.addEventListener('change', () => { v3Build(); flowKick(); }));
+$('v3-reset').addEventListener('click', () => v3?.resetView());
+
+// ---------- Water flow ----------
+// Particles follow the steepest-descent direction of the surface (proposed grade in Site design, otherwise existing),
+// leaving short fading streaks; low spots that would hold water are circled.
+var flow = { on: false, f: null, site: null, z: null, ver: -1, t: 0, raf: 0, M: null };
+var flowCanvas = document.createElement('canvas');
+flowCanvas.className = 'flow-canvas';
+flowCanvas.hidden = true;
+map.getContainer().appendChild(flowCanvas);
+
+function flowSurface() {
+  const site = state.result, des = site && dz.site === site ? dz.design : null;
+  const useProp = curView() === '3d' ? v3Surf() === 'prop' : dz.mode === 'design' && des;
+  return useProp && des ? { z: des.z, ver: des.version, prop: true } : { z: site.grid.z, ver: -1, prop: false };
+}
+
+/** Keep the Flow object in step with the site and the surface being shown. */
+function flowSync() {
+  const site = state.result;
+  if (!site) { flow.f = null; return null; }
+  const s = flowSurface(), now = performance.now();
+  if (!flow.f || flow.site !== site) {
+    flow.f = new Flow(site.grid, s.z, site.toOut);
+    flow.f.seed(Math.round(Math.max(600, Math.min(5000, site.grid.nx * site.grid.ny / 18))));
+    flow.site = site; flow.z = s.z; flow.ver = s.ver; flow.t = now; flow.prop = s.prop;
+    flowNote();
+  } else if (flow.z !== s.z || (flow.ver !== s.ver && now - flow.t > 250)) {
+    flow.f.setSurface(s.z);
+    flow.z = s.z; flow.ver = s.ver; flow.t = now; flow.prop = s.prop;
+    flowNote();
+  }
+  return flow.f;
+}
+const flowSinks = () => flow.f?.sinks(flow.site?.units === 'm' ? 0.05 : 0.15) || [];
+function flowNote() {
+  const n = flowSinks().length;
+  $('flow-note').textContent = `${flow.prop ? 'Proposed' : 'Existing'} grade · ${n ? `${n} low spot${n === 1 ? '' : 's'}` : 'no low spots'}`;
+}
+
+function flowSet(on) {
+  flow.on = on;
+  $('flow-toggle').setAttribute('aria-pressed', String(on));
+  $('flow-legend').hidden = !on;
+  try { localStorage.setItem('c2r-flow', on ? '1' : ''); } catch { /* ignore */ }
+  flowKick();
+}
+$('flow-toggle').addEventListener('click', () => { if (state.result) flowSet(!flow.on); });
+
+/** Start / stop whichever animation fits the current view. */
+function flowKick() {
+  const view = curView();
+  const map2d = flow.on && !!state.result && view === 'map';
+  flowCanvas.hidden = !map2d;
+  if (!map2d) { cancelAnimationFrame(flow.raf); flow.raf = 0; flowClear(); }
+  else if (!flow.raf) { flow.M = null; flow.raf = requestAnimationFrame(flowFrame); }
+  if (v3) {
+    const f = flow.on && view === '3d' && state.result ? flowSync() : null;
+    v3.setFlow(f, f ? flowSinks() : null);
+  }
+}
+function flowClear() { flowCanvas.getContext('2d').clearRect(0, 0, flowCanvas.width, flowCanvas.height); }
+
+function flowFrame() {
+  flow.raf = 0;
+  const site = state.result;
+  if (!flow.on || !site || curView() !== 'map') { flowClear(); return; }
+  const f = flowSync();
+  const cont = map.getContainer(), dpr = window.devicePixelRatio || 1;
+  const W = Math.round(cont.clientWidth * dpr), H = Math.round(cont.clientHeight * dpr);
+  if (flowCanvas.width !== W || flowCanvas.height !== H) {
+    flowCanvas.width = W; flowCanvas.height = H;
+    flowCanvas.style.width = cont.clientWidth + 'px'; flowCanvas.style.height = cont.clientHeight + 'px';
+  }
+  if (!flow.M) flow.M = dzAffine(site);
+  const M = flow.M, ctx = flowCanvas.getContext('2d');
+  // Fade the previous frame so each particle leaves a short tapering streak.
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.fillStyle = 'rgba(0,0,0,0.14)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalCompositeOperation = 'source-over';
+  f.step();
+  ctx.strokeStyle = 'rgba(125,211,252,0.95)';
+  ctx.lineWidth = 1.7 * dpr;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (let p = 0; p < f.n; p++) {
+    if (f.age[p] < 2) continue;
+    const [ax, ay] = toScreen(M, f.ox[p], f.oy[p]), [bx, by] = toScreen(M, f.px[p], f.py[p]);
+    ctx.moveTo(ax * dpr, ay * dpr); ctx.lineTo(bx * dpr, by * dpr);
+  }
+  ctx.stroke();
+  // Ponding spots (redrawn every frame so they stay solid through the fade).
+  const px = M.scale * dpr;
+  for (const s of flowSinks()) {
+    const [x, y] = toScreen(M, s.x, s.y);
+    const r = Math.max(5 * dpr, Math.min(40 * dpr, (1.5 + Math.min(4, s.depth) * 2) * site.grid.s * px));
+    ctx.beginPath(); ctx.arc(x * dpr, y * dpr, r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(37,99,235,0.08)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(147,197,253,0.9)'; ctx.lineWidth = 1.5 * dpr; ctx.stroke();
+  }
+  flow.raf = requestAnimationFrame(flowFrame);
+}
+map.on('move zoom resize viewreset', () => { if (flow.on) { flow.M = null; flowClear(); } });
+try { if (localStorage.getItem('c2r-flow')) flow.on = true; } catch { /* ignore */ }
+if (flow.on) { $('flow-toggle').setAttribute('aria-pressed', 'true'); $('flow-legend').hidden = false; }
+
+window.c2r = { state, map, makers: MAKERS, dz, get v3() { return v3; }, flow }; // for debugging in the console
