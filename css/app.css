@@ -381,3 +381,5 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .proj-act:hover { color: var(--ink); background: var(--paper); }
 .proj-del.confirm { color: #fff; background: #dc2626; font-size: 11.5px; font-weight: 600; }
 .proj-empty { font-size: 12.5px; color: var(--ink-3); padding: 2px 0 4px; }
+
+.leaflet-container.sculpting.over-rotate { cursor: grab !important; }

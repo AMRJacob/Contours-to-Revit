@@ -1,14 +1,14 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.19.0';
-import { fetchElevation, sample } from './dem.js?v=0.19.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.19.0';
-import { Dxf } from './dxf.js?v=0.19.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.19.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.19.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.19.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.19.1';
+import { fetchElevation, sample } from './dem.js?v=0.19.1';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.19.1';
+import { Dxf } from './dxf.js?v=0.19.1';
+import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.19.1';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.19.1';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.19.1';
 
-const VERSION = '0.19.0';
+const VERSION = '0.19.1';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -1929,6 +1929,30 @@ const pathMid = pts => {
   }
   return { pt: pts[0], dir: [1, 0] };
 };
+/** Rotate handle for a selected feature: pivot (native, centre of its extent) and the grip's screen position. */
+function rotInfo(f, M) {
+  if (f.type === 'pad' && f.geom.shape === 'circle') return null;
+  const pts = featPath(f);
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, top = Infinity;
+  for (const q of pts) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); top = Math.min(top, toScreen(M, ...q)[1]); }
+  const pivot = [(x0 + x1) / 2, (y0 + y1) / 2];
+  const [sx] = toScreen(M, ...pivot);
+  return { pivot, ax: sx, ay: top, hx: sx, hy: top - 34 };
+}
+/** Rotate geometry (and a rectangle pad's frame) clockwise by `deg` about `pivot`. */
+function rotateFeature(geom0, p0, type, pivot, deg) {
+  const th = deg * Math.PI / 180, c = Math.cos(th), s = Math.sin(th);
+  const R = q => { const dx = q[0] - pivot[0], dy = q[1] - pivot[1]; return [pivot[0] + dx * c + dy * s, pivot[1] - dx * s + dy * c]; };
+  const g = { ...geom0 };
+  if (g.a) g.a = R(g.a);
+  if (g.b) g.b = R(g.b);
+  if (g.pts) g.pts = g.pts.map(R);
+  if (g.c) g.c = R(g.c);
+  const p = type === 'pad' && (geom0.shape || 'rect') === 'rect' ? { rot: ((p0.rot || 0) + deg) % 360 } : null;
+  return { geom: g, p };
+}
+const bearingOf = (from, to) => Math.atan2(to[0] - from[0], to[1] - from[1]) * 180 / Math.PI;
+
 /** Geometry of the shape being dragged out. */
 function drawingGeom(d) {
   if (d.kind === 'pad' && d.shape === 'circle') return { shape: 'circle', c: d.a, r: Math.max(Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]), 1e-6) };
@@ -2059,6 +2083,18 @@ function dzDraw() {
         const [sx, sy] = toScreen(M, ...h);
         ctx.fillStyle = '#fff'; ctx.strokeStyle = SEL_COLOR; ctx.lineWidth = 2;
         ctx.fillRect(sx - 5, sy - 5, 10, 10); ctx.strokeRect(sx - 5, sy - 5, 10, 10);
+      }
+      const ri = !preview && rotInfo(f, M);
+      if (ri) {
+        const rot = dz.edit?.handle === 'rot' && dz.edit.id === f.id;
+        const [px0, py0] = toScreen(M, ...(rot ? dz.edit.pivot : ri.pivot));
+        if (rot) { ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(px0, py0); ctx.lineTo(dz.edit.cursorS[0], dz.edit.cursorS[1]); ctx.strokeStyle = SEL_COLOR; ctx.lineWidth = 1.2; ctx.stroke(); ctx.setLineDash([]); ctx.beginPath(); ctx.arc(px0, py0, 3, 0, Math.PI * 2); ctx.fillStyle = SEL_COLOR; ctx.fill(); }
+        else { ctx.beginPath(); ctx.moveTo(ri.ax, ri.ay - 4); ctx.lineTo(ri.hx, ri.hy + 9); ctx.strokeStyle = SEL_COLOR; ctx.lineWidth = 1.5; ctx.stroke(); }
+        const [gx, gy] = rot ? dz.edit.cursorS : [ri.hx, ri.hy];
+        ctx.beginPath(); ctx.arc(gx, gy, 9, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = SEL_COLOR; ctx.lineWidth = 2; ctx.stroke();
+        ctx.beginPath(); ctx.arc(gx, gy, 4.5, -Math.PI * 0.95, Math.PI * 0.45); ctx.strokeStyle = SEL_COLOR; ctx.lineWidth = 1.6; ctx.stroke();
+        const ex = gx + 4.5 * Math.cos(Math.PI * 0.45), ey = gy + 4.5 * Math.sin(Math.PI * 0.45);
+        ctx.beginPath(); ctx.moveTo(ex - 3.2, ey - 0.5); ctx.lineTo(ex, ey); ctx.lineTo(ex + 0.6, ey - 3.2); ctx.stroke();
       }
     }
   };
@@ -2741,7 +2777,8 @@ function dzReadout(xy) {
     const L = Math.hypot(dz.drawing.b[0] - dz.drawing.a[0], dz.drawing.b[1] - dz.drawing.a[1]) * dz.site.toOut;
     extra = dz.drawing.kind === 'pad' && dz.drawing.shape === 'circle' ? ` · ⌀ ${fmt(L * 2, 0)} ${u}` : dz.drawing.kind === 'pad' ? (() => { const cs = Design.padCorners({ a: dz.drawing.a, b: dz.drawing.b }, dzShapeParams('pad').rot); return ` · ${fmt(Math.hypot(cs[1][0] - cs[0][0], cs[1][1] - cs[0][1]) * dz.site.toOut, 0)} × ${fmt(Math.hypot(cs[3][0] - cs[0][0], cs[3][1] - cs[0][1]) * dz.site.toOut, 0)} ${u}`; })() : ` · ${fmt(L, 0)} ${u}`;
   }
-  if (dz.poly) extra = dz.poly.kind === 'pad'
+  if (dz.edit?.handle === 'rot' && dz.edit.moved) extra = ` · rotated ${dz.edit.angle >= 0 ? '' : '−'}${Math.abs(dz.edit.angle).toFixed(1)}° ${dz.edit.angle >= 0 ? 'clockwise' : 'counter-clockwise'}${Math.abs(dz.edit.angle) % 15 === 0 ? '' : ' (Shift: 15° steps)'}`;
+  else if (dz.poly) extra = dz.poly.kind === 'pad'
     ? ` · ${dz.poly.pts.length} corner${dz.poly.pts.length === 1 ? '' : 's'} — double-click or Enter to close`
     : ` · ${dz.poly.pts.length} point${dz.poly.pts.length === 1 ? '' : 's'}, ${fmt(dz.poly.pts.reduce((a, q, i, arr) => a + (i ? Math.hypot(q[0] - arr[i - 1][0], q[1] - arr[i - 1][1]) : 0), 0) * dz.site.toOut, 0)} ${u} — double-click or Enter to finish`;
   el.hidden = false;
@@ -2762,6 +2799,8 @@ function dzHit(cp) {
   const des = dz.design, M = dzAffine(dz.site);
   const sel = dz.sel && des.feature(dz.sel);
   if (sel) {
+    const ri = rotInfo(sel, M);
+    if (ri && Math.hypot(ri.hx - cp.x, ri.hy - cp.y) < 11) return { f: sel, handle: 'rot', edge: true, pivot: ri.pivot };
     const hs = featHandles(sel);
     for (let i = 0; i < hs.length; i++) { const [sx, sy] = toScreen(M, ...hs[i]); if (Math.hypot(sx - cp.x, sy - cp.y) < 9) return { f: sel, handle: i, edge: true }; }
   }
@@ -2846,7 +2885,7 @@ map.on('mousedown', e => {
   const hit = dz.design.features.length ? dzHit(e.containerPoint) : null;
   if (hit && (shapeTool || hit.edge)) {
     if (dz.sel !== hit.f.id) dzSelect(hit.f.id);
-    dz.edit = { id: hit.f.id, handle: hit.handle, from: xy, geom0: JSON.parse(JSON.stringify(hit.f.geom)), moved: false };
+    dz.edit = { id: hit.f.id, handle: hit.handle, from: xy, geom0: JSON.parse(JSON.stringify(hit.f.geom)), p0: { ...hit.f.p }, moved: false, pivot: hit.pivot, cursorS: [e.containerPoint.x, e.containerPoint.y], angle: 0 };
     return;
   }
   if (shapeTool) {
@@ -2883,6 +2922,21 @@ function orthoSnap(from, to) {
 function dzEditMove(xy, shift = false) {
   const ed = dz.edit, f = dz.design.feature(ed.id);
   if (!f) return;
+  if (ed.handle === 'rot') {
+    const M = dzAffine(dz.site);
+    ed.cursorS = toScreen(M, ...xy);
+    let deg = bearingOf(ed.pivot, xy) - bearingOf(ed.pivot, ed.from);
+    deg = ((deg + 540) % 360) - 180;
+    if (shift) deg = Math.round(deg / 15) * 15;
+    if (!ed.moved && Math.abs(deg) < 0.05) return;
+    if (!ed.moved) { dz.design.checkpoint(); ed.moved = true; }
+    ed.angle = deg;
+    const r = rotateFeature(ed.geom0, ed.p0, f.type, ed.pivot, deg);
+    f.geom = r.geom;
+    if (r.p) f.p = { ...f.p, ...r.p };
+    dz.design.stale = true;
+    return;
+  }
   if (shift) {
     const g = ed.geom0;
     if (ed.handle < 0) xy = orthoSnap(ed.from, xy);
@@ -2921,6 +2975,7 @@ map.on('mousemove', e => {
   else if (dz.design.features.length) {
     const hit = dzHit(e.containerPoint);
     map.getContainer().classList.toggle('over-handle', !!hit && hit.handle >= 0);
+    map.getContainer().classList.toggle('over-rotate', !!hit && hit.handle === 'rot');
     map.getContainer().classList.toggle('over-feature', !!hit && hit.handle < 0 && (hit.edge || SHAPES.includes(dz.tool)));
   }
   dzReadout(xy);
