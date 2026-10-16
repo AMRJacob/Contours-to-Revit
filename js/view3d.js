@@ -17,8 +17,10 @@ export class SiteView3D {
     this.scene.fog = new THREE.Fog(0x1c2226, 1e6, 2e6);
     this.camera = new THREE.PerspectiveCamera(45, 1, 1, 1e6);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.12;
+    // Calm navigation: no coasting after release, slower orbit / pan / zoom, zoom toward the cursor.
+    this.controls.enableDamping = false;
+    this.controls.zoomToCursor = true;
+    this.setSpeed(1);
     this.controls.maxPolarAngle = Math.PI * 0.495;
     this.controls.screenSpacePanning = false;
     this.scene.add(new THREE.HemisphereLight(0xf2f5ff, 0x3b3226, 0.85));
@@ -244,11 +246,19 @@ export class SiteView3D {
 
   setExaggeration(ex) { this.ex = ex; }
 
+  /** Navigation speed multiplier (1 = default). */
+  setSpeed(m) {
+    this.controls.rotateSpeed = 0.45 * m;
+    this.controls.panSpeed = 0.5 * m;
+    this.controls.zoomSpeed = 1.2 * m;
+  }
+
   resetView() {
     const g = this.g, k = this.k;
     const w = (g.nx - 1) * g.s * k, h = (g.ny - 1) * g.s * k, size = Math.max(w, h);
     const mid = ((this.zmin + this.zmax) / 2 - this.z0) * this.ex;
     this.controls.target.set(0, mid, 0);
+    this.controls.minDistance = size * 0.03; this.controls.maxDistance = size * 4;
     this.camera.near = size / 500; this.camera.far = size * 20;
     this.scene.fog.near = size * 2.5; this.scene.fog.far = size * 6;
     this.camera.position.set(-size * 0.55, size * 0.6 + mid, size * 0.85);

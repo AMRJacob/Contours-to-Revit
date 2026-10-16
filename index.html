@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.21.2">
+  <link rel="stylesheet" href="css/app.css?v=0.21.3">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -447,6 +447,7 @@
             <label><input type="radio" name="v3s" value="exist"><span>Existing</span></label>
           </div>
           <label class="v3-ex">Vertical × <input type="range" id="v3-ex" min="1" max="5" step="0.5" value="2"><output id="v3-ex-v">2</output></label>
+          <label class="v3-ex" title="How fast orbit, pan and zoom move">Speed <input type="range" id="v3-speed" min="0.2" max="2" step="0.1" value="1"></label>
           <button type="button" class="btn btn-quiet v3-btn" id="v3-reset">Reset view</button>
         </div>
         <div class="v3-stage" id="v3-stage"></div>
@@ -461,6 +462,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.21.2"></script>
+  <script type="module" src="js/app.js?v=0.21.3"></script>
 </body>
 </html>
