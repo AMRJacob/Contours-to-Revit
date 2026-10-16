@@ -424,18 +424,48 @@ export class Design {
     const half = p.width / 2 / p.k;
     const zA = Number.isFinite(p.startElev) ? p.startElev : baseAt(...pts[0]);
     if (!Number.isFinite(zA)) return null;
+    const m = p.slope;
+    const mode = p.mode || 'exact';
+    // Profile along the path. 'exact': uniform fall. 'max': follow the ground, never steeper than m (up or down).
+    // 'min': always fall at least m; follow the ground where it falls faster (up to 3:1), cut where it is flatter.
+    const ds = Math.max(this.g.s / 2, P.len / 4000);
+    const n = Math.max(1, Math.ceil(P.len / ds)), step = P.len / n;
+    const prof = new Float64Array(n + 1);
+    let seg = 1;
+    const ptAt = sv => {
+      while (seg < pts.length - 1 && P.cum[seg] < sv) seg++;
+      const a = pts[seg - 1], b = pts[seg], L = (P.cum[seg] - P.cum[seg - 1]) || 1, t = (sv - P.cum[seg - 1]) / L;
+      return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    };
+    prof[0] = zA;
+    let steep = 0, flat = Infinity;
+    for (let i = 1; i <= n; i++) {
+      const sv = i * step, dz = m * step * p.k;
+      let z;
+      if (mode === 'exact') z = zA - m * sv * p.k;
+      else {
+        let g = baseAt(...ptAt(sv));
+        if (!Number.isFinite(g)) g = prof[i - 1] - (mode === 'min' ? dz : 0);
+        if (mode === 'max') z = Math.max(prof[i - 1] - dz, Math.min(prof[i - 1] + dz, g));
+        else z = prof[i - 1] - Math.max(dz, Math.min(prof[i - 1] - g, step * p.k / 3));
+      }
+      prof[i] = z;
+      const gr = Math.abs(z - prof[i - 1]) / (step * p.k);
+      steep = Math.max(steep, gr); flat = Math.min(flat, (prof[i - 1] - z) / (step * p.k));
+    }
+    const zAtS = sv => { const f = Math.max(0, Math.min(n, sv / step)), i = Math.floor(f), t = f - i; return i >= n ? prof[n] : prof[i] + (prof[i + 1] - prof[i]) * t; };
     const E = this.g.z;
     const [bx0, by0, bx1, by1] = Design.bbox(pts, half);
     this._forBox(bx0, by0, bx1, by1, (k, x, y) => {
-      const m = P.at(x, y);
-      let w = falloff(m.d / half, p.soft);
-      if (m.over) w *= falloff(m.over / half, p.soft);
+      const q = P.at(x, y);
+      let w = falloff(q.d / half, p.soft);
+      if (q.over) w *= falloff(q.over / half, p.soft);
       if (!w) return;
-      const tgt = zA - p.slope * m.s * p.k;
+      const tgt = zAtS(q.s);
       const b = base(k);
       D[k] = b + (tgt - b) * w - E[k];
     });
-    return { zA, zB: zA - p.slope * P.len * p.k, len: P.len * p.k, path: pts };
+    return { zA, zB: prof[n], len: P.len * p.k, path: pts, mode, steep, flat: Number.isFinite(flat) ? flat : m };
   }
 
   /**

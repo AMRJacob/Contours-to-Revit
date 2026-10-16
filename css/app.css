@@ -383,3 +383,5 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .proj-empty { font-size: 12.5px; color: var(--ink-3); padding: 2px 0 4px; }
 
 .leaflet-container.sculpting.over-rotate { cursor: grab !important; }
+
+.dz-pop .pop-note { margin: 6px 0 0; font-size: 11px; color: #b9b4aa; font-family: var(--mono); }

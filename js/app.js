@@ -1,14 +1,14 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.19.1';
-import { fetchElevation, sample } from './dem.js?v=0.19.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.19.1';
-import { Dxf } from './dxf.js?v=0.19.1';
-import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.19.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.19.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.19.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.19.2';
+import { fetchElevation, sample } from './dem.js?v=0.19.2';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.19.2';
+import { Dxf } from './dxf.js?v=0.19.2';
+import { Design, FEATURE_NAMES, contourSegments, designKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.19.2';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.19.2';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.19.2';
 
-const VERSION = '0.19.1';
+const VERSION = '0.19.2';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -1867,7 +1867,7 @@ $('reset-origin').addEventListener('click', () => { state.origin = null; session
 const SHAPES = ['slope', 'wall', 'pad', 'swale'];
 const PATHS = ['slope', 'swale'];
 const BRUSHES = ['raise', 'lower', 'flatten', 'smooth'];
-const DZ_DEFAULTS = { amount: 2, size: 25, soft: 60, strength: 50, slope: 2, width: 20, wheight: 4, wthick: 1, shelf: 10, front: 5, wside: 'left', wmode: 'fill', welev: 'ground', ratio: 3, pshape: 'rect', psmooth: false, path: 'line', sslope: 1, swidth: 10, sdepth: 1 };
+const DZ_DEFAULTS = { amount: 2, size: 25, soft: 60, strength: 50, slope: 2, width: 20, wheight: 4, wthick: 1, shelf: 10, front: 5, wside: 'left', wmode: 'fill', welev: 'ground', ratio: 3, pshape: 'rect', psmooth: false, path: 'line', sslope: 1, swidth: 10, sdepth: 1, smode: 'exact' };
 const dz = {
   mode: 'existing', tool: 'raise', design: null, site: null,
   exist: null, prop: null, raster: null,
@@ -2061,7 +2061,7 @@ function dzDraw() {
       ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 4.5 * px; ctx.stroke();
       ctx.strokeStyle = c; ctx.lineWidth = 2.2 * px; ctx.stroke();
       const o = f.out, mid = pathMid(pts);
-      const pct = `${(f.p.slope * 100).toFixed(f.p.slope * 100 % 1 ? 2 : 1)}%`;
+      const pct = `${swale ? '' : SMODE_SIGN[f.p.mode || 'exact']}${(f.p.slope * 100).toFixed(f.p.slope * 100 % 1 ? 2 : 1)}%`;
       labels.push([mid.pt[0], mid.pt[1], swale ? `SWALE ${pct}${o ? `  FL ${o.fA.toFixed(1)}→${o.fB.toFixed(1)}` : ''}` : `${pct}${o ? `  ${o.zA.toFixed(1)}→${o.zB.toFixed(1)}` : ''}`, c]);
     }
     ctx.setLineDash([]);
@@ -2236,7 +2236,9 @@ function dzPopBuild() {
       <div class="pop-row">${ratioSel}</div>
       ${f.geom.pts?.length > 2 ? '<label class="pop-check"><input type="checkbox" data-k="smooth"> Curved through the points</label>' : ''}`;
   } else {
-    body = `<div class="pop-row">${num('za', `Start A (${u})`)}${num('zb', `End B (${u})`)}</div><div class="pop-row">${num('pct', 'Slope %')}${num('width', `Width (${u})`)}</div>
+    body = `<div class="pop-row"><label>Slope is<select data-k="mode"><option value="exact">Exactly</option><option value="max">At most ≤</option><option value="min">At least ≥</option></select></label>${num('pct', 'Slope %')}</div>
+      <div class="pop-row">${num('za', `Start A (${u})`)}${num('zb', `End B (${u})`)}${num('width', `Width`)}</div>
+      ${f.p.mode && f.p.mode !== 'exact' && f.out ? `<p class="pop-note">${f.p.mode === 'max' ? `Steepest ${(f.out.steep * 100).toFixed(2)}%` : `Flattest fall ${(f.out.flat * 100).toFixed(2)}%`} · end B follows the ground</p>` : ''}
       ${f.geom.pts?.length > 2 ? '<label class="pop-check"><input type="checkbox" data-k="smooth"> Curved through the points</label>' : ''}`;
   }
   dzPop.innerHTML = `<div class="pop-head" title="Drag to move · double-click to keep it beside the feature"><span><i class="pop-grip" aria-hidden="true">⠿</i>${FEATURE_NAMES[f.type]}</span><button type="button" class="pop-x" title="Close (Esc)">×</button></div>${body}
@@ -2290,11 +2292,12 @@ function dzPopRefresh() {
   const v = {};
   if (f.type === 'wall' && o.ends) Object.assign(v, { tw0: o.ends[0].tw, tw1: o.ends[2].tw, bw0: o.ends[0].bw, bw1: o.ends[2].bw, thick: f.p.thick, shelf: f.p.shelf, front: f.p.front ?? 5, ratio: f.p.ratio });
   if (f.type === 'pad') Object.assign(v, { elev: o.elev, ratio: f.p.ratio, smooth: !!f.geom.smooth });
-  if (f.type === 'slope' && o.zA != null) Object.assign(v, { za: o.zA, zb: o.zB, pct: f.p.slope * 100, width: f.p.width, smooth: !!f.geom.smooth });
+  if (f.type === 'slope' && o.zA != null) Object.assign(v, { za: o.zA, zb: o.zB, pct: f.p.slope * 100, width: f.p.width, smooth: !!f.geom.smooth, mode: f.p.mode || 'exact' });
   if (f.type === 'swale' && o.fA != null) Object.assign(v, { za: o.fA, zb: o.fB, pct: f.p.slope * 100, width: f.p.width, depth: f.p.depth, ratio: f.p.ratio, smooth: !!f.geom.smooth });
   dzPop.querySelectorAll('[data-k]').forEach(el => {
     const val = v[el.dataset.k];
     if (el.type === 'checkbox') { el.checked = !!val; return; }
+    if (el.dataset.k === 'mode') { el.value = val || 'exact'; return; }
     if (document.activeElement === el || val == null || !Number.isFinite(+val)) return;
     el.value = el.tagName === 'SELECT' ? String(val) : (+val).toFixed(2);
   });
@@ -2319,6 +2322,13 @@ function dzPopPlace() {
 function dzPopInput(k, raw) {
   const f = dz.sel && dz.design?.feature(dz.sel);
   if (!f) return;
+  if (k === 'mode') {
+    dz.design.checkpoint();
+    dz.params.smode = raw;
+    dz.design.updateFeature(f.id, { p: { mode: raw } });
+    dzAfterChange(); dzSyncUi(); dzPopBuild();
+    return;
+  }
   if (k === 'smooth') {
     dz.design.checkpoint();
     if (f.type === 'pad') dz.params.psmooth = !!raw; else dz.params.path = raw ? 'curve' : 'poly';
@@ -2364,7 +2374,7 @@ function dzPopInput(k, raw) {
   } else {
     const len = o.len || 1, za = Number.isFinite(f.p.startElev) ? f.p.startElev : o.zA;
     if (k === 'za') patch = { startElev: val };
-    else if (k === 'zb') patch = { startElev: za, slope: (za - val) / len };
+    else if (k === 'zb') { patch = { startElev: za, slope: (za - val) / len, mode: 'exact' }; dz.params.smode = 'exact'; }
     else if (k === 'pct') patch = { startElev: za, slope: val / 100 };
     else patch = { width: Math.max(1, val) };
     if (patch.slope != null) dz.params.slope = +(patch.slope * 100).toFixed(3);
@@ -2510,7 +2520,7 @@ function featSummary(f) {
     const e = o.ends, r = k => Math.abs(e[0][k] - e[2][k]) > 0.05 ? `${e[0][k].toFixed(1)}–${e[2][k].toFixed(1)}` : e[1][k].toFixed(1);
     return f.p.elevMode === 'set' ? `TW ${r('tw')} / BW ${r('bw')} · ${fmt(o.len, 0)} ${u}` : `${f.p.height} ${u} ${f.p.mode === 'cut' ? 'cut' : 'fill'} · ${fmt(o.len, 0)} ${u} · TW ${r('tw')}`;
   }
-  const pct = `${(f.p.slope * 100).toFixed(2).replace(/\.?0+$/, '')}%`;
+  const pct = `${f.type === 'slope' ? SMODE_SIGN[f.p.mode || 'exact'] : ''}${(f.p.slope * 100).toFixed(2).replace(/\.?0+$/, '')}%`;
   const shape = f.geom.pts ? (f.geom.smooth ? 'curved, ' : `${f.geom.pts.length} pts, `) : '';
   if (f.type === 'swale') return o ? `${pct} · ${shape}${fmt(o.len, 0)} ${u} · ${f.p.width}×${f.p.depth} ${u} · FL ${o.fA.toFixed(1)} → ${o.fB.toFixed(1)}` : 'outside the site';
   return o ? `${pct} · ${shape}${fmt(o.len, 0)} ${u} · ${o.zA.toFixed(1)} → ${o.zB.toFixed(1)}` : 'outside the site';
@@ -2546,7 +2556,7 @@ function dzSelect(id, fromList = false) {
       const fin = v => (Number.isFinite(v) ? v : null);
       dz.wallElev = { tw0: fin(f.p.tw0), tw1: fin(f.p.tw1), bw0: fin(f.p.bw0), bw1: fin(f.p.bw1) };
     }
-    if (f.type === 'slope') { Object.assign(dz.params, { slope: +(f.p.slope * 100).toFixed(3), width: f.p.width }); dz.slopeStart = Number.isFinite(f.p.startElev) ? f.p.startElev : null; }
+    if (f.type === 'slope') { Object.assign(dz.params, { slope: +(f.p.slope * 100).toFixed(3), width: f.p.width, smode: f.p.mode || 'exact' }); dz.slopeStart = Number.isFinite(f.p.startElev) ? f.p.startElev : null; }
     if (f.type === 'swale') { Object.assign(dz.params, { sslope: +(f.p.slope * 100).toFixed(3), swidth: f.p.width, sdepth: f.p.depth, ratio: f.p.ratio }); dz.swaleStart = Number.isFinite(f.p.startElev) ? f.p.startElev : null; }
     if (PATHS.includes(f.type)) dz.params.path = !f.geom.pts ? 'line' : f.geom.smooth ? 'curve' : 'poly';
     if (fromList) {
@@ -2584,8 +2594,9 @@ function dzShapeParams(kind) {
   if (kind === 'wall') return { height: Number(p.wheight), thick: Number(p.wthick), shelf: Number(p.shelf), front: Number(p.front), side: p.wside, mode: p.wmode, ratio: Number(p.ratio), k,
     elevMode: p.welev, ...dz.wallElev };
   if (kind === 'swale') return { slope: Number(p.sslope) / 100, startElev: dz.swaleStart, width: Number(p.swidth), depth: Number(p.sdepth), ratio: Number(p.ratio), k };
-  return { slope: Number(p.slope) / 100, startElev: dz.slopeStart, width: Number(p.width), soft: p.soft / 100, k };
+  return { slope: Number(p.slope) / 100, mode: p.smode || 'exact', startElev: dz.slopeStart, width: Number(p.width), soft: p.soft / 100, k };
 }
+const SMODE_SIGN = { exact: '', max: '≤ ', min: '≥ ' };
 
 function dzSyncUi() {
   const u = dz.site?.units || units();
@@ -2618,7 +2629,9 @@ function dzSyncUi() {
   document.querySelectorAll('input[name="wmode"]').forEach(r => { r.checked = r.value === p.wmode; });
   $('dz-ratio').value = String(p.ratio);
   setv('dz-pelev', dz.padElev != null ? dz.padElev.toFixed(2) : '');
-  document.querySelectorAll('#slope-chips button').forEach(b => b.classList.toggle('on', Number(b.dataset.v) === Number(p.slope)));
+  document.querySelectorAll('#slope-chips button').forEach(b => b.classList.toggle('on', Number(b.dataset.v) === Number(p.slope) && b.dataset.m === (p.smode || 'exact')));
+  document.querySelectorAll('input[name="smode"]').forEach(r => { r.checked = r.value === (p.smode || 'exact'); });
+  $('smode-hint').textContent = { exact: 'A uniform plane falling at exactly this slope.', max: 'Follows the ground but never steeper than this, uphill or down — for accessible routes.', min: 'Always falls at least this much; cuts where the ground is flatter — for drainage.' }[p.smode || 'exact'];
   document.querySelectorAll('#sslope-chips button').forEach(b => b.classList.toggle('on', Number(b.dataset.v) === Number(p.sslope)));
   setv('dz-sslope', p.sslope); setv('dz-swidth', p.swidth); setv('dz-sdepth', p.sdepth);
   setv('dz-sstart', dz.swaleStart != null ? dz.swaleStart.toFixed(2) : '');
@@ -2665,7 +2678,7 @@ function dzApplyTool() {
   $('sum-tool').textContent = {
     raise: `raise ${dz.params.amount} ${u}`, lower: `lower ${dz.params.amount} ${u}`,
     flatten: dz.target != null ? `flatten to ${dz.target.toFixed(1)}` : 'flatten', smooth: 'smooth',
-    slope: `slope ${dz.params.slope}%`, swale: `swale ${dz.params.sslope}% · ${dz.params.swidth} ${u} wide`, wall: `wall ${dz.params.wheight} ${u}`, pad: dz.padElev != null ? `pad at ${dz.padElev.toFixed(1)}` : 'pad',
+    slope: `slope ${SMODE_SIGN[dz.params.smode || 'exact']}${dz.params.slope}%`, swale: `swale ${dz.params.sslope}% · ${dz.params.swidth} ${u} wide`, wall: `wall ${dz.params.wheight} ${u}`, pad: dz.padElev != null ? `pad at ${dz.padElev.toFixed(1)}` : 'pad',
   }[t];
   dzDraw();
 }
@@ -2753,7 +2766,8 @@ $('dz-psmooth').addEventListener('change', e => {
 });
 $('dz-show-labels').addEventListener('change', e => { dz.showLabels = e.target.checked; dzDraw(); });
 $('dz-show-cursor').addEventListener('change', e => { dz.showCursor = e.target.checked; dzDraw(); });
-document.querySelectorAll('#slope-chips button').forEach(b => b.addEventListener('click', () => { dz.params.slope = Number(b.dataset.v); dzFieldsChanged(); }));
+document.querySelectorAll('#slope-chips button').forEach(b => b.addEventListener('click', () => { dz.params.slope = Number(b.dataset.v); if (b.dataset.m) dz.params.smode = b.dataset.m; dzFieldsChanged(); }));
+document.querySelectorAll('input[name="smode"]').forEach(r => r.addEventListener('change', () => { dz.params.smode = r.value; dzFieldsChanged(); }));
 document.querySelectorAll('#dz-body input, #dz-body select').forEach(el => el.addEventListener('blur', () => { dz.fieldCheckpoint = false; }));
 $('dz-show-exist').addEventListener('change', e => { dz.showExist = e.target.checked; dzDraw(); });
 $('dz-show-cf').addEventListener('change', e => { dz.showCf = e.target.checked; dzDraw(); });
@@ -3211,7 +3225,7 @@ function makeNewDxf(site, v) {
       let ang = Math.atan2(p2[1] - p1[1], p2[0] - p1[0]) * 180 / Math.PI;
       if (ang > 90 || ang < -90) ang += 180;
       const DL = Math.hypot(...mid.dir) || 1, nx = -mid.dir[1] / DL, ny = mid.dir[0] / DL;
-      const pct = `${(f.p.slope * 100).toFixed(2).replace(/\.?0+$/, '')}%`;
+      const pct = `${swale ? '' : { exact: '', max: 'MAX ', min: 'MIN ' }[f.p.mode || 'exact']}${(f.p.slope * 100).toFixed(2).replace(/\.?0+$/, '')}%`;
       const txt = swale ? `SWALE ${pct}  FL ${z0.toFixed(2)} TO ${z1.toFixed(2)}  (${f.p.width}' W x ${f.p.depth}' D)` : pct;
       d.text(lt, ...P(mid.pt[0] + nx * h / site.toOut, mid.pt[1] + ny * h / site.toOut, (z0 + z1) / 2), h * 0.7, txt, ang);
       if (swale) for (const [q, z] of [[pts[0], z0], [b, z1]]) d.text(lt, ...P(q[0], q[1], z), h * 0.55, `FL ${z.toFixed(2)}`, ang);

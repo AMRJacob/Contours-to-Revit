@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.19.1">
+  <link rel="stylesheet" href="css/app.css?v=0.19.2">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -280,12 +280,17 @@
               </div>
               <div id="f-slope" hidden>
                 <div class="field">
-                  <label for="dz-slope">Target slope <span class="sub">downhill from where you start</span></label>
+                  <label>Slope is</label>
+                  <div class="seg seg-sm" role="radiogroup" id="smode"><label><input type="radio" name="smode" value="exact" checked><span>Exactly</span></label><label><input type="radio" name="smode" value="max"><span>At most ≤</span></label><label><input type="radio" name="smode" value="min"><span>At least ≥</span></label></div>
+                  <p class="hint" id="smode-hint"></p>
+                </div>
+                <div class="field">
+                  <label for="dz-slope">Slope <span class="sub">from where you start</span></label>
                   <div class="align-row">
                     <input type="number" id="dz-slope" step="0.1" value="2" inputmode="decimal"><span class="unit">%</span>
                   </div>
                   <div class="chips" id="slope-chips">
-                    <button type="button" data-v="1">1% min. drain</button><button type="button" data-v="2">2% paving</button><button type="button" data-v="5">5% accessible walk</button><button type="button" data-v="8.33">8.33% ramp</button>
+                    <button type="button" data-v="1" data-m="min">≥ 1% drainage</button><button type="button" data-v="2" data-m="exact">2% paving</button><button type="button" data-v="5" data-m="max">≤ 5% accessible walk</button><button type="button" data-v="8.33" data-m="max">≤ 8.33% ramp</button>
                   </div>
                 </div>
                 <div class="field-row">
@@ -435,6 +440,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.19.1"></script>
+  <script type="module" src="js/app.js?v=0.19.2"></script>
 </body>
 </html>
