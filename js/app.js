@@ -1,15 +1,15 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.21.1';
-import { fetchElevation, sample } from './dem.js?v=0.21.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.21.1';
-import { Dxf } from './dxf.js?v=0.21.1';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.21.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.21.1';
-import { Flow } from './flow.js?v=0.21.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.21.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.21.2';
+import { fetchElevation, sample } from './dem.js?v=0.21.2';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.21.2';
+import { Dxf } from './dxf.js?v=0.21.2';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.21.2';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.21.2';
+import { Flow } from './flow.js?v=0.21.2';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.21.2';
 
-const VERSION = '0.21.1';
+const VERSION = '0.21.2';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -3803,8 +3803,7 @@ function v3Build(resetView = false) {
   if (!v3 || !site) return;
   const des = v3Design();
   const seg = $('v3-surf');
-  seg.querySelectorAll('input').forEach(i => { i.disabled = !des; });
-  seg.title = des ? '' : 'No design changes yet — draw something in Site design to compare.';
+  seg.hidden = !des; // nothing to compare until the site design has changes
   const prop = v3Surf() === 'prop';
   if (!prop && (!v3ExistSegs || v3ExistSegs.site !== site)) {
     v3ExistSegs = { site, ...contourSegments(site.grid, contourLevels(site.stats.min, site.stats.max, site.interval), L => isMajor(L, site.interval)) };

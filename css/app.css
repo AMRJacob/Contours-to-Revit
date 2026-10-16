@@ -400,7 +400,7 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 /* 3D view & water flow */
 .tab-sep { width: 1px; background: rgba(255,255,255,0.18); margin: 4px 4px; }
 .tab-toggle[aria-pressed="true"] { background: #38bdf8; color: #0b1a24; }
-.flow-legend { position: absolute; z-index: 1000; top: 52px; left: 50%; transform: translateX(-50%); background: rgba(28,34,38,0.85); color: #e7e4dd; font-size: 12px; border-radius: 6px; padding: 4px 10px; display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+.flow-legend { position: absolute; z-index: 1000; bottom: 28px; left: 50%; transform: translateX(-50%); background: rgba(28,34,38,0.85); color: #e7e4dd; font-size: 12px; border-radius: 6px; padding: 4px 10px; display: flex; gap: 6px; align-items: center; white-space: nowrap; }
 .flow-legend i { width: 18px; height: 3px; border-radius: 2px; background: linear-gradient(90deg, rgba(125,211,252,0), #7dd3fc); }
 .flow-legend b { width: 10px; height: 10px; border-radius: 50%; background: rgba(37,99,235,0.55); border: 1.5px solid #93c5fd; margin-left: 8px; }
 .flow-legend small { color: #aab3b9; margin-left: 6px; }
