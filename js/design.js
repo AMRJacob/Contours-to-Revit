@@ -407,6 +407,15 @@ export class Design {
     return { pts, cum, len, at };
   }
 
+  /** Ground (via baseAt) at the first point along the path that lies on the grid, or NaN. */
+  static firstGround(pts, baseAt, step) {
+    for (let i = 1; i < pts.length; i++) {
+      const [ax, ay] = pts[i - 1], [bx, by] = pts[i], L = Math.hypot(bx - ax, by - ay), n = Math.max(1, Math.ceil(L / step));
+      for (let k = 0; k <= n; k++) { const z = baseAt(ax + (bx - ax) * k / n, ay + (by - ay) * k / n); if (Number.isFinite(z)) return z; }
+    }
+    return NaN;
+  }
+
   /** Bounding box of points, grown by r. */
   static bbox(pts, r) {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -422,7 +431,7 @@ export class Design {
     const pts = Design.pathPoints(geom);
     const P = Design.measure(pts);
     const half = p.width / 2 / p.k;
-    const zA = Number.isFinite(p.startElev) ? p.startElev : baseAt(...pts[0]);
+    const zA = Number.isFinite(p.startElev) ? p.startElev : Design.firstGround(pts, baseAt, this.g.s);
     if (!Number.isFinite(zA)) return null;
     const m = p.slope;
     const mode = p.mode || 'exact';
@@ -478,7 +487,7 @@ export class Design {
     const P = Design.measure(pts);
     const half = p.width / 2 / p.k;
     const depth = Math.max(0.05, p.depth || 1);
-    const fA = Number.isFinite(p.startElev) ? p.startElev : baseAt(...pts[0]) - depth;
+    const fA = Number.isFinite(p.startElev) ? p.startElev : Design.firstGround(pts, baseAt, this.g.s) - depth;
     if (!Number.isFinite(fA)) return null;
     const [lo, hi] = this.zRange;
     const reach = half + Math.min((Math.max(Math.abs(fA - lo), Math.abs(fA - hi)) + depth + 10) * p.ratio / p.k, 400 / p.k);
