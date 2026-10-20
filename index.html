@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.23.1">
+  <link rel="stylesheet" href="css/app.css?v=0.23.2">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -54,7 +54,7 @@
         <button role="tab" class="mode" data-mode="design" aria-selected="false" title="Sculpt the proposed grades and export new-construction contours">Site design</button>
       </nav>
 
-      <details class="step existing-only" id="step-site" open>
+      <details class="step existing-only" id="step-site" open data-tone="site">
         <summary><span class="num">1</span><span class="st-title">Site</span><span class="st-sum" id="sum-site">Draw a boundary</span></summary>
         <div class="step-body">
           <form id="search-form" class="search" autocomplete="off">
@@ -76,7 +76,7 @@
         </div>
       </details>
 
-      <details class="step existing-only" id="step-options" open>
+      <details class="step existing-only" id="step-options" open data-tone="topo">
         <summary><span class="num">2</span><span class="st-title">Topography</span><span class="st-sum" id="sum-topo"></span></summary>
         <div class="step-body">
           <div class="field-row">
@@ -129,7 +129,7 @@
         </div>
       </details>
 
-      <details class="step existing-only" id="step-place">
+      <details class="step existing-only" id="step-place" data-tone="revit">
         <summary><span class="num">3</span><span class="st-title">Place in Revit</span><span class="st-sum" id="sum-place"></span></summary>
         <div class="step-body">
           <label class="check check-first">
@@ -184,7 +184,7 @@
         </div>
       </details>
 
-      <details class="step existing-only" id="step-results" open hidden>
+      <details class="step existing-only" id="step-results" open hidden data-tone="export">
         <summary><span class="num">4</span><span class="st-title">Export</span><span class="st-sum" id="sum-export"></span></summary>
         <div class="step-body">
           <dl class="stats" id="result-stats">
@@ -243,7 +243,7 @@
           <p><strong>Generate the existing site first.</strong> The design starts from that surface — switch to <em>Existing site</em>, draw a boundary and click Generate.</p>
         </div>
         <div id="dz-body" hidden>
-          <details class="step" open>
+          <details class="step" open data-tone="tools">
             <summary><span class="num">1</span><span class="st-title">Grading tools</span><span class="st-sum" id="sum-tool"></span></summary>
             <div class="step-body">
               <div class="tool-grid" role="radiogroup" aria-label="Grading tool">
@@ -368,7 +368,7 @@
               <p class="hint">Wheel-click and drag to pan (or hold <kbd>Space</kbd>) · <kbd>Ctrl</kbd>+wheel brush size · right-click a feature to edit it · <kbd>Shift</kbd> locks lines orthogonal · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo · <kbd>Esc</kbd> stops editing.</p>
             </div>
           </details>
-          <details class="step" open>
+          <details class="step" open data-tone="earth">
             <summary><span class="num">2</span><span class="st-title">Earthwork</span><span class="st-sum" id="sum-earth"></span></summary>
             <div class="step-body">
               <dl class="stats stats-earth">
@@ -389,14 +389,14 @@
               <div class="cf-legend" aria-hidden="true"><span>Cut</span><i></i><span>Fill</span><small id="cf-scale">±5 ft</small></div>
             </div>
           </details>
-          <details class="step" open>
+          <details class="step" open data-tone="features">
             <summary><span class="num">3</span><span class="st-title">Features</span><span class="st-sum" id="sum-feat"></span></summary>
             <div class="step-body">
               <ul class="feat-list" id="feat-list"></ul>
               <p class="hint" id="feat-hint">Pads, walls and slope runs stay editable: click one on the map (with a Slope, Wall or Pad tool) or in this list, change its numbers, or drag its handles. <kbd>Del</kbd> removes it.</p>
             </div>
           </details>
-          <details class="step" open>
+          <details class="step" open data-tone="export">
             <summary><span class="num">4</span><span class="st-title">Save &amp; export</span><span class="st-sum"></span></summary>
             <div class="step-body">
               <div class="downloads">
@@ -418,7 +418,7 @@
         </div>
       </section>
 
-      <details class="step" id="step-settings">
+      <details class="step" id="step-settings" data-tone="settings">
         <summary><span class="num">⚙</span><span class="st-title">Settings</span><span class="st-sum" id="sum-settings"></span></summary>
         <div class="step-body">
           <h4 class="set-h">Aerial imagery</h4>
@@ -515,6 +515,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.23.1"></script>
+  <script type="module" src="js/app.js?v=0.23.2"></script>
 </body>
 </html>

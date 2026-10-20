@@ -5,7 +5,7 @@
 //   'map'   — ArcGIS MapServer /export, reprojected by the server straight into the State Plane zone
 //   'image' — ArcGIS ImageServer /exportImage, same
 //   'tiles' — Web Mercator XYZ tiles, stitched and warped into the State Plane box here
-import { projector, zoneUnitsPerMeter } from './geo.js?v=0.23.1';
+import { projector, zoneUnitsPerMeter } from './geo.js?v=0.23.2';
 
 const AR = [-94.65, 32.95, -89.58, 36.55];             // Arkansas (lon/lat box)
 const PULASKI = [-92.757, 34.483, -92.024, 35.015];    // PAgis service extent

@@ -62,7 +62,7 @@ h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
 .step[open] > summary .st-sum { visibility: hidden; }
 .step-body { padding: 0 20px 18px; }
 .num { width: 22px; height: 22px; border-radius: 50%; background: var(--ink); color: var(--paper); display: inline-grid; place-items: center; font-size: 11.5px; font-weight: 600; flex: none; }
-.step.done > summary .num { background: var(--ok); }
+
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 .mode-tabs { display: flex; gap: 4px; margin: 12px 20px 4px; padding: 3px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
@@ -441,3 +441,25 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .bldg-opt { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 12.5px; color: var(--ink-2); }
 .bldg-opt label { flex: 1; margin: 0; font-weight: 400; }
 .bldg-opt input { width: 70px; }
+
+/* Step banners: each heading tinted by what the step is about */
+.step { --tone: var(--ink); }
+.step[data-tone="site"]     { --tone: #3f7d4f; }  /* land / boundary */
+.step[data-tone="topo"]     { --tone: #b0702c; }  /* terrain */
+.step[data-tone="revit"]    { --tone: #2f6fa8; }  /* Revit blue */
+.step[data-tone="export"]   { --tone: #6b54a8; }  /* files out */
+.step[data-tone="tools"]    { --tone: #d9761f; }  /* grading */
+.step[data-tone="earth"]    { --tone: #8a5a3c; }  /* cut / fill */
+.step[data-tone="features"] { --tone: #1f8a8a; }  /* pads, walls, swales */
+.step[data-tone="settings"] { --tone: #5d6870; }
+@media (prefers-color-scheme: dark) {
+  .step[data-tone="site"] { --tone: #6fbf82; } .step[data-tone="topo"] { --tone: #e0a05a; } .step[data-tone="revit"] { --tone: #6aa8e0; }
+  .step[data-tone="export"] { --tone: #a48de0; } .step[data-tone="tools"] { --tone: #e8913f; } .step[data-tone="earth"] { --tone: #c9906a; }
+  .step[data-tone="features"] { --tone: #5cc4c4; } .step[data-tone="settings"] { --tone: #9aa5ad; }
+  .step > summary .num { color: #16191b !important; }
+}
+.step > summary { background: color-mix(in srgb, var(--tone) 11%, var(--paper)); box-shadow: inset 4px 0 0 var(--tone); }
+.step > summary:hover { background: color-mix(in srgb, var(--tone) 18%, var(--paper)); }
+.step > summary .num { background: var(--tone); color: #fff; }
+.step > summary .st-title { color: color-mix(in srgb, var(--tone) 55%, var(--ink)); }
+.step.done > summary .st-title::after { content: " ✓"; color: var(--ok); font-weight: 700; }
