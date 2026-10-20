@@ -1,15 +1,16 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.21.4';
-import { fetchElevation, sample } from './dem.js?v=0.21.4';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.21.4';
-import { Dxf } from './dxf.js?v=0.21.4';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.21.4';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.21.4';
-import { Flow } from './flow.js?v=0.21.4';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.21.4';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.22.0';
+import { fetchElevation, sample } from './dem.js?v=0.22.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.22.0';
+import { Dxf } from './dxf.js?v=0.22.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.22.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.22.0';
+import { Flow } from './flow.js?v=0.22.0';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.22.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.22.0';
 
-const VERSION = '0.21.4';
+const VERSION = '0.22.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -432,8 +433,8 @@ async function generate() {
     await tick();
   }
 
-  setStatus('Fetching aerial imagery for the map…');
-  const { bitmap: imagery, credit: imageryCredit } = await fetchImagery(zone, box);
+  setStatus('Fetching aerial imagery…');
+  const { bitmap: imagery, credit: imageryCredit, src: imagerySrc, how: imageryHow, notes: imageryNotes } = await fetchImagery(zone, box);
 
   const conv = convergence(zone, c.lng, c.lat);
   const shade = hillshade(cgrid, 1 / toOut); // z (output units) -> native XY units
@@ -441,7 +442,7 @@ async function generate() {
   const now = new Date();
   const site = {
     zone, units: u, toOut, zPerM, spacingOut, interval, box, pts, pStats, grid: cgrid, stats: cStats, shade,
-    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, floodFailed, parcelsFailed, bldgFailed, widthsFailed, areasFailed, imagery, imageryCredit, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
+    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, floodFailed, parcelsFailed, bldgFailed, widthsFailed, areasFailed, imagery, imageryCredit, imagerySrc, imageryHow, imageryNotes, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
     tinted: false,
   };
   site.meta = buildMeta(site);
@@ -455,6 +456,7 @@ async function generate() {
   renderPreview();
   v3Dirty();
   flowKick();
+  imgUi();
   const missing = pStats.missing;
   setStatus(missing
     ? `Done, but ${fmt(missing, 0)} grid points had no elevation data and were left out of the CSV/DXF.`
@@ -463,32 +465,29 @@ async function generate() {
 
 const tick = () => new Promise(r => setTimeout(r, 0));
 
-async function fetchImagery(zone, box) {
-  // Request imagery already reprojected to the State Plane zone so it aligns exactly with the grid.
-  const toReq = zone.note ? 1 / zoneUnitsPerMeter(zone) : 1; // converted zones are requested in their metric EPSG units
-  const w = box.xmax - box.xmin, h = box.ymax - box.ymin;
-  const sources = [
-    { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export', long: 2400, credit: 'Esri World Imagery (Esri, Maxar, Earthstar Geographics)' },
-    { url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/export', long: 2400, credit: 'USGS The National Map: Orthoimagery (public domain)' },
-  ];
-  for (const src of sources) {
-    const size = w >= h ? [src.long, Math.max(1, Math.round(src.long * h / w))] : [Math.max(1, Math.round(src.long * w / h)), src.long];
-    const params = new URLSearchParams({
-      bbox: [box.xmin * toReq, box.ymin * toReq, box.xmax * toReq, box.ymax * toReq].join(','),
-      bboxSR: String(zone.code), imageSR: String(zone.code), size: size.join(','), format: 'jpg', f: 'image',
-    });
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 20000);
-    try {
-      const r = await fetch(`${src.url}?${params}`, { signal: ac.signal });
-      if (!r.ok || !(r.headers.get('content-type') || '').startsWith('image/')) continue;
-      return { bitmap: await createImageBitmap(await r.blob()), credit: src.credit };
-    } catch { /* try next */ } finally { clearTimeout(timer); }
-  }
-  return { bitmap: null, credit: '' };
-}
+/** Current imagery choice: 'auto', a catalog id, or 'custom' (with a pasted service URL). */
+const imgChoice = { id: 'auto', custom: '' };
+try { imgChoice.id = localStorage.getItem('c2r-imgsrc') || 'auto'; imgChoice.custom = localStorage.getItem('c2r-imgcustom') || ''; } catch { /* ignore */ }
+if (imgChoice.id !== 'auto' && imgChoice.id !== 'custom' && !sourceById(imgChoice.id)) imgChoice.id = 'auto';
 
-/** Aerial download resolution, ft per pixel (0 = finest the source offers, ~0.25 ft/px). */
+/** Site imagery for the map preview, PNG and 3D view: about 0.5 ft/px, at most 4096 px on the long side. */
+async function fetchImagery(zone, box) {
+  const nativePerFt = zoneUnitsPerMeter(zone) * 0.3048;
+  const wFt = (box.xmax - box.xmin) / nativePerFt, hFt = (box.ymax - box.ymin) / nativePerFt;
+  const ftPerPx = Math.max(0.5, Math.max(wFt, hFt) / 4096);
+  const W = Math.max(1, Math.round(wFt / ftPerPx)), H = Math.max(1, Math.round(hFt / ftPerPx));
+  const notes = [];
+  for (const [src, how] of imgPlan(imgChoice.id, zone, box, customSource(imgChoice.custom))) {
+    try {
+      setStatus(`Fetching aerial imagery — ${src.label}…`);
+      const canvas = await fetchBox(src, how, zone, box, W, H, {
+        onTile: (d, n) => { if (n > 1) setStatus(`Fetching aerial imagery — ${src.label} (${d} of ${n})…`); },
+      });
+      return { bitmap: canvas, credit: src.credit, src, how, notes };
+    } catch (e) { notes.push(`${src.label}${how === 'tiles' ? ' (tiles)' : ''}: ${e.message || 'failed'}`); }
+  }
+  return { bitmap: null, credit: '', src: null, how: null, notes };
+}
 const AERIAL_RES = [
   { v: 0, label: 'Maximum detail (about 0.25 ft/px)' },
   { v: 0.5, label: '0.5 ft/px' },
@@ -498,13 +497,6 @@ const AERIAL_RES = [
 const AERIAL_MAX_PX = 64e6;   // total pixels (~8000 x 8000) — keeps the browser and Revit responsive
 const AERIAL_TILE = 2048;     // per-request size; the services allow 4096 but smaller requests are far more reliable
 let aerialRes = (() => { try { const v = parseFloat(localStorage.getItem('c2r-aerial-res')); return AERIAL_RES.some(o => o.v === v) ? v : 0; } catch { return 0; } })();
-
-const AERIAL_SOURCES = [
-  // Esri World Imagery: 3-6 in. imagery in most US towns (tested downtown Little Rock: real detail to ~0.25 ft/px).
-  { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export', credit: 'Esri World Imagery (Esri, Maxar, Earthstar Geographics)' },
-  // USGS NAIP-based orthoimagery: public domain but much softer (about 1 m).
-  { url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/export', credit: 'USGS The National Map: Orthoimagery (public domain)' },
-];
 
 /**
  * Clean aerial for Revit/CAD: the site box exactly, grid-north up, at the chosen resolution.
@@ -521,42 +513,15 @@ async function fetchAerialExport(site) {
   let ftPerPx = aerialRes || 0.25;
   if ((wFt / ftPerPx) * (hFt / ftPerPx) > AERIAL_MAX_PX) ftPerPx = Math.sqrt(wFt * hFt / AERIAL_MAX_PX);
   const W = Math.max(1, Math.round(wFt / ftPerPx)), H = Math.max(1, Math.round(hFt / ftPerPx));
-  const nx = Math.ceil(W / AERIAL_TILE), ny = Math.ceil(H / AERIAL_TILE);
   const fails = [];
-  for (const src of AERIAL_SOURCES) {
-    const canvas = document.createElement('canvas');
-    canvas.width = W; canvas.height = H;
-    const ctx = canvas.getContext('2d');
-    const jobs = [];
-    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) jobs.push([i, j]);
-    let done = 0, ok = true;
-    const one = async ([i, j]) => {
-      const px0 = i * AERIAL_TILE, py0 = j * AERIAL_TILE;
-      const tw = Math.min(AERIAL_TILE, W - px0), th = Math.min(AERIAL_TILE, H - py0);
-      // Tile bbox in native zone units; pixel rows count down from the north edge.
-      const x0 = box.xmin + px0 / W * w, x1 = box.xmin + (px0 + tw) / W * w;
-      const y1 = box.ymax - py0 / H * h, y0 = box.ymax - (py0 + th) / H * h;
-      const params = new URLSearchParams({
-        bbox: [x0 * toReq, y0 * toReq, x1 * toReq, y1 * toReq].join(','),
-        bboxSR: String(zone.code), imageSR: String(zone.code), size: `${tw},${th}`, format: 'jpg', f: 'image',
-      });
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const r = await fetch(`${src.url}?${params}`, { signal: AbortSignal.timeout(60000) });
-          if (!r.ok || !(r.headers.get('content-type') || '').startsWith('image/')) throw new Error(`HTTP ${r.status}`);
-          const bmp = await createImageBitmap(await r.blob());
-          ctx.drawImage(bmp, px0, py0, tw, th);
-          bmp.close?.();
-          setStatus(`Downloading aerial — ${++done} of ${jobs.length} tiles…`);
-          return;
-        } catch { await new Promise(res => setTimeout(res, 800 * (attempt + 1))); }
-      }
-      ok = false;
-    };
-    // 4 requests at a time.
-    const queue = jobs.slice();
-    await Promise.all(Array.from({ length: Math.min(4, queue.length) }, async () => { while (ok && queue.length) await one(queue.shift()); }));
-    if (!ok) { fails.push(src.credit); continue; }
+  // The source that served the map imagery first, then the usual order.
+  const steps = imgPlan(imgChoice.id, zone, box, customSource(imgChoice.custom));
+  if (site.imagerySrc) { const i = steps.findIndex(([q, h]) => q === site.imagerySrc && h === site.imageryHow); if (i > 0) steps.unshift(...steps.splice(i, 1)); }
+  for (const [src, how] of steps) {
+    let canvas;
+    try {
+      canvas = await fetchBox(src, how, zone, box, W, H, { tile: AERIAL_TILE, onTile: (d, n) => setStatus(`Downloading aerial (${src.label}) — ${d} of ${n}…`) });
+    } catch (e) { fails.push(src.label); continue; }
     let out = canvas, OW = W, OH = H;
     if (site.rot) {
       setStatus('Turning aerial to project north…');
@@ -731,6 +696,7 @@ function showResults(site) {
   if (finest && finest.key !== '1m') {
     html += `<div class="warn" style="margin-top:8px">1 m lidar is not available here. Using ${escapeHtml(finest.label)} — expect smoother, less detailed contours.</div>`;
   }
+  html += `<div style="margin:10px 0 4px;font-weight:600;color:var(--ink)">Aerial imagery</div><div id="src-imagery">${imgUsedText(site)}</div>`;
   const items = site.dem.contributions.flatMap(ct => ct.items);
   if (items.length) {
     html += '<details><summary>Datasets &amp; collection dates</summary><ul>';
@@ -3764,6 +3730,65 @@ $('datum').value = align.datum != null ? String(align.datum) : '';
 updateTopoSummary();
 applyOrigin();
 updateZoneHint();
+// ---------- Aerial imagery source (Settings) ----------
+function imgUsedText(site) {
+  if (!site) return 'Generate a site to see which source is used.';
+  if (!site.imagerySrc) return `None of the imagery services answered — hillshade shown.${site.imageryNotes?.length ? ` (${escapeHtml(site.imageryNotes.join('; '))})` : ''}`;
+  const s = site.imagerySrc;
+  const asked = imgChoice.id === 'auto' ? '' : imgChoice.id === 'custom' ? (s.id === 'custom' ? '' : ' — the custom service failed, so the next best was used')
+    : s.id === imgChoice.id ? '' : ' — your chosen source failed or doesn\'t cover this site, so the next best was used';
+  return `${escapeHtml(s.label)}${site.imageryHow === 'tiles' ? ' (map tiles)' : ''}${asked}.`;
+}
+function imgUi() {
+  const sel = $('img-src');
+  if (!sel.options.length) {
+    sel.innerHTML = '<option value="auto">Automatic — best available here</option>'
+      + IMAGERY_SOURCES.map(s => `<option value="${s.id}">${escapeHtml(s.label)}</option>`).join('')
+      + '<option value="custom">Custom ArcGIS service…</option>';
+  }
+  sel.value = imgChoice.id;
+  $('img-custom-row').hidden = imgChoice.id !== 'custom';
+  if (document.activeElement !== $('img-custom')) $('img-custom').value = imgChoice.custom;
+  const site = state.result;
+  $('img-used').innerHTML = `This site: ${imgUsedText(site)}`;
+  const here = site ? IMAGERY_SOURCES.filter(s => s.bounds && covers(s, site.zone, site.box)).map(s => s.label) : [];
+  $('img-local').textContent = here.length ? `Local sources covering this site: ${here.join(', ')}.` : '';
+  const si = $('src-imagery'); if (si) si.innerHTML = imgUsedText(site);
+}
+let imgBusy = 0;
+async function refreshImagery() {
+  imgUi();
+  const site = state.result;
+  if (!site) return;
+  const seq = ++imgBusy;
+  $('img-used').textContent = 'This site: loading…';
+  const r = await fetchImagery(site.zone, site.box);
+  if (seq !== imgBusy || state.result !== site) return;
+  Object.assign(site, { imagery: r.bitmap, imageryCredit: r.credit, imagerySrc: r.src, imageryHow: r.how, imageryNotes: r.notes });
+  site._aerial = null;
+  site.meta = buildMeta(site);
+  drawUnderlayThumb();
+  renderPreview();
+  v3Dirty();
+  imgUi();
+  setStatus(r.src ? `Aerial imagery: ${r.src.label}.` : 'No imagery service answered for this site.', !r.src);
+}
+$('img-src').addEventListener('change', e => {
+  imgChoice.id = e.target.value;
+  try { localStorage.setItem('c2r-imgsrc', imgChoice.id); } catch { /* ignore */ }
+  imgUi();
+  if (imgChoice.id !== 'custom' || customSource(imgChoice.custom)) refreshImagery();
+});
+$('img-custom').addEventListener('change', e => {
+  const v = e.target.value.trim();
+  if (v && !customSource(v)) { $('img-custom-msg').textContent = 'Paste an ArcGIS address ending in /MapServer or /ImageServer (https).'; return; }
+  $('img-custom-msg').textContent = '';
+  imgChoice.custom = v;
+  try { localStorage.setItem('c2r-imgcustom', v); } catch { /* ignore */ }
+  refreshImagery();
+});
+imgUi();
+
 // ---------- 3D view ----------
 // three.js is only downloaded the first time the 3D tab is opened.
 var v3 = null, v3Loading = null, v3Timer = 0, v3ExistSegs = null;
