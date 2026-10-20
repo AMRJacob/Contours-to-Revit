@@ -1,16 +1,16 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.22.6';
-import { fetchElevation, sample } from './dem.js?v=0.22.6';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.22.6';
-import { Dxf } from './dxf.js?v=0.22.6';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.22.6';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.22.6';
-import { Flow } from './flow.js?v=0.22.6';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.22.6';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.22.6';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.22.7';
+import { fetchElevation, sample } from './dem.js?v=0.22.7';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.22.7';
+import { Dxf } from './dxf.js?v=0.22.7';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.22.7';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.22.7';
+import { Flow } from './flow.js?v=0.22.7';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.22.7';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.22.7';
 
-const VERSION = '0.22.6';
+const VERSION = '0.22.7';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -457,6 +457,7 @@ async function generate() {
   v3Dirty();
   flowKick();
   imgUi();
+  siteImgDraw();
   const missing = pStats.missing;
   setStatus(missing
     ? `Done, but ${fmt(missing, 0)} grid points had no elevation data and were left out of the CSV/DXF.`
@@ -736,6 +737,7 @@ function showResults(site) {
 
 // ---------- Layer visibility (map "Layers" panel drives the map, preview, PNG and DXF) ----------
 const LAYERS = [
+  { key: 'siteImage', label: 'Site aerial (sharper)', swatch: 'linear-gradient(135deg,#6b8f5e,#c9b98f)', note: 'map only' },
   { key: 'contours', label: 'Contours', swatch: '#ffb347' },
   ...BUILDING_SOURCES.map(b => ({ key: b.key, label: b.label, swatch: b.color })),
   { key: 'roads', label: 'Roads', swatch: '#ffe066' },
@@ -751,7 +753,7 @@ const LAYERS = [
   { key: 'points', label: 'Grid points', swatch: '#7bd88f', note: 'DXF only' },
 ];
 const visibility = (() => {
-  const v = { contours: true, buildings: true, bldgMs: false, bldgOsm: false, roads: true, roadWidths: true, roadEdges: true, streetAreas: true, parking: true, sidewalks: true, imageFrame: true, parcels: true, flood: true, labels: true, points: false };
+  const v = { siteImage: true, contours: true, buildings: true, bldgMs: false, bldgOsm: false, roads: true, roadWidths: true, roadEdges: true, streetAreas: true, parking: true, sidewalks: true, imageFrame: true, parcels: true, flood: true, labels: true, points: false };
   try { Object.assign(v, JSON.parse(localStorage.getItem('c2r-layers') || '{}')); } catch { /* ignore */ }
   return v;
 })();
@@ -776,6 +778,7 @@ const LayersControl = L.Control.extend({
       try { localStorage.setItem('c2r-layers', JSON.stringify(visibility)); } catch { /* ignore */ }
       projTouch();
       applyVisibility();
+      siteImgDraw();
     }));
     return el;
   },
@@ -799,6 +802,7 @@ function updateLayerCounts(site) {
     flood: c ? (site.floodFailed ? 'failed' : c.floodZones.length ? String(c.floodZones.length) : 'none') : '',
     points: site ? `${fmt(site.pts.nx * site.pts.ny - site.pStats.missing, 0)} · DXF only` : 'DXF only',
     labels: 'preview · PNG · DXF',
+    siteImage: site ? (site.imagery ? (site.imagerySrc?.label || 'yes').replace(/ —.*$/, '') : 'none') : '',
     imageFrame: 'DXF only',
   };
   // New site: turn on the most detailed building source that has footprints here (Microsoft, then OSM, then
@@ -1907,6 +1911,36 @@ const dz = {
   fieldCheckpoint: false,
 };
 const saveDzParams = () => { try { localStorage.setItem('c2r-dz', JSON.stringify(dz.params)); } catch { /* ignore */ } };
+
+// ----- Site aerial on the map: the generated (sharper, State Plane) imagery drawn inside the site box -----
+// Leaflet image overlays must be lat/lng-aligned; the box is grid-aligned, so it is drawn on a canvas in its own
+// pane (above the basemap, below the vector layers) with the same affine mapping the design canvas uses.
+map.createPane('siteImg').style.zIndex = 250;
+const siteImgCanvas = L.DomUtil.create('canvas', 'site-img-canvas', map.getPane('siteImg'));
+siteImgCanvas.style.pointerEvents = 'none';
+function siteImgDraw() {
+  const site = state.result, ctx = siteImgCanvas.getContext('2d');
+  const cont = map.getContainer(), dpr = window.devicePixelRatio || 1;
+  const W = cont.clientWidth, H = cont.clientHeight;
+  if (siteImgCanvas.width !== Math.round(W * dpr) || siteImgCanvas.height !== Math.round(H * dpr)) {
+    siteImgCanvas.width = Math.round(W * dpr); siteImgCanvas.height = Math.round(H * dpr);
+    siteImgCanvas.style.width = W + 'px'; siteImgCanvas.style.height = H + 'px';
+  }
+  L.DomUtil.setPosition(siteImgCanvas, map.containerPointToLayerPoint([0, 0]));
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, siteImgCanvas.width, siteImgCanvas.height);
+  if (!site?.imagery || !visibility.siteImage) return;
+  const M = dzAffine(site), b = site.box, img = site.imagery;
+  const sx = (b.xmax - b.xmin) / img.width, sy = (b.ymax - b.ymin) / img.height;
+  // image pixel (i, j) -> native (xmin + i·sx, ymax − j·sy) -> screen
+  ctx.setTransform(dpr * M.a * sx, dpr * M.b * sx, -dpr * M.c * sy, -dpr * M.d * sy,
+    dpr * (M.a * b.xmin + M.c * b.ymax + M.e), dpr * (M.b * b.xmin + M.d * b.ymax + M.f));
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0);
+}
+map.on('moveend zoomend resize viewreset', siteImgDraw);
+map.on('zoomstart', () => { siteImgCanvas.style.visibility = 'hidden'; });
+map.on('zoomend', () => { siteImgCanvas.style.visibility = ''; });
 
 // ----- Canvas layer drawn straight onto the map (fast enough to redraw on every brush dab and pan) -----
 const dzCanvas = document.createElement('canvas');
@@ -3648,6 +3682,7 @@ function clearAll() {
   document.querySelector('.tab[data-view="3d"]').disabled = true;
   flowSet(false); $('flow-toggle').disabled = true;
   updateLayerCounts(null);
+  siteImgDraw();
   onSiteChanged(false);
   applyOrigin();
   if (dz.mode === 'design') { dzEnsure(); dzDraw(); }
@@ -3817,6 +3852,8 @@ async function refreshImagery() {
   renderPreview();
   v3Dirty();
   imgUi();
+  siteImgDraw();
+  updateLayerCounts(site);
   setStatus(r.src ? `Aerial imagery: ${r.src.label}.` : 'No imagery service answered for this site.', !r.src);
 }
 $('img-src').addEventListener('change', e => {
