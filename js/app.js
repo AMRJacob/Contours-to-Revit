@@ -1,16 +1,16 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.22.7';
-import { fetchElevation, sample } from './dem.js?v=0.22.7';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.22.7';
-import { Dxf } from './dxf.js?v=0.22.7';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.22.7';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.22.7';
-import { Flow } from './flow.js?v=0.22.7';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.22.7';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.22.7';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.23.0';
+import { fetchElevation, sample } from './dem.js?v=0.23.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.23.0';
+import { Dxf } from './dxf.js?v=0.23.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.23.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.23.0';
+import { Flow } from './flow.js?v=0.23.0';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.23.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.23.0';
 
-const VERSION = '0.22.7';
+const VERSION = '0.23.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -190,7 +190,7 @@ function saveSettings() {
   store.set({
     units: units(), spacing: $('spacing').value, interval: $('interval').value,
     localOrigin: $('local-origin').checked, smooth: $('smooth').checked,
-    zone: $('zone').value,
+    zone: $('zone').value, bldgMode: $('bldg-mode').value, bldgFfe: $('bldg-ffe').value, bldgH: $('bldg-h').value,
   });
 }
 
@@ -203,13 +203,26 @@ function restoreSettings() {
   if (typeof s.localOrigin === 'boolean') $('local-origin').checked = s.localOrigin;
   if (typeof s.smooth === 'boolean') $('smooth').checked = s.smooth;
   if (s.zone && [...$('zone').options].some(o => o.value === s.zone)) $('zone').value = s.zone;
+  if (['off', 'pad', 'block'].includes(s.bldgMode)) $('bldg-mode').value = s.bldgMode;
+  if (s.bldgFfe != null) $('bldg-ffe').value = s.bldgFfe;
+  if (s.bldgH != null) $('bldg-h').value = s.bldgH;
+  bldgUi();
+}
+function bldgUi() {
+  const m = $('bldg-mode').value;
+  $('bldg-pad-row').hidden = m !== 'pad';
+  $('bldg-h-row').hidden = m !== 'block';
+  $('bldg-hint').textContent = m === 'off' ? ''
+    : m === 'pad' ? 'Each footprint becomes a level pad (the CSV, contours and design surface all use it). Uses the building layer shown on the map — Microsoft, OpenStreetMap or FEMA. Assumed, not surveyed.'
+    : 'Each footprint is raised to its roof (data height where known). Good for 3D views and water flow around buildings; for a Revit Toposolid you usually want pads or bare earth.';
 }
 
 document.querySelectorAll('input[name="units"]').forEach(r => r.addEventListener('change', () => {
   fillUnitOptions(); onSiteChanged(false); saveSettings(); invalidate();
 }));
 $('local-origin').addEventListener('change', () => { saveSettings(); applyOrigin(); });
-['spacing', 'interval', 'smooth'].forEach(id => $(id).addEventListener('change', () => {
+$('bldg-mode').addEventListener('change', bldgUi);
+['spacing', 'interval', 'smooth', 'bldg-mode', 'bldg-ffe', 'bldg-h'].forEach(id => $(id).addEventListener('change', () => {
   onSiteChanged(false); saveSettings(); invalidate();
 }));
 $('zone').addEventListener('change', () => { updateZoneHint(); onSiteChanged(false); saveSettings(); invalidate(); });
@@ -317,6 +330,40 @@ $('generate').addEventListener('click', async () => {
   }
 });
 
+/** The building source used for the surface: the one shown on the map for a reopened project, else the most detailed. */
+function pickBuildingKey(c, failed) {
+  const order = ['bldgMs', 'bldgOsm', 'buildings'];
+  const len = k => (k === 'buildings' ? c.buildings : c[k] || []).length;
+  const ok = order.filter(k => !failed?.[k] && len(k) > 0);
+  return (state.keepLayers && ok.find(k => visibility[k])) || ok[0] || null;
+}
+/** Set every grid node inside a footprint to that building's target elevation. */
+function burnBuildings(g, list, targets) {
+  list.forEach((b, n) => {
+    const t = targets[n];
+    if (!Number.isFinite(t)) return;
+    const R = b.ring;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of R) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    const i0 = Math.max(0, Math.ceil((x0 - g.x0) / g.s)), i1 = Math.min(g.nx - 1, Math.floor((x1 - g.x0) / g.s));
+    const j0 = Math.max(0, Math.ceil((y0 - g.y0) / g.s)), j1 = Math.min(g.ny - 1, Math.floor((y1 - g.y0) / g.s));
+    for (let j = j0; j <= j1; j++) {
+      const y = g.y0 + j * g.s;
+      // Crossings of this row with the ring (even-odd fill).
+      const xs = [];
+      for (let a = 0, k = R.length - 1; a < R.length; k = a++) {
+        const [ax, ay] = R[a], [bx, by] = R[k];
+        if ((ay > y) !== (by > y)) xs.push(ax + (y - ay) / (by - ay) * (bx - ax));
+      }
+      xs.sort((p, q) => p - q);
+      for (let m = 0; m + 1 < xs.length; m += 2) {
+        const ia = Math.max(i0, Math.ceil((xs[m] - g.x0) / g.s)), ib = Math.min(i1, Math.floor((xs[m + 1] - g.x0) / g.s));
+        for (let i = ia; i <= ib; i++) g.z[j * g.nx + i] = t;
+      }
+    }
+  });
+}
+
 async function generate() {
   const c = state.rect.getBounds().getCenter();
   const zone = selectedZone() || fallbackZoneFor(c.lng, c.lat);
@@ -363,7 +410,7 @@ async function generate() {
   await tick();
   const zAt = (x, y) => sample(dem, ...p.inv([x, y])) * zPerM;
   const pts = buildGrid(box, sNative, zAt);
-  const pStats = gridStats(pts);
+  let pStats = gridStats(pts);
 
   setStatus('Tracing contours…');
   await tick();
@@ -377,9 +424,9 @@ async function generate() {
     const demPxNative = Math.max(dem.pixelMeters.x, dem.pixelMeters.y) * nativePerM;
     cgrid = smooth(cgrid, Math.max(0.8, demPxNative / cNative));
   }
-  const cStats = gridStats(cgrid);
-  const levels = contourLevels(cStats.min, cStats.max, interval);
-  const contours = contourLines(cgrid, levels);
+  let cStats = gridStats(cgrid);
+  let levels = contourLevels(cStats.min, cStats.max, interval);
+  let contours = contourLines(cgrid, levels);
 
   let context = null;
   let floodFailed = false, parcelsFailed = false, bldgFailed = {}, widthsFailed = false, areasFailed = false;
@@ -433,6 +480,34 @@ async function generate() {
     await tick();
   }
 
+  // Optional: existing buildings burned into the surface (flat pads at an assumed floor, or raised to the roof).
+  let bldgSurface = null;
+  const bmode = $('bldg-mode').value;
+  if (bmode !== 'off' && context) {
+    const key = pickBuildingKey(context, bldgFailed);
+    const list = key ? (key === 'buildings' ? context.buildings : context[key]) : [];
+    if (list.length) {
+      setStatus('Adding buildings to the surface…');
+      await tick();
+      const ftOut = u === 'ft' ? 1 : 0.3048;
+      const ffe = (Number($('bldg-ffe').value) || 0) * ftOut, hAss = (Number($('bldg-h').value) || 15) * ftOut;
+      const targets = list.map(b => {
+        if (bmode === 'block') return b.heightKnown ? b.top : b.base + hAss;
+        let hi = -Infinity;
+        for (const [x, y] of densify([...b.ring, b.ring[0]], nativePerM)) { const z = zAt(x, y); if (z > hi) hi = z; }
+        return hi + ffe;
+      });
+      burnBuildings(pts, list, targets);
+      burnBuildings(cgrid, list, targets);
+      pStats = gridStats(pts);
+      cStats = gridStats(cgrid);
+      levels = contourLevels(cStats.min, cStats.max, interval);
+      contours = contourLines(cgrid, levels);
+      bldgSurface = { mode: bmode, key, count: list.length, known: list.filter(b => b.heightKnown).length,
+        label: BUILDING_SOURCES.find(s => s.key === key)?.short || key, ffe: Number($('bldg-ffe').value) || 0, h: Number($('bldg-h').value) || 15 };
+    }
+  }
+
   setStatus('Fetching aerial imagery…');
   const { bitmap: imagery, credit: imageryCredit, src: imagerySrc, how: imageryHow, notes: imageryNotes } = await fetchImagery(zone, box);
 
@@ -442,7 +517,7 @@ async function generate() {
   const now = new Date();
   const site = {
     zone, units: u, toOut, zPerM, spacingOut, interval, box, pts, pStats, grid: cgrid, stats: cStats, shade,
-    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, floodFailed, parcelsFailed, bldgFailed, widthsFailed, areasFailed, imagery, imageryCredit, imagerySrc, imageryHow, imageryNotes, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
+    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, floodFailed, parcelsFailed, bldgFailed, widthsFailed, areasFailed, imagery, imageryCredit, imagerySrc, imageryHow, imageryNotes, bldgSurface, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
     tinted: false,
   };
   site.meta = buildMeta(site);
@@ -698,6 +773,10 @@ function showResults(site) {
     html += `<div class="warn" style="margin-top:8px">1 m lidar is not available here. Using ${escapeHtml(finest.label)} — expect smoother, less detailed contours.</div>`;
   }
   html += `<div style="margin:10px 0 4px;font-weight:600;color:var(--ink)">Aerial imagery</div><div id="src-imagery">${imgUsedText(site)}</div>`;
+  if (site.bldgSurface) {
+    const b = site.bldgSurface;
+    html += `<div class="warn" style="margin-top:8px">${b.count} ${escapeHtml(b.label)} buildings are in the surface — ${b.mode === 'pad' ? `flat pads at the highest adjacent ground + ${b.ffe} ft` : `raised to the roof (${b.known} with data heights, others ${b.h} ft)`}. Assumed, not surveyed.</div>`;
+  }
   const items = site.dem.contributions.flatMap(ct => ct.items);
   if (items.length) {
     html += '<details><summary>Datasets &amp; collection dates</summary><ul>';
@@ -1274,6 +1353,9 @@ function makeReadme(site, v = vis()) {
     `Point grid:           ${site.pts.nx} x ${site.pts.ny} at ${site.spacingOut} ${u} spacing (${(site.pts.nx * site.pts.ny - site.pStats.missing)} points)`,
     `Elevation range:      ${site.pStats.min.toFixed(2)} to ${site.pStats.max.toFixed(2)} ${u}`,
     `Contours:             ${site.interval} ${u} interval; index (major) every ${site.interval * 5} ${u}${$('smooth').checked ? '; lightly smoothed' : ''}`,
+    ...(site.bldgSurface ? [`Buildings in surface:  ${site.bldgSurface.count} ${site.bldgSurface.label} footprints ${site.bldgSurface.mode === 'pad'
+      ? `as flat pads at the highest ground along each footprint + ${site.bldgSurface.ffe} ft (ASSUMED floor elevations)`
+      : `raised to the roof (${site.bldgSurface.known} with data heights, the rest assumed ${site.bldgSurface.h} ft)`} — not surveyed`] : []),
     '',
     'FILES',
     '-----',

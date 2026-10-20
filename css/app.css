@@ -435,3 +435,9 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .set-row input { width: 100%; }
 .set-row output { text-align: right; font-family: var(--mono); font-size: 12px; }
 #step-settings #step-data { margin-top: 14px; }
+
+/* Buildings in the surface */
+.bldg-surf { margin-top: 10px; }
+.bldg-opt { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 12.5px; color: var(--ink-2); }
+.bldg-opt label { flex: 1; margin: 0; font-weight: 400; }
+.bldg-opt input { width: 70px; }

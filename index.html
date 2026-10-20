@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.22.7">
+  <link rel="stylesheet" href="css/app.css?v=0.23.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -100,6 +100,23 @@
             <input type="checkbox" id="smooth" checked>
             <span><strong>Smooth contours</strong> — removes lidar noise from the lines; points stay raw.</span>
           </label>
+          <div class="field bldg-surf">
+            <label for="bldg-mode">Existing buildings in the surface</label>
+            <select id="bldg-mode">
+              <option value="off">Off — bare earth (ground runs under buildings)</option>
+              <option value="pad">Flat pads at an assumed floor elevation</option>
+              <option value="block">Raised to the roof (massing)</option>
+            </select>
+            <div class="bldg-opt" id="bldg-pad-row" hidden>
+              <label for="bldg-ffe">Floor = highest ground at the footprint +</label>
+              <input type="number" id="bldg-ffe" value="0.5" step="0.1" inputmode="decimal"><span>ft</span>
+            </div>
+            <div class="bldg-opt" id="bldg-h-row" hidden>
+              <label for="bldg-h">Height where the data has none</label>
+              <input type="number" id="bldg-h" value="15" step="1" min="1" inputmode="decimal"><span>ft</span>
+            </div>
+            <p class="hint" id="bldg-hint"></p>
+          </div>
           <details class="sub-details">
             <summary>Coordinate system</summary>
             <div class="field">
@@ -498,6 +515,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.22.7"></script>
+  <script type="module" src="js/app.js?v=0.23.0"></script>
 </body>
 </html>
