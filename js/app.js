@@ -1,16 +1,16 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.22.1';
-import { fetchElevation, sample } from './dem.js?v=0.22.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.22.1';
-import { Dxf } from './dxf.js?v=0.22.1';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.22.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.22.1';
-import { Flow } from './flow.js?v=0.22.1';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.22.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.22.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.22.2';
+import { fetchElevation, sample } from './dem.js?v=0.22.2';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.22.2';
+import { Dxf } from './dxf.js?v=0.22.2';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.22.2';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.22.2';
+import { Flow } from './flow.js?v=0.22.2';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.22.2';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.22.2';
 
-const VERSION = '0.22.1';
+const VERSION = '0.22.2';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -1518,7 +1518,7 @@ function baseFor(zone, toOut, pts) {
 
 // ---------- Building alignment: project-north rotation + elevation datum ----------
 // rot: bearing of the building's "up" direction, ° clockwise from grid north. datum: Z subtracted (output units).
-const align = { rot: 0, datum: null, northRef: 'grid', ...(session.get('align') || {}) };
+const align = { rot: 0, datum: null, northRef: 'grid', zeroAtOrigin: false, ...(session.get('align') || {}) };
 const saveAlign = () => session.set('align', align);
 const normDeg = a => { let x = ((a % 360) + 540) % 360 - 180; if (Object.is(x, -0) || Math.abs(x) < 1e-9) x = 0; return x; };
 /** "12.50° EAST" / "3.00° WEST" — clockwise positive. */
@@ -1540,13 +1540,21 @@ $('rot-0').addEventListener('click', () => setRot(0, 'Rotation cleared — grid 
 $('datum').addEventListener('change', e => {
   const v = e.target.value.trim();
   align.datum = v === '' || !Number.isFinite(Number(v)) ? null : Number(v);
+  align.zeroAtOrigin = false; // a typed datum replaces "ground at origin = 0"
   saveAlign(); applyOrigin();
+});
+$('origin-zero').addEventListener('change', e => {
+  align.zeroAtOrigin = e.target.checked;
+  if (!align.zeroAtOrigin) { align.datum = null; $('datum').value = ''; }
+  saveAlign(); applyOrigin();
+  if (align.zeroAtOrigin) setStatus(state.result && align.datum != null ? `Elevation ${align.datum.toFixed(2)} at the origin becomes 0 in the files.` : 'The ground at the origin will become 0 once the site is generated.');
 });
 $('datum-ground').addEventListener('click', () => {
   const site = state.result;
   const z = site && originGround(site);
   if (!Number.isFinite(z)) { setStatus('Generate first so the ground elevation at the origin is known.', true); return; }
   align.datum = Math.round(z * 100) / 100;
+  align.zeroAtOrigin = true;
   $('datum').value = align.datum.toFixed(2);
   saveAlign(); applyOrigin();
   setStatus(`Datum set to the ground at the origin: ${align.datum.toFixed(2)} ${site.units}.`);
@@ -1567,8 +1575,17 @@ function applyOrigin() {
     site.originPicked = !!state.origin && on;
     site.originNative = on ? [site.base[0] / site.toOut, site.base[1] / site.toOut] : null;
     site.rot = on ? align.rot : 0;       // rotating about true State Plane (0,0) would be meaningless
+    // "Ground at the origin = 0": follow the origin wherever it's picked.
+    if (on && align.zeroAtOrigin) {
+      const z = originGround(site);
+      if (Number.isFinite(z)) { align.datum = Math.round(z * 100) / 100; saveAlign(); $('datum').value = align.datum.toFixed(2); }
+    }
     site.datum = align.datum;
   }
+  $('origin-zero').checked = !!align.zeroAtOrigin;
+  $('origin-zero').disabled = !on;
+  document.querySelector('.origin-zero').classList.toggle('disabled', !on);
+  $('datum-sum').textContent = align.datum != null ? `— ${align.datum.toFixed(2)} = 0` : '— none';
   $('align-box').classList.toggle('disabled', !on);
   $('rot-hint').textContent = !on
     ? 'Turn on the local origin to rotate — the files rotate about it.'
@@ -1637,6 +1654,7 @@ function updateRevitCard() {
   const site = state.result;
   const rv = revitValues(site);
   $('revit-copy').hidden = !rv;
+  $('revit-sum').textContent = rv ? `— elev. ${fmt(rv.elev, 2)}, ${rv.angText}` : '';
   if (!rv) {
     body.innerHTML = `<p class="hint">${site ? 'Turn on <strong>Use a local origin</strong> (and pick it on a building corner) to get the values for Revit.' : 'Generate to see the values.'}</p>`;
     return;

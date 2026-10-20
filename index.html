@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.22.1">
+  <link rel="stylesheet" href="css/app.css?v=0.22.2">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -127,6 +127,10 @@
             <button id="reset-origin" class="btn btn-quiet" type="button" hidden>Use SW corner</button>
           </div>
           <p class="hint" id="origin-hint">Origin: south-west corner of the site, rounded to 100.</p>
+          <label class="check origin-zero">
+            <input type="checkbox" id="origin-zero">
+            <span>Also make the ground at the origin elevation <strong>0</strong> (Level 1)</span>
+          </label>
           <div class="align-box" id="align-box">
             <div class="field">
               <label for="rot-deg">Project north <span class="sub">° clockwise from grid north</span></label>
@@ -138,19 +142,23 @@
               </div>
               <p class="hint" id="rot-hint"></p>
             </div>
-            <div class="field">
-              <label for="datum">Elevation datum <span class="sub">subtracted from Z</span></label>
-              <div class="align-row">
-                <input type="number" id="datum" step="0.01" placeholder="none" inputmode="decimal">
-                <button id="datum-ground" class="btn btn-quiet" type="button" title="Use the ground elevation at the origin">Ground at origin</button>
+            <details class="sub-details" id="datum-box">
+              <summary>Elevation datum <span class="sub" id="datum-sum"></span></summary>
+              <div class="field">
+                <label for="datum" class="sr-only">Elevation datum</label>
+                <div class="align-row">
+                  <input type="number" id="datum" step="0.01" placeholder="none" inputmode="decimal">
+                  <button id="datum-ground" class="btn btn-quiet" type="button" title="Use the ground elevation at the origin">Ground at origin</button>
+                </div>
+                <p class="hint" id="datum-hint"></p>
               </div>
-              <p class="hint" id="datum-hint"></p>
-            </div>
+            </details>
           </div>
-          <div class="revit-card" id="revit-card">
-            <div class="rc-head"><span>Revit coordinates</span><button type="button" class="btn btn-quiet btn-xs" id="revit-copy">Copy</button></div>
+          <details class="sub-details revit-card" id="revit-card">
+            <summary>Revit coordinates <span class="sub" id="revit-sum"></span></summary>
+            <div class="rc-head"><span>For Manage › Coordinates › Specify Coordinates at Point</span><button type="button" class="btn btn-quiet btn-xs" id="revit-copy">Copy</button></div>
             <div id="revit-card-body"></div>
-          </div>
+          </details>
         </div>
       </details>
 
@@ -484,6 +492,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.22.1"></script>
+  <script type="module" src="js/app.js?v=0.22.2"></script>
 </body>
 </html>

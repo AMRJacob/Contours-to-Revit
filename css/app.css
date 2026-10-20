@@ -200,7 +200,14 @@ input[type="search"]:focus, select:focus { outline: 2px solid var(--accent); out
 .btn-xs { padding: 3px 9px; font-size: 11.5px; }
 .pn-icon { pointer-events: none; }
 
-.revit-card { margin-top: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); padding: 10px 12px 12px; }
+.revit-card { margin-top: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); padding: 6px 12px; }
+.revit-card[open] { padding-bottom: 12px; }
+.revit-card > summary { text-transform: uppercase; letter-spacing: .06em; font-size: 12px; }
+.rc-head span { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.origin-zero { margin: 6px 0 0 24px; }
+.origin-zero.disabled { opacity: .5; pointer-events: none; }
+#datum-box { margin-top: 4px; }
+.sub-details > summary .sub { font-weight: 400; color: var(--ink-3, #8a8f93); }
 .rc-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-2); margin-bottom: 6px; }
 .rc-ref { margin: 0 0 8px; font-size: 12.5px; color: var(--ink-2); }
 .rc-vals { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin: 0 0 10px; }
