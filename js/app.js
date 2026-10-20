@@ -1,16 +1,16 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.22.3';
-import { fetchElevation, sample } from './dem.js?v=0.22.3';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.22.3';
-import { Dxf } from './dxf.js?v=0.22.3';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.22.3';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.22.3';
-import { Flow } from './flow.js?v=0.22.3';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.22.3';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.22.3';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.22.4';
+import { fetchElevation, sample } from './dem.js?v=0.22.4';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.22.4';
+import { Dxf } from './dxf.js?v=0.22.4';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.22.4';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.22.4';
+import { Flow } from './flow.js?v=0.22.4';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.22.4';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.22.4';
 
-const VERSION = '0.22.3';
+const VERSION = '0.22.4';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -800,8 +800,29 @@ function updateLayerCounts(site) {
     labels: 'preview · PNG · DXF',
     imageFrame: 'DXF only',
   };
-  document.querySelectorAll('.layers-panel .lp-row').forEach(row => { row.querySelector('.lp-count').textContent = counts[row.dataset.key]; });
+  // New site: turn on the most detailed building source that has footprints here (Microsoft, then OSM, then
+  // FEMA/ORNL), the others off. A project being opened keeps the layers it was saved with.
+  if (site && c && layerDefaultsFor !== site) {
+    layerDefaultsFor = site;
+    if (state.keepLayers) state.keepLayers = false;
+    else {
+      const order = ['bldgMs', 'bldgOsm', 'buildings'];
+      const best = order.find(k => /^\d+$/.test(counts[k]) && Number(counts[k]) > 0);
+      if (best) {
+        for (const k of order) visibility[k] = k === best;
+        try { localStorage.setItem('c2r-layers', JSON.stringify(visibility)); } catch { /* ignore */ }
+      }
+    }
+  }
+  // Layers with nothing on this site are hidden rather than listed with a 0 (failed fetches stay visible).
+  document.querySelectorAll('.layers-panel .lp-row').forEach(row => {
+    const k = row.dataset.key;
+    row.querySelector('.lp-count').textContent = counts[k];
+    row.hidden = !!site && ['0', 'none', 'AR only'].includes(counts[k]);
+    row.querySelector('input').checked = !!visibility[k];
+  });
 }
+let layerDefaultsFor = null;
 
 function applyVisibility() {
   for (const [key, group] of Object.entries(state.mapGroups || {})) {
@@ -3383,6 +3404,7 @@ async function projOpen(id) {
     $('rot-deg').value = String(align.rot || 0); $('datum').value = align.datum != null ? String(align.datum) : '';
     if (snap.layers) {
       Object.assign(visibility, snap.layers);
+      state.keepLayers = true;
       try { localStorage.setItem('c2r-layers', JSON.stringify(visibility)); } catch { /* ignore */ }
       document.querySelectorAll('.layers-panel .lp-row').forEach(row => { row.querySelector('input').checked = !!visibility[row.dataset.key]; });
     }
