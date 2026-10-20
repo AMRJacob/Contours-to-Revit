@@ -1,16 +1,16 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.23.2';
-import { fetchElevation, sample } from './dem.js?v=0.23.2';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.23.2';
-import { Dxf } from './dxf.js?v=0.23.2';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.23.2';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.23.2';
-import { Flow } from './flow.js?v=0.23.2';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.23.2';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.23.2';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.24.0';
+import { fetchElevation, sample } from './dem.js?v=0.24.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.24.0';
+import { Dxf } from './dxf.js?v=0.24.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.24.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.24.0';
+import { Flow } from './flow.js?v=0.24.0';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.24.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.24.0';
 
-const VERSION = '0.23.2';
+const VERSION = '0.24.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -79,6 +79,47 @@ map.on(L.Draw.Event.EDITED, () => { saveRect(); onSiteChanged(true); });
 function saveRect() {
   const b = state.rect?.getBounds();
   session.set('rect', b ? [[b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]] : null);
+  session.set('poly', sitePolyLL());
+}
+/** The boundary's corners [[lat, lng], …] when it is a polygon, else null (rectangle). */
+function sitePolyLL() {
+  const l = state.rect;
+  if (!l || l instanceof L.Rectangle) return null;
+  const ring = l.getLatLngs()[0] || [];
+  return ring.length >= 3 ? ring.map(p => [p.lat, p.lng]) : null;
+}
+/** Boundary layer from saved data: polygon corners if given, else the rectangle bounds. */
+function boundaryLayer(rect, poly) {
+  const opt = drawControl.options.draw.rectangle.shapeOptions;
+  return poly?.length >= 3 ? L.polygon(poly, opt) : L.rectangle(rect, opt);
+}
+/** Polygon boundary in native zone coordinates, or null for a rectangle. */
+function siteMask(zone) {
+  const ll = sitePolyLL();
+  if (!ll) return null;
+  const p = projector(zone);
+  return ll.map(([lat, lng]) => p.fwd([lng, lat]));
+}
+const polyArea = R => { let a = 0; for (let i = 0, k = R.length - 1; i < R.length; k = i++) a += (R[k][0] + R[i][0]) * (R[k][1] - R[i][1]); return Math.abs(a) / 2; };
+/** Grid nodes outside the polygon become NaN (no point, no contour). Returns how many were masked. */
+function maskGrid(g, R) {
+  let n = 0;
+  for (let j = 0; j < g.ny; j++) {
+    const y = g.y0 + j * g.s;
+    const xs = [];
+    for (let a = 0, k = R.length - 1; a < R.length; k = a++) {
+      const [ax, ay] = R[a], [bx, by] = R[k];
+      if ((ay > y) !== (by > y)) xs.push(ax + (y - ay) / (by - ay) * (bx - ax));
+    }
+    xs.sort((p, q) => p - q);
+    let m = 0;
+    for (let i = 0; i < g.nx; i++) {
+      const x = g.x0 + i * g.s;
+      while (m < xs.length && xs[m] < x) m++;
+      if (m % 2 === 0) { const q = j * g.nx + i; if (!Number.isNaN(g.z[q])) { g.z[q] = NaN; n++; } }
+    }
+  }
+  return n;
 }
 map.on('draw:editmove draw:editresize', () => onSiteChanged(false));
 map.on(L.Draw.Event.DELETED, () => {
@@ -87,9 +128,17 @@ map.on(L.Draw.Event.DELETED, () => {
   onSiteChanged(true);
 });
 
+let polyDrawer = null;
 $('draw-btn').addEventListener('click', () => {
+  polyDrawer?.disable();
   if (!rectDrawer) rectDrawer = new L.Draw.Rectangle(map, drawControl.options.draw.rectangle);
   rectDrawer.enable();
+});
+$('draw-poly-btn').addEventListener('click', () => {
+  rectDrawer?.disable();
+  if (!polyDrawer) polyDrawer = new L.Draw.Polygon(map, { shapeOptions: drawControl.options.draw.rectangle.shapeOptions, allowIntersection: false, showArea: false, guidelineDistance: 12 });
+  polyDrawer.enable();
+  setStatus('Click each corner of the boundary; click the first point (or double-click) to finish. Esc cancels.');
 });
 
 // ---------- Search ----------
@@ -240,6 +289,11 @@ function invalidate() {
 function siteBox(zone) {
   const b = state.rect.getBounds();
   const p = projector(zone);
+  const mask = siteMask(zone);
+  if (mask) {
+    const xs = mask.map(q => q[0]), ys = mask.map(q => q[1]);
+    return { xmin: Math.min(...xs), xmax: Math.max(...xs), ymin: Math.min(...ys), ymax: Math.max(...ys) };
+  }
   // Inscribed axis-aligned box in grid coordinates, so every grid node lies inside the drawn rectangle.
   const sw = p.fwd([b.getWest(), b.getSouth()]), se = p.fwd([b.getEast(), b.getSouth()]);
   const nw = p.fwd([b.getWest(), b.getNorth()]), ne = p.fwd([b.getEast(), b.getNorth()]);
@@ -285,8 +339,10 @@ async function onSiteChanged(redetect) {
   const toOut = u === 'ft' ? 1 : 1 / zoneUnitsPerMeter(zone);
   const wOut = (box.xmax - box.xmin) * toOut, hOut = (box.ymax - box.ymin) * toOut;
   const spacing = Number($('spacing').value);
-  const nPts = (Math.floor(wOut / spacing) + 1) * (Math.floor(hOut / spacing) + 1);
-  const sqft = (box.xmax - box.xmin) * (box.ymax - box.ymin) * (zone.unit === 'ft' ? 1 : (1200 / 3937 / 0.3048) ** 2);
+  const mask = siteMask(zone);
+  const frac = mask ? Math.min(1, polyArea(mask) / ((box.xmax - box.xmin) * (box.ymax - box.ymin))) : 1;
+  const nPts = Math.round((Math.floor(wOut / spacing) + 1) * (Math.floor(hOut / spacing) + 1) * frac);
+  const sqft = (box.xmax - box.xmin) * (box.ymax - box.ymin) * frac * (zone.unit === 'ft' ? 1 : (1200 / 3937 / 0.3048) ** 2);
   const acres = sqft / SQFT_PER_ACRE;
   $('st-size').textContent = `${fmt(wOut, 0)} × ${fmt(hOut, 0)} ${u}`;
   $('sum-site').textContent = `${fmt(wOut, 0)} × ${fmt(hOut, 0)} ${u} · ${fmt(acres, acres < 10 ? 2 : 1)} ac`;
@@ -424,6 +480,10 @@ async function generate() {
     const demPxNative = Math.max(dem.pixelMeters.x, dem.pixelMeters.y) * nativePerM;
     cgrid = smooth(cgrid, Math.max(0.8, demPxNative / cNative));
   }
+  // Polygon boundary: everything outside it is dropped (no CSV points, no contours, no design surface).
+  const mask = siteMask(zone);
+  let maskedPts = 0;
+  if (mask) { maskedPts = maskGrid(pts, mask); maskGrid(cgrid, mask); pStats = gridStats(pts); }
   let cStats = gridStats(cgrid);
   let levels = contourLevels(cStats.min, cStats.max, interval);
   let contours = contourLines(cgrid, levels);
@@ -499,6 +559,7 @@ async function generate() {
       });
       burnBuildings(pts, list, targets);
       burnBuildings(cgrid, list, targets);
+      if (mask) { maskGrid(pts, mask); maskGrid(cgrid, mask); }
       pStats = gridStats(pts);
       cStats = gridStats(cgrid);
       levels = contourLevels(cStats.min, cStats.max, interval);
@@ -517,7 +578,7 @@ async function generate() {
   const now = new Date();
   const site = {
     zone, units: u, toOut, zPerM, spacingOut, interval, box, pts, pStats, grid: cgrid, stats: cStats, shade,
-    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, floodFailed, parcelsFailed, bldgFailed, widthsFailed, areasFailed, imagery, imageryCredit, imagerySrc, imageryHow, imageryNotes, bldgSurface, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
+    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, floodFailed, parcelsFailed, bldgFailed, widthsFailed, areasFailed, imagery, imageryCredit, imagerySrc, imageryHow, imageryNotes, bldgSurface, mask, maskedPts, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
     tinted: false,
   };
   site.meta = buildMeta(site);
@@ -533,7 +594,7 @@ async function generate() {
   flowKick();
   imgUi();
   siteImgDraw();
-  const missing = pStats.missing;
+  const missing = pStats.missing - maskedPts;
   setStatus(missing
     ? `Done, but ${fmt(missing, 0)} grid points had no elevation data and were left out of the CSV/DXF.`
     : `Done — ${fmt(pts.nx * pts.ny, 0)} points, ${levels.length} contour levels.`);
@@ -762,6 +823,7 @@ function showResults(site) {
   $('rs-min').textContent = `${fmt(site.pStats.min, 1)} ${u}`;
   $('rs-max').textContent = `${fmt(site.pStats.max, 1)} ${u}`;
   $('rs-points').textContent = fmt(site.pts.nx * site.pts.ny - site.pStats.missing, 0);
+  // (masked nodes outside a polygon boundary count as missing, so this is the real point count)
   const src = $('source');
   const finest = site.dem.contributions[0]?.tier;
   let html = '<div style="margin-bottom:6px;font-weight:600;color:var(--ink)">Elevation source (USGS 3DEP)</div>';
@@ -3231,7 +3293,7 @@ function dzFileData() {
   return JSON.stringify({
     app: 'contours-to-revit', kind: 'site-design', version: 2, saved: new Date().toISOString(), tool: VERSION,
     key: designKey(site.grid, site.zone.code),
-    site: { rect: [[b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]], zone: site.zone.code, units: site.units, spacing: site.spacingOut, interval: site.interval },
+    site: { rect: [[b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]], poly: sitePolyLL(), zone: site.zone.code, units: site.units, spacing: site.spacingOut, interval: site.interval },
     grid: { x0: site.grid.x0, y0: site.grid.y0, s: site.grid.s, nx: site.grid.nx, ny: site.grid.ny },
     features: des.serialize().features, brush: f32ToB64(des.brush),
   });
@@ -3273,8 +3335,9 @@ $('dz-file').addEventListener('change', async e => {
   saveSettings();
   if (s.rect) {
     drawn.clearLayers();
-    state.rect = L.rectangle(s.rect, drawControl.options.draw.rectangle.shapeOptions);
+    state.rect = boundaryLayer(s.rect, s.poly);
     drawn.addLayer(state.rect);
+    saveRect();
     saveRect();
     map.fitBounds(state.rect.getBounds(), { padding: [30, 30] });
     onSiteChanged(true);
@@ -3422,6 +3485,7 @@ function projSnapshot() {
   const des = dz.design && dz.site === site ? dz.design : null;
   return {
     rect: b ? [[b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]] : null,
+    poly: sitePolyLL(),
     settings: store.get(),
     origin: state.origin ? { ...state.origin } : null,
     align: { ...align },
@@ -3533,7 +3597,7 @@ async function projOpen(id) {
     for (const g of Object.values(state.mapGroups || {})) map.removeLayer(g);
     state.mapGroups = {};
     $('step-results').hidden = true;
-    if (snap.rect) { state.rect = L.rectangle(snap.rect, drawControl.options.draw.rectangle.shapeOptions); drawn.addLayer(state.rect); }
+    if (snap.rect) { state.rect = boundaryLayer(snap.rect, snap.poly); drawn.addLayer(state.rect); saveRect(); }
     else state.rect = null;
     saveRect();
     // Zoom to the project's extents.
@@ -3883,7 +3947,7 @@ if (isAdmin) checkDataStatus();
 state.origin = session.get('origin');
 const savedRect = session.get('rect');
 if (savedRect) {
-  const r = L.rectangle(savedRect, drawControl.options.draw.rectangle.shapeOptions);
+  const r = boundaryLayer(savedRect, session.get('poly'));
   drawn.addLayer(r);
   state.rect = r;
   onSiteChanged(true);

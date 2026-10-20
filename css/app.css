@@ -463,3 +463,6 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .step > summary .num { background: var(--tone); color: #fff; }
 .step > summary .st-title { color: color-mix(in srgb, var(--tone) 55%, var(--ink)); }
 .step.done > summary .st-title::after { content: " ✓"; color: var(--ok); font-weight: 700; }
+
+.draw-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.draw-row .btn { justify-content: center; }

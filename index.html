@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.23.2">
+  <link rel="stylesheet" href="css/app.css?v=0.24.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -62,11 +62,17 @@
             <button type="submit" class="btn btn-quiet">Find</button>
           </form>
           <ul id="search-results" class="results" hidden></ul>
-          <button id="draw-btn" class="btn btn-block" type="button">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="5" width="14" height="10" rx="1" /></svg>
-            Draw site boundary
-          </button>
-          <p class="hint" id="draw-hint">Drag a rectangle on the map over your site. Drag its corners to adjust.</p>
+          <div class="draw-row">
+            <button id="draw-btn" class="btn" type="button" title="Drag a rectangle over the site">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="5" width="14" height="10" rx="1" /></svg>
+              Rectangle
+            </button>
+            <button id="draw-poly-btn" class="btn" type="button" title="Click the corners of the site boundary">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 15 5 4l7 3 5-2-1 10z" /></svg>
+              Polygon
+            </button>
+          </div>
+          <p class="hint" id="draw-hint">Draw the site boundary: drag a <strong>rectangle</strong>, or click the corners of a <strong>polygon</strong> (click the first point to close) to leave out areas you don't need. Edit it with the pencil tool on the map.</p>
           <dl class="stats" id="site-stats" hidden>
             <div><dt>Size</dt><dd id="st-size">—</dd></div>
             <div><dt>Area</dt><dd id="st-area">—</dd></div>
@@ -515,6 +521,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.23.2"></script>
+  <script type="module" src="js/app.js?v=0.24.0"></script>
 </body>
 </html>
