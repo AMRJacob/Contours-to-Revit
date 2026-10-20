@@ -5,7 +5,7 @@
 //   'map'   — ArcGIS MapServer /export, reprojected by the server straight into the State Plane zone
 //   'image' — ArcGIS ImageServer /exportImage, same
 //   'tiles' — Web Mercator XYZ tiles, stitched and warped into the State Plane box here
-import { projector, zoneUnitsPerMeter } from './geo.js?v=0.22.0';
+import { projector, zoneUnitsPerMeter } from './geo.js?v=0.22.1';
 
 const AR = [-94.65, 32.95, -89.58, 36.55];             // Arkansas (lon/lat box)
 const PULASKI = [-92.757, 34.483, -92.024, 35.015];    // PAgis service extent
@@ -26,7 +26,7 @@ export const IMAGERY_SOURCES = [
     credit: 'Pulaski Area GIS (PAgis) 2024 orthophotography' },
   { id: 'esri', label: 'Esri World Imagery', kind: 'map',
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer',
-    tiles: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', maxZ: 22,
+    tiles: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', maxZ: 22, wgs84: true,
     credit: 'Esri World Imagery (Esri, Maxar, Earthstar Geographics)' },
   { id: 'ar2023', label: 'Arkansas statewide 2023 (9 in)', kind: 'image', bounds: AR, year: 2023,
     url: 'https://gis.arkansas.gov/arcgis/rest/services/ImageServices/IMAGERY_9IN_2023/ImageServer',
@@ -135,6 +135,12 @@ async function fetchExport(src, zone, box, W, H, { tile = 2048, onTile } = {}) {
 // ---- Web Mercator tiles ----
 const R = 6378137, HALF = Math.PI * R;
 const merc = ([lon, lat]) => [lon * HALF / 180, Math.log(Math.tan((90 + lat) * Math.PI / 360)) * R];
+/* global proj4 */
+// NAD83 -> WGS84 (ITRF) shift, about 1 m in Arkansas — the same transformation ArcGIS applies when it reprojects
+// WGS84 imagery into State Plane. Tiles of WGS84 sources are looked up at the shifted position. (Esri tiles
+// warped this way matched Esri's own State Plane export within a pixel; without it they were ~1 m off.)
+const NAD83_ITRF = '+proj=longlat +ellps=GRS80 +towgs84=-0.9956,1.9013,0.5215,0.025915,0.009426,0.011599,-0.00062 +no_defs';
+const toWgs84 = ll => proj4(NAD83_ITRF, 'EPSG:4326', ll);
 
 async function tileBitmap(url, signal) {
   const r = await fetch(url, { signal });
@@ -152,7 +158,8 @@ function isPlaceholder(bmp) {
 }
 
 async function fetchTiles(src, zone, box, W, H, { onTile } = {}) {
-  const ll = corners(zone, box), M = ll.map(merc);
+  const shift = src.wgs84 ? toWgs84 : (ll => ll);
+  const ll = corners(zone, box).map(shift), M = ll.map(merc);
   const lat = (ll[0][1] + ll[2][1]) / 2;
   const mx0 = Math.min(...M.map(m => m[0])), mx1 = Math.max(...M.map(m => m[0]));
   const my0 = Math.min(...M.map(m => m[1])), my1 = Math.max(...M.map(m => m[1]));
@@ -199,7 +206,7 @@ async function fetchTiles(src, zone, box, W, H, { onTile } = {}) {
   const g = out.getContext('2d');
   g.imageSmoothingQuality = 'high';
   const p = projector(zone), w = box.xmax - box.xmin, h = box.ymax - box.ymin;
-  const toM = (u, v) => { const [mX, mY] = merc(p.inv([box.xmin + u / W * w, box.ymax - v / H * h])); return [(mX - ox) / rz, (oy - mY) / rz]; };
+  const toM = (u, v) => { const [mX, mY] = merc(shift(p.inv([box.xmin + u / W * w, box.ymax - v / H * h]))); return [(mX - ox) / rz, (oy - mY) / rz]; };
   const N = 8;
   for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
     const u0 = i * W / N, u1 = (i + 1) * W / N, v0 = j * H / N, v1 = (j + 1) * H / N;
