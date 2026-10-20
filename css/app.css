@@ -176,7 +176,8 @@ input[type="search"]:focus, select:focus { outline: 2px solid var(--accent); out
 
 /* Map layers panel */
 .layers-panel { background: rgba(28,34,38,0.92); color: #e7e4dd; padding: 8px 10px 8px; border: 0 !important; border-radius: 8px !important; min-width: 190px; font-family: var(--sans); backdrop-filter: blur(4px); }
-.lp-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #aab3b8; margin-bottom: 4px; font-weight: 600; }
+.layers-panel[hidden] { display: none !important; }
+.lp-title { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #aab3b8; margin-bottom: 4px; font-weight: 600; }
 .lp-row { display: flex; align-items: center; gap: 7px; padding: 3px 0; cursor: pointer; font-size: 12.5px; }
 .lp-row input { margin: 0; accent-color: #e8913f; }
 .lp-row[hidden] { display: none; }
