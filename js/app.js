@@ -1,16 +1,16 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.22.2';
-import { fetchElevation, sample } from './dem.js?v=0.22.2';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.22.2';
-import { Dxf } from './dxf.js?v=0.22.2';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.22.2';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.22.2';
-import { Flow } from './flow.js?v=0.22.2';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.22.2';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.22.2';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.22.3';
+import { fetchElevation, sample } from './dem.js?v=0.22.3';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.22.3';
+import { Dxf } from './dxf.js?v=0.22.3';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.22.3';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.22.3';
+import { Flow } from './flow.js?v=0.22.3';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.22.3';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.22.3';
 
-const VERSION = '0.22.2';
+const VERSION = '0.22.3';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -1391,16 +1391,18 @@ function updateFolderUi() {
     $('folder-hint').textContent = 'Saving into a fixed project folder needs Chrome or Edge. In this browser, files go to your Downloads folder.';
     $('folder-pick').hidden = true; $('folder-off').hidden = true; $('folder-prefix-row').hidden = true;
     $('sum-export').textContent = '→ Downloads';
+    $('folder-sum').textContent = '— Chrome or Edge only';
     return;
   }
   box.classList.toggle('on', !!folder.handle);
   $('sum-export').textContent = folder.handle ? `→ ${folder.handle.name}` : '→ Downloads';
+  $('folder-sum').textContent = folder.handle ? `— ${folder.handle.name}` : '— off (Downloads)';
   $('folder-pick').textContent = folder.handle ? `📁 ${folder.handle.name}` : 'Choose folder…';
   $('folder-off').hidden = !folder.handle;
   $('folder-prefix-row').hidden = !folder.handle;
   $('folder-hint').innerHTML = folder.handle
     ? `Downloads replace <code>${escapeHtml(folderName('dxf'))}</code>, <code>${escapeHtml(folderName('jpg'))}</code> and the rest in this folder. In Revit, link them from here once; after a change, download again and click <strong>Reload</strong> in Manage Links.`
-    : 'Choose a folder and downloads are saved there with fixed names, replacing the previous version. Link them in Revit once; after a change, download again and use Reload in Manage Links.';
+    : 'Optional. Normally Chrome drops each download into Downloads, and a second download becomes “site (1).dxf”. Choose your project folder here and every download is written there under the same name, replacing the old one — so you link it in Revit once and just click Reload in Manage Links after changes. Chrome asks permission once per folder.';
 }
 
 $('folder-pick').addEventListener('click', async () => {
@@ -1586,6 +1588,7 @@ function applyOrigin() {
   $('origin-zero').disabled = !on;
   document.querySelector('.origin-zero').classList.toggle('disabled', !on);
   $('datum-sum').textContent = align.datum != null ? `— ${align.datum.toFixed(2)} = 0` : '— none';
+  $('pn-sum').textContent = !on ? '— needs a local origin' : align.rot ? `— ${bearingText(align.rot).toLowerCase()} of grid north` : '— grid north up';
   $('align-box').classList.toggle('disabled', !on);
   $('rot-hint').textContent = !on
     ? 'Turn on the local origin to rotate — the files rotate about it.'

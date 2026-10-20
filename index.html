@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.22.2">
+  <link rel="stylesheet" href="css/app.css?v=0.22.3">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -131,18 +131,22 @@
             <input type="checkbox" id="origin-zero">
             <span>Also make the ground at the origin elevation <strong>0</strong> (Level 1)</span>
           </label>
+          <div class="menu-stack">
           <div class="align-box" id="align-box">
-            <div class="field">
-              <label for="rot-deg">Project north <span class="sub">° clockwise from grid north</span></label>
-              <div class="align-row">
-                <input type="number" id="rot-deg" step="0.01" value="0" inputmode="decimal">
-                <button id="pick-dir" class="btn" type="button" title="Click a second point along the direction that should point up in Revit">Pick direction</button>
-                <button id="rot-90" class="btn btn-quiet" type="button" title="Turn project north 90° clockwise">+90°</button>
-                <button id="rot-0" class="btn btn-quiet" type="button" title="No rotation (grid north up)">0</button>
+            <details class="sub-details menu-line" id="pn-box">
+              <summary>Specify project north <span class="sub" id="pn-sum"></span></summary>
+              <div class="field">
+                <label for="rot-deg" class="sr-only">Project north, degrees clockwise from grid north</label>
+                <div class="align-row">
+                  <input type="number" id="rot-deg" step="0.01" value="0" inputmode="decimal" title="Degrees clockwise from grid north">
+                  <button id="pick-dir" class="btn" type="button" title="Click a second point along the direction that should point up in Revit">Pick direction</button>
+                  <button id="rot-90" class="btn btn-quiet" type="button" title="Turn project north 90° clockwise">+90°</button>
+                  <button id="rot-0" class="btn btn-quiet" type="button" title="No rotation (grid north up)">0</button>
+                </div>
+                <p class="hint" id="rot-hint"></p>
               </div>
-              <p class="hint" id="rot-hint"></p>
-            </div>
-            <details class="sub-details" id="datum-box">
+            </details>
+            <details class="sub-details menu-line" id="datum-box">
               <summary>Elevation datum <span class="sub" id="datum-sum"></span></summary>
               <div class="field">
                 <label for="datum" class="sr-only">Elevation datum</label>
@@ -154,11 +158,12 @@
               </div>
             </details>
           </div>
-          <details class="sub-details revit-card" id="revit-card">
+          <details class="sub-details menu-line revit-card" id="revit-card">
             <summary>Revit coordinates <span class="sub" id="revit-sum"></span></summary>
             <div class="rc-head"><span>For Manage › Coordinates › Specify Coordinates at Point</span><button type="button" class="btn btn-quiet btn-xs" id="revit-copy">Copy</button></div>
             <div id="revit-card-body"></div>
           </details>
+          </div>
         </div>
       </details>
 
@@ -170,32 +175,20 @@
             <div><dt>Max elev.</dt><dd id="rs-max">—</dd></div>
             <div><dt>Points</dt><dd id="rs-points">—</dd></div>
           </dl>
-          <details class="sub-details">
-            <summary>Data sources</summary>
-            <div class="source" id="source"></div>
-          </details>
-          <div class="folder-box" id="folder-box">
-            <div class="folder-title">Save to</div>
-            <div class="align-row">
-              <button type="button" class="btn" id="folder-pick">Choose folder…</button>
-              <button type="button" class="btn btn-quiet" id="folder-off" hidden>Use Downloads</button>
-            </div>
-            <div class="field folder-prefix" id="folder-prefix-row" hidden>
-              <label for="folder-prefix">File name prefix</label>
-              <input type="text" id="folder-prefix" value="site" spellcheck="false">
-            </div>
-            <p class="hint" id="folder-hint"></p>
-          </div>
           <div class="downloads">
-            <button class="dl dl-all" data-out="zip"><span class="dl-name">Download all</span><span class="dl-desc">Every file below, plus the Revit coordinates</span></button>
             <div class="dl-grid">
               <button class="dl" data-out="dxf"><span class="dl-name">DXF</span><span class="dl-desc">Shown layers, one CAD file</span></button>
               <button class="dl" data-out="csv"><span class="dl-name">CSV points</span><span class="dl-desc">Toposolid from points file</span></button>
               <button class="dl" data-out="jpg"><span class="dl-name">Aerial</span><span class="dl-desc">JPG + underlay, world files</span></button>
               <button class="dl" data-out="png"><span class="dl-name">PNG map</span><span class="dl-desc">Printable, north &amp; scale</span></button>
             </div>
+            <button class="dl dl-all" data-out="zip"><span class="dl-name">Download all</span><span class="dl-desc">Every file above, plus the Revit coordinates</span></button>
             <p class="hint dl-note" id="dxf-units-note">In Revit, set <strong>Import units: Feet</strong> when linking the DXF (don't use Auto-Detect).</p>
-            <details class="sub-details">
+            <details class="sub-details menu-line">
+            <summary>Data sources</summary>
+            <div class="source" id="source"></div>
+          </details>
+            <details class="sub-details menu-line">
               <summary>Aerial options</summary>
               <div class="field aerial-res">
                 <label for="aerial-res">Resolution</label>
@@ -211,6 +204,18 @@
                 </div>
               </div>
             </details>
+          <details class="sub-details menu-line folder-box" id="folder-box">
+            <summary>Save to a project folder <span class="sub" id="folder-sum"></span></summary>
+            <div class="align-row">
+              <button type="button" class="btn" id="folder-pick">Choose folder…</button>
+              <button type="button" class="btn btn-quiet" id="folder-off" hidden>Use Downloads</button>
+            </div>
+            <div class="field folder-prefix" id="folder-prefix-row" hidden>
+              <label for="folder-prefix">File name prefix</label>
+              <input type="text" id="folder-prefix" value="site" spellcheck="false">
+            </div>
+            <p class="hint" id="folder-hint"></p>
+          </details>
             <button class="dl-link" data-out="readme">README only</button>
           </div>
         </div>
@@ -492,6 +497,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.22.2"></script>
+  <script type="module" src="js/app.js?v=0.22.3"></script>
 </body>
 </html>
