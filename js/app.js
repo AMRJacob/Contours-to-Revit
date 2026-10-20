@@ -1,16 +1,16 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.24.0';
-import { fetchElevation, sample } from './dem.js?v=0.24.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.24.0';
-import { Dxf } from './dxf.js?v=0.24.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.24.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.24.0';
-import { Flow } from './flow.js?v=0.24.0';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.24.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.24.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.24.1';
+import { fetchElevation, sample } from './dem.js?v=0.24.1';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.24.1';
+import { Dxf } from './dxf.js?v=0.24.1';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.24.1';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.24.1';
+import { Flow } from './flow.js?v=0.24.1';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.24.1';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.24.1';
 
-const VERSION = '0.24.0';
+const VERSION = '0.24.1';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -597,7 +597,7 @@ async function generate() {
   const missing = pStats.missing - maskedPts;
   setStatus(missing
     ? `Done, but ${fmt(missing, 0)} grid points had no elevation data and were left out of the CSV/DXF.`
-    : `Done — ${fmt(pts.nx * pts.ny, 0)} points, ${levels.length} contour levels.`);
+    : `Done — ${fmt(pts.nx * pts.ny - pStats.missing, 0)} points, ${levels.length} contour levels.`);
 }
 
 const tick = () => new Promise(r => setTimeout(r, 0));
@@ -2074,13 +2074,20 @@ function siteImgDraw() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, siteImgCanvas.width, siteImgCanvas.height);
   if (!site?.imagery || !visibility.siteImage) return;
+  ctx.save();
   const M = dzAffine(site), b = site.box, img = site.imagery;
+  if (site.mask) { // polygon boundary: only show the imagery inside it
+    ctx.beginPath();
+    site.mask.forEach(([x, y], i) => { const [sx, sy] = toScreen(M, x, y); ctx[i ? 'lineTo' : 'moveTo'](sx * dpr, sy * dpr); });
+    ctx.closePath(); ctx.clip();
+  }
   const sx = (b.xmax - b.xmin) / img.width, sy = (b.ymax - b.ymin) / img.height;
   // image pixel (i, j) -> native (xmin + i·sx, ymax − j·sy) -> screen
   ctx.setTransform(dpr * M.a * sx, dpr * M.b * sx, -dpr * M.c * sy, -dpr * M.d * sy,
     dpr * (M.a * b.xmin + M.c * b.ymax + M.e), dpr * (M.b * b.xmin + M.d * b.ymax + M.f));
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(img, 0, 0);
+  ctx.restore();
 }
 map.on('moveend zoomend resize viewreset', siteImgDraw);
 map.on('zoomstart', () => { siteImgCanvas.style.visibility = 'hidden'; });
