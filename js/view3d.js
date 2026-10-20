@@ -202,7 +202,7 @@ export class SiteView3D {
       this.scene.add(this.pond);
     }
     // Each particle: a bright head plus a tail through its last few positions, fading into the ground.
-    const T = 7, n = flow.n;
+    const T = 16, n = flow.n;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
     this.flowPts = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xbae6fd, size: 3, sizeAttenuation: false }));

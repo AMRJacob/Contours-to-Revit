@@ -4,6 +4,7 @@
 export class Flow {
   constructor(g, z, k = 1) {
     this.g = g; this.k = k;
+    this.speed = 1; // multiplier (Settings › Water flow speed)
     this.setSurface(z);
     this.n = 0;
     this.px = new Float32Array(0); this.py = new Float32Array(0);
@@ -55,7 +56,7 @@ export class Flow {
     this.px[p] = this.ox[p] = x0 + Math.random() * (nx - 1) * s;
     this.py[p] = this.oy[p] = y0 + Math.random() * (ny - 1) * s;
     this.age[p] = 0;
-    this.life[p] = 60 + Math.floor(Math.random() * 90);
+    this.life[p] = 220 + Math.floor(Math.random() * 260); // frames; long enough to follow a slope a good way
   }
 
   /** Advance every particle one frame. Speed grows with slope (flat ground: particles fade out). */
@@ -67,7 +68,7 @@ export class Flow {
       const vx = this._sample(this.vx, x, y), vy = this._sample(this.vy, x, y), m = this._sample(this.sl, x, y);
       if (!Number.isFinite(vx) || ++this.age[p] > this.life[p] || !(m > 0.004)) { this._spawn(p); continue; }
       const L = Math.hypot(vx, vy) || 1;
-      const sp = s * Math.min(1.1, 0.18 + m * 6);
+      const sp = s * this.speed * Math.min(0.45, 0.07 + m * 2.5);
       this.px[p] = x + vx / L * sp;
       this.py[p] = y + vy / L * sp;
     }

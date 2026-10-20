@@ -1,16 +1,16 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.22.5';
-import { fetchElevation, sample } from './dem.js?v=0.22.5';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.22.5';
-import { Dxf } from './dxf.js?v=0.22.5';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.22.5';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.22.5';
-import { Flow } from './flow.js?v=0.22.5';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.22.5';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.22.5';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.22.6';
+import { fetchElevation, sample } from './dem.js?v=0.22.6';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.22.6';
+import { Dxf } from './dxf.js?v=0.22.6';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.22.6';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.22.6';
+import { Flow } from './flow.js?v=0.22.6';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.22.6';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.22.6';
 
-const VERSION = '0.22.5';
+const VERSION = '0.22.6';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -3973,6 +3973,7 @@ function flowSync() {
   const s = flowSurface(), now = performance.now();
   if (!flow.f || flow.site !== site) {
     flow.f = new Flow(site.grid, s.z, site.toOut);
+    flow.f.speed = flowSpeed();
     flow.f.seed(Math.round(Math.max(600, Math.min(5000, site.grid.nx * site.grid.ny / 18))));
     flow.site = site; flow.z = s.z; flow.ver = s.ver; flow.t = now; flow.prop = s.prop;
     flowNote();
@@ -4028,7 +4029,7 @@ function flowFrame() {
   const M = flow.M, ctx = flowCanvas.getContext('2d');
   // Fade the previous frame so each particle leaves a short tapering streak.
   ctx.globalCompositeOperation = 'destination-out';
-  ctx.fillStyle = 'rgba(0,0,0,0.14)';
+  ctx.fillStyle = 'rgba(0,0,0,0.045)'; // slow fade = long trails
   ctx.fillRect(0, 0, W, H);
   ctx.globalCompositeOperation = 'source-over';
   f.step();
@@ -4057,5 +4058,13 @@ map.on('move zoom resize viewreset', () => { if (flow.on) { flow.M = null; flowC
 try { if (localStorage.getItem('c2r-flow')) flow.on = true; } catch { /* ignore */ }
 if (flow.on) { $('flow-toggle').setAttribute('aria-pressed', 'true'); $('flow-legend').hidden = false; $('set-flow').checked = true; }
 $('set-flow').addEventListener('change', e => flowSet(e.target.checked));
+function flowSpeed() { return Number($('flow-speed').value) || 1; }
+try { const v = parseFloat(localStorage.getItem('c2r-flowspeed')); if (v >= 0.25 && v <= 3) $('flow-speed').value = String(v); } catch { /* ignore */ }
+$('flow-speed-v').textContent = `${flowSpeed()}×`;
+$('flow-speed').addEventListener('input', e => {
+  $('flow-speed-v').textContent = `${e.target.value}×`;
+  if (flow.f) flow.f.speed = flowSpeed();
+  try { localStorage.setItem('c2r-flowspeed', e.target.value); } catch { /* ignore */ }
+});
 
 window.c2r = { state, map, makers: MAKERS, dz, get v3() { return v3; }, flow }; // for debugging in the console
