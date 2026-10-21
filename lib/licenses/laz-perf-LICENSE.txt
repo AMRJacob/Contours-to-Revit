@@ -1,0 +1,2 @@
+laz-perf 0.0.6 (lib/laz-perf/) — https://github.com/hobuinc/laz-perf
+Licensed under the Apache License, Version 2.0: https://www.apache.org/licenses/LICENSE-2.0

@@ -182,6 +182,21 @@ export class SiteView3D {
     this.scene.add(this.feat);
   }
 
+  /** Building massing: flat array of triangle corners [x, y, z, …] (native XY, output Z). */
+  setBuildings(tri) {
+    if (this.bldg) { this.scene.remove(this.bldg); this.bldg.geometry.dispose(); this.bldg.material.dispose(); this.bldg = null; }
+    if (!tri?.length) return;
+    const pos = new Float32Array(tri.length);
+    for (let i = 0; i < tri.length; i += 3) {
+      pos[i] = (tri[i] - this.cx) * this.k; pos[i + 1] = (tri[i + 2] - this.z0) * this.ex; pos[i + 2] = -(tri[i + 1] - this.cy) * this.k;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.computeVertexNormals();
+    this.bldg = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0xe7e2d8, side: THREE.DoubleSide, flatShading: true }));
+    this.scene.add(this.bldg);
+  }
+
   /** Water-flow particles: a Flow instance (native XY); updated every frame while shown. */
   setFlow(flow, sinks) {
     this.flow = flow;

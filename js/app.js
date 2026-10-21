@@ -1,17 +1,18 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.29.0';
-import { fetchElevation, sample } from './dem.js?v=0.29.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.29.0';
-import { Dxf } from './dxf.js?v=0.29.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.29.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.29.0';
-import { Flow } from './flow.js?v=0.29.0';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.29.0';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.29.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.29.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.30.0';
+import { fetchElevation, sample } from './dem.js?v=0.30.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.30.0';
+import { Dxf } from './dxf.js?v=0.30.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.30.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.30.0';
+import { Flow } from './flow.js?v=0.30.0';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.30.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.30.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.30.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.30.0';
 
-const VERSION = '0.29.0';
+const VERSION = '0.30.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -258,6 +259,7 @@ function saveSettings() {
     units: units(), spacing: $('spacing').value, interval: $('interval').value,
     localOrigin: $('local-origin').checked, smooth: $('smooth').checked,
     zone: $('zone').value, bldgMode: $('bldg-mode').value, bldgFfe: $('bldg-ffe').value, bldgH: $('bldg-h').value,
+    bldgLidar: $('bldg-lidar').checked,
   });
 }
 
@@ -273,6 +275,7 @@ function restoreSettings() {
   if (['off', 'pad', 'block'].includes(s.bldgMode)) $('bldg-mode').value = s.bldgMode;
   if (s.bldgFfe != null) $('bldg-ffe').value = s.bldgFfe;
   if (s.bldgH != null) $('bldg-h').value = s.bldgH;
+  $('bldg-lidar').checked = !!s.bldgLidar;
   bldgUi();
 }
 function bldgUi() {
@@ -289,7 +292,7 @@ document.querySelectorAll('input[name="units"]').forEach(r => r.addEventListener
 }));
 $('local-origin').addEventListener('change', () => { saveSettings(); applyOrigin(); });
 $('bldg-mode').addEventListener('change', bldgUi);
-['spacing', 'interval', 'smooth', 'bldg-mode', 'bldg-ffe', 'bldg-h'].forEach(id => $(id).addEventListener('change', () => {
+['spacing', 'interval', 'smooth', 'bldg-mode', 'bldg-ffe', 'bldg-h', 'bldg-lidar'].forEach(id => $(id).addEventListener('change', () => {
   onSiteChanged(false); saveSettings(); invalidate();
 }));
 $('zone').addEventListener('change', () => { updateZoneHint(); onSiteChanged(false); saveSettings(); invalidate(); });
@@ -415,7 +418,8 @@ function pickBuildingKey(c, failed) {
 function burnBuildings(g, list, targets) {
   list.forEach((b, n) => {
     const t = targets[n];
-    if (!Number.isFinite(t)) return;
+    const f = typeof t === 'function' ? t : null; // per-point height (lidar roof surface)
+    if (!f && !Number.isFinite(t)) return;
     const R = b.ring;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const [x, y] of R) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
@@ -432,7 +436,7 @@ function burnBuildings(g, list, targets) {
       xs.sort((p, q) => p - q);
       for (let m = 0; m + 1 < xs.length; m += 2) {
         const ia = Math.max(i0, Math.ceil((xs[m] - g.x0) / g.s)), ib = Math.min(i1, Math.floor((xs[m + 1] - g.x0) / g.s));
-        for (let i = ia; i <= ib; i++) g.z[j * g.nx + i] = t;
+        for (let i = ia; i <= ib; i++) { const v = f ? f(g.x0 + i * g.s, y) : t; if (Number.isFinite(v)) g.z[j * g.nx + i] = v; }
       }
     }
   });
@@ -558,6 +562,25 @@ async function generate() {
     await tick();
   }
 
+  // Optional: building heights and roof shapes measured in the USGS lidar point cloud.
+  let lidarInfo = null;
+  if ($('bldg-lidar').checked && context) {
+    try {
+      const lid = await loadLidar(bbox, p.fwd, msg => setStatus(msg));
+      setStatus('Fitting roofs to the lidar…');
+      await tick();
+      lidarInfo = { name: lid.name, year: lid.year, n: lid.n, mb: lid.mb, hasBuildingClass: lid.hasBuildingClass, counts: {} };
+      for (const k of ['buildings', 'bldgMs', 'bldgOsm']) {
+        const list = k === 'buildings' ? context.buildings : context[k];
+        if (list?.length) lidarInfo.counts[k] = await applyLidar(list, lid, { zAt, zPerM, nativePerM });
+      }
+    } catch (err) {
+      console.error(err);
+      lidarInfo = { error: err.message || String(err) };
+      contextNotes.push(`Lidar building heights unavailable: ${lidarInfo.error}. Buildings use their dataset heights.`);
+    }
+  }
+
   // Optional: existing buildings burned into the surface (flat pads at an assumed floor, or raised to the roof).
   let bldgSurface = null;
   const bmode = $('bldg-mode').value;
@@ -570,7 +593,7 @@ async function generate() {
       const ftOut = u === 'ft' ? 1 : 0.3048;
       const ffe = (Number($('bldg-ffe').value) || 0) * ftOut, hAss = (Number($('bldg-h').value) || 15) * ftOut;
       const targets = list.map(b => {
-        if (bmode === 'block') return b.heightKnown ? b.top : b.base + hAss;
+        if (bmode === 'block') return b.roofAt || (b.heightKnown ? b.top : b.base + hAss);
         let hi = -Infinity;
         for (const [x, y] of densify([...b.ring, b.ring[0]], nativePerM)) { const z = zAt(x, y); if (z > hi) hi = z; }
         return hi + ffe;
@@ -596,7 +619,7 @@ async function generate() {
   const now = new Date();
   const site = {
     zone, units: u, toOut, zPerM, spacingOut, interval, box, pts, pStats, grid: cgrid, stats: cStats, shade,
-    contours, context, contextNotes, roadsSource, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, floodFailed, parcelsFailed, bldgFailed, widthsFailed, areasFailed, imagery, imageryCredit, imagerySrc, imageryHow, imageryNotes, bldgSurface, mask, maskedPts, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
+    contours, context, contextNotes, roadsSource, lidar: lidarInfo, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, floodFailed, parcelsFailed, bldgFailed, widthsFailed, areasFailed, imagery, imageryCredit, imagerySrc, imageryHow, imageryNotes, bldgSurface, mask, maskedPts, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
     tinted: false,
   };
   site.meta = buildMeta(site);
@@ -872,6 +895,7 @@ function showResults(site) {
     html += `<div style="margin:10px 0 4px;font-weight:600;color:var(--ink)">Site context</div>`;
     const np = site.context.roads.length - nr;
     if (site.ctxInclude.b) html += `<div>Footprints — USA Structures: ${nb}${dates.length ? ` (imagery ${escapeHtml(dates[0].slice(0, 4))}${dates.length > 1 && dates.at(-1).slice(0, 4) !== dates[0].slice(0, 4) ? '–' + escapeHtml(dates.at(-1).slice(0, 4)) : ''})` : ''}, ${nh} with heights · Microsoft: ${(site.context.bldgMs || []).length}, ${(site.context.bldgMs || []).filter(b => b.heightKnown).length} with estimated heights · OpenStreetMap: ${(site.context.bldgOsm || []).length}, ${(site.context.bldgOsm || []).filter(b => b.heightKnown).length} with heights</div>`;
+    if (site.lidar) html += `<div>${lidarSummary(site, true)}</div>`;
     if (site.ctxInclude.r) html += `<div>${nr} road segment${nr === 1 ? '' : 's'}${np ? `, ${np} path${np === 1 ? '' : 's'}` : ''} (${site.roadsSource === 'tiger' ? 'US Census TIGER' : 'OpenStreetMap'}) — centerlines only; no source publishes pavement edges</div>`;
     if (site.ctxInclude.p) {
       const npc = site.context.parcels.length;
@@ -939,6 +963,7 @@ const LayersControl = L.Control.extend({
       projTouch();
       applyVisibility();
       siteImgDraw();
+      v3Dirty();
     }));
     return el;
   },
@@ -1259,16 +1284,27 @@ function addContours(d, site, avoid, labelsOn = true, contours = site.contours, 
   }
 }
 
+/** One line about the lidar building heights (html: escaped for the Data sources panel). */
+function lidarSummary(site, html) {
+  const L = site.lidar, e = html ? escapeHtml : t => t;
+  if (L.error) return `Lidar building heights unavailable (${e(L.error)}) — buildings use their dataset heights.`;
+  const name = { buildings: 'USA Structures', bldgMs: 'Microsoft', bldgOsm: 'OpenStreetMap' };
+  const parts = Object.entries(L.counts).map(([k, c]) => `${name[k]} ${c.used} of ${c.used + c.skipped} (${c.flat} flat, ${c.sloped} sloped)`);
+  return `Heights & roofs from USGS lidar ${e(L.name)}${L.year ? ` (flown ${L.year})` : ''}: ${parts.join(' · ') || 'no footprints'}. Others keep their dataset height.`;
+}
+
 /** Footprint outlines (closed 3D polylines at the lowest ground point) and massing (3DFACE walls + flat roof). */
 function addBuildings(d, list, otln, mass, P) {
   for (const b of list) {
     const ring = b.ring;
     d.polyline3d(otln, ring.map(([x, y]) => P(x, y, b.base)), true);
+    const tz = i => (b.ringTop ? b.ringTop[i] : b.top);
     for (let i = 0; i < ring.length; i++) {
-      const [x0, y0] = ring[i], [x1, y1] = ring[(i + 1) % ring.length];
-      d.face3d(mass, [P(x0, y0, b.base), P(x1, y1, b.base), P(x1, y1, b.top), P(x0, y0, b.top)]);
+      const i2 = (i + 1) % ring.length, [x0, y0] = ring[i], [x1, y1] = ring[i2];
+      d.face3d(mass, [P(x0, y0, b.base), P(x1, y1, b.base), P(x1, y1, tz(i2)), P(x0, y0, tz(i))]);
     }
-    for (const [i, j, k] of triangulate(ring)) d.face3d(mass, [P(...ring[i], b.top), P(...ring[j], b.top), P(...ring[k], b.top)]);
+    if (b.roof) for (const [i, j, k] of b.roof.tris) d.face3d(mass, [P(...b.roof.pts[i]), P(...b.roof.pts[j]), P(...b.roof.pts[k])]);
+    else for (const [i, j, k] of triangulate(ring)) d.face3d(mass, [P(...ring[i], b.top), P(...ring[j], b.top), P(...ring[k], b.top)]);
   }
 }
 
@@ -1500,6 +1536,9 @@ function makeReadme(site, v = vis()) {
         mh ? '                      not measured; others use 3.5 m. Flat roofs — roof shapes are not in the data.'
           : '                      Massing uses 3.5 m (one storey).');
     }
+    if (site.lidar) L_(`Building lidar:       ${lidarSummary(site, false)}`,
+      '                      Heights are measured against the lidar ground beside each footprint; roofs are a 1.5 m surface',
+      '                      fitted to the returns (small dormers, parapets and rooftop equipment are smoothed away).');
     if (v.bldgOsm) {
       const os = site.context.bldgOsm || [];
       L_(`Buildings (OSM):      ${os.length} footprints from OpenStreetMap (© OpenStreetMap contributors, ODbL; hand-mapped).`,
@@ -4107,6 +4146,28 @@ function v3Build(resetView = false) {
   });
   v3.site = site;
   v3.setFeatures(prop ? v3Features(des, site) : []);
+  v3.setBuildings(v3Buildings(site));
+}
+
+/** Massing of the building layers shown on the map, as triangles (lidar roofs where measured). */
+function v3Buildings(site) {
+  const out = [];
+  for (const src of BUILDING_SOURCES) {
+    if (!visibility[src.key]) continue;
+    const list = src.key === 'buildings' ? site.context?.buildings : site.context?.[src.key];
+    for (const b of list || []) {
+      const R = b.ring, n = R.length;
+      if (!R || n < 3) continue;
+      const tz = i => (b.ringTop ? b.ringTop[i] : b.top);
+      for (let i = 0; i < n; i++) {
+        const i2 = (i + 1) % n, [x0, y0] = R[i], [x1, y1] = R[i2];
+        out.push(x0, y0, b.base, x1, y1, b.base, x1, y1, tz(i2), x0, y0, b.base, x1, y1, tz(i2), x0, y0, tz(i));
+      }
+      if (b.roof) for (const t of b.roof.tris) for (const q of t) out.push(...b.roof.pts[q]);
+      else for (const t of triangulate(R)) for (const q of t) out.push(R[q][0], R[q][1], b.top);
+    }
+  }
+  return out;
 }
 
 /** Design features for the 3D view: walls as panels, everything else as lines draped on the proposed grade. */
