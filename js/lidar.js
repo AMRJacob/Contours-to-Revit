@@ -3,7 +3,7 @@
 // the browser with laz-perf (WASM), and turned into a roof surface per footprint. Heights are measured against the
 // lidar's own ground points next to each building, so the lidar's vertical datum never matters.
 
-import { orthogonalize, dominantAngle, prismMass, mergeMass, clipHalf, polyArea } from './massing.js?v=0.37.2';
+import { orthogonalize, dominantAngle, prismMass, mergeMass, clipHalf, polyArea } from './massing.js?v=0.37.3';
 
 const RESOURCES = 'https://raw.githubusercontent.com/hobuinc/usgs-lidar/master/boundaries/resources.geojson';
 const R_EARTH = 6378137;
@@ -383,7 +383,7 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
     const lidH = (topMax - b.base) / zPerM;
     // Only below tree height: taller results are buildings whatever the roughness or dataset says (the dataset
     // estimates undercount towers badly).
-    if (canopyRange && (reg.fit < 0.4 || (dataH && lidH > Math.max(2 * dataH, dataH + 6) && reg.fit < 0.75))) { rejected++; skipped++; continue; }
+    if (canopyRange && areaM2 < 400 && (reg.fit < 0.4 || (dataH && lidH > Math.max(2 * dataH, dataH + 6) && reg.fit < 0.75))) { rejected++; skipped++; continue; }
     const labAt = (x, y) => { const cx = Math.floor((x - x0) / cell), cy = Math.floor((y - y0) / cell); return cx >= 0 && cy >= 0 && cx < nx && cy < ny ? reg.lab[cy * nx + cx] : -1; };
     const flatZ = zOf(pct(roofH, 0.6));
     b.mass = { v, f };
@@ -677,7 +677,9 @@ function cleanBuilding(b, idx, lid, g, gDem, zPerM, m, tris) {
   const p10 = pct(hs, 0.1), p50 = pct(hs, 0.5), p80 = pct(hs, 0.8), p90 = pct(hs, 0.9);
   // Trees: below tree height, a rough roof far above the dataset height is canopy, not building.
   const dataH = b.heightKnown ? (b.top - b.base) / zPerM : null;
-  if (p90 < 35 && dataH && p90 > Math.max(2 * dataH, dataH + 6)) return 'rejected';
+  // (Only small footprints: a tree can hide a house, not a 4,000 sf+ building — and the dataset heights of
+  //  big downtown buildings are often far too low.)
+  if (areaM2 < 400 && p90 < 35 && dataH && p90 > Math.max(2 * dataH, dataH + 6)) return 'rejected';
   const zOf = h => gDem + h * zPerM;
   const triF = P => (tris ? tris(P) : []);
 
