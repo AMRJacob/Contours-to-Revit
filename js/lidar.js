@@ -171,7 +171,7 @@ const pct = (a, p) => { if (!a.length) return NaN; const s = Float64Array.from(a
 
 /**
  * Give footprints lidar heights and roof surfaces. Mutates each building that has enough lidar on it:
- *   top, heightKnown, hSrc = 'lidar', roofType ('flat' | 'sloped'), roof = { pts: [[x,y,z]], tris: [[a,b,c]] },
+ *   top, heightKnown, hSrc = 'lidar', roofType ('flat' | 'shaped' = pitched or stepped), roof = { pts: [[x,y,z]], tris: [[a,b,c]] },
  *   ringTop (roof height at each footprint corner, for the walls), roofAt(x, y).
  * Others are left as they were (their dataset height, or the assumed one). Returns counts.
  * opts: { zAt (native → output Z, the site's DEM), zPerM (m → output), nativePerM }.
@@ -181,7 +181,7 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM }) {
   const m = nativePerM;                       // native units per metre
   const idx = lid._idx ??= bucket(lid, 10 * m);
   const cellM = 1.5, cell = cellM * m;
-  let used = 0, flat = 0, sloped = 0, skipped = 0;
+  let used = 0, flat = 0, shaped = 0, skipped = 0;
   for (const b of list) {
     const R = b.ring;
     if (!R || R.length < 3) { skipped++; continue; }
@@ -253,9 +253,16 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM }) {
     const ringTop = R.map(p => zOf(isFlat ? flatH : hAt(...inward(p))));
     const mesh = R.map((p, i) => [p[0], p[1], ringTop[i]]);
     if (!isFlat) {
+      // Keep only cells where the roof bends (ridges, valleys, steps, edges of levels); planar stretches in
+      // between are rebuilt exactly by the triangles, so flat decks and straight roof slopes cost almost nothing.
+      const at = (a, c) => sm[Math.max(0, Math.min(ny - 1, c)) * nx + Math.max(0, Math.min(nx - 1, a))];
       for (let cy = 0; cy < ny; cy++) for (let cx = 0; cx < nx; cx++) {
         const x = x0 + (cx + 0.5) * cell, y = y0 + (cy + 0.5) * cell;
-        if (inRing(R, x, y)) mesh.push([x, y, zOf(sm[cy * nx + cx])]);
+        if (!inRing(R, x, y)) continue;
+        const v = sm[cy * nx + cx];
+        const lapX = Math.abs(at(cx - 1, cy) + at(cx + 1, cy) - 2 * v), lapY = Math.abs(at(cx, cy - 1) + at(cx, cy + 1) - 2 * v);
+        const lapD = Math.abs(at(cx - 1, cy - 1) + at(cx + 1, cy + 1) - 2 * v), lapE = Math.abs(at(cx - 1, cy + 1) + at(cx + 1, cy - 1) - 2 * v);
+        if (Math.max(lapX, lapY, lapD, lapE) > 0.5 || (cx % 6 === 0 && cy % 6 === 0)) mesh.push([x, y, zOf(v)]);
       }
     }
     const del = D.from(mesh.map(p => [p[0], p[1]]));
@@ -269,11 +276,11 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM }) {
     b.roof = { pts: mesh, tris };
     b.ringTop = ringTop;
     b.roofAt = isFlat ? () => zOf(flatH) : (x, y) => zOf(hAt(x, y));
-    b.roofType = isFlat ? 'flat' : 'sloped';
+    b.roofType = isFlat ? 'flat' : 'shaped';
     b.top = Math.max(...mesh.map(p => p[2]));
     b.heightKnown = true;
     b.hSrc = 'lidar';
-    used++; if (isFlat) flat++; else sloped++;
+    used++; if (isFlat) flat++; else shaped++;
   }
-  return { used, flat, sloped, skipped };
+  return { used, flat, shaped, skipped };
 }
