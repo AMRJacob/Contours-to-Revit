@@ -1,0 +1,75 @@
+name: Revit plugin
+
+# Builds the Revit 2026 add-in and its one-file installer (revit-plugin/).
+# A push that changes revit-plugin/version.txt to a new number publishes a GitHub Release
+# "revit-vX.Y.Z" with ContoursToRevit-Setup.exe, which the web app links to.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'revit-plugin/**'
+      - '.github/workflows/revit-plugin.yml'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Publish a release for the current version (if it does not exist yet)'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: revit-plugin
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Version
+        id: v
+        run: |
+          $v = (Get-Content revit-plugin/version.txt -Raw).Trim()
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Version $v"
+
+      - name: Build add-in
+        run: dotnet build revit-plugin/src/ContoursToRevit.csproj -c Release -p:Version=${{ steps.v.outputs.version }} -p:ContinuousIntegrationBuild=true
+
+      - name: List build output
+        run: Get-ChildItem -Recurse revit-plugin/src/bin/Release | Select-Object FullName, Length | Format-Table -AutoSize
+
+      - name: Build installer
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y | Out-Null }
+          & $iscc /Qp "/DAppVersion=${{ steps.v.outputs.version }}" "/DSrc=$pwd\revit-plugin\src\bin\Release\net8.0-windows" revit-plugin\installer\ContoursToRevit.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+          Copy-Item revit-plugin\out\ContoursToRevit-Setup.exe "revit-plugin\out\ContoursToRevit-Setup-${{ steps.v.outputs.version }}.exe"
+          Get-ChildItem revit-plugin\out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ContoursToRevit-Setup-${{ steps.v.outputs.version }}
+          path: revit-plugin/out/ContoursToRevit-Setup.exe
+
+      - name: Publish release (new version only)
+        if: github.event_name == 'push' || inputs.release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "revit-v${{ steps.v.outputs.version }}"
+          gh release view $tag 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) { Write-Host "$tag already exists — not publishing"; exit 0 }
+          $notes = "Contours to Revit add-in for **Revit 2026**, version ${{ steps.v.outputs.version }}.`n`nDownload **ContoursToRevit-Setup.exe**, close Revit, run it (no admin rights needed). In Revit: AMR tab › Site › Contours to Revit. The first time, Revit asks whether to load the add-in: choose *Always Load*.`n`nWindows may warn that the installer is from an unknown publisher (it isn't code-signed): More info › Run anyway."
+          gh release create $tag revit-plugin/out/ContoursToRevit-Setup.exe "revit-plugin/out/ContoursToRevit-Setup-${{ steps.v.outputs.version }}.exe" --title "Revit plugin ${{ steps.v.outputs.version }}" --notes $notes --latest

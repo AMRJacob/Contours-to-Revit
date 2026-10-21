@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>ContoursToRevit</RootNamespace>
+    <AssemblyName>ContoursToRevit</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- Plugin: copy NuGet dependencies (WebView2) to the output folder. -->
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Version>0.1.0</Version>
+    <Company>AMR Architects</Company>
+    <Product>Contours to Revit</Product>
+    <Description>Contours to Revit site tools for Revit 2026</Description>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Revit API reference assemblies (community packages; Revit supplies the real DLLs at runtime). -->
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="2026.*" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="2026.*" PrivateAssets="all" ExcludeAssets="runtime" />
+    <!-- Deliberately old: Revit 2026 loads its own (newer) WebView2 assemblies, and a lower reference binds to them. -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.1823.32" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\*.png" />
+  </ItemGroup>
+
+</Project>
