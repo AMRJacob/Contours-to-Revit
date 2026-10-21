@@ -80,22 +80,22 @@ async function readEpt(url, [x0, y0, x1, y1], onStatus) {
     }
   }
   const L = await laz();
-  const xs = [], ys = [], zs = [], cs = [];
+  const xs = [], ys = [], zs = [], cs = [], rs = [];
   let done = 0, bytes = 0;
   const one = async key => {
     const buf = await (await fetch(`${base}ept-data/${key}.laz`)).arrayBuffer();
     bytes += buf.byteLength;
-    decode(L, buf, x0, y0, x1, y1, xs, ys, zs, cs);
+    decode(L, buf, x0, y0, x1, y1, xs, ys, zs, cs, rs);
     done++;
     onStatus?.(`Reading lidar — ${done} of ${nodes.length} tiles (${(bytes / 1e6).toFixed(0)} MB)…`);
   };
   // A few downloads at a time.
   const queue = nodes.slice();
   await Promise.all(Array.from({ length: 6 }, async () => { while (queue.length) await one(queue.shift()); }));
-  return { x: Float64Array.from(xs), y: Float64Array.from(ys), z: Float32Array.from(zs), c: Uint8Array.from(cs), bytes, nodes: nodes.length };
+  return { x: Float64Array.from(xs), y: Float64Array.from(ys), z: Float32Array.from(zs), c: Uint8Array.from(cs), r: Uint8Array.from(rs), bytes, nodes: nodes.length };
 }
 
-function decode(L, buf, x0, y0, x1, y1, xs, ys, zs, cs) {
+function decode(L, buf, x0, y0, x1, y1, xs, ys, zs, cs, rs) {
   const dv = new DataView(buf);
   const sx = dv.getFloat64(131, true), sy = dv.getFloat64(139, true), sz = dv.getFloat64(147, true);
   const ox = dv.getFloat64(155, true), oy = dv.getFloat64(163, true), oz = dv.getFloat64(171, true);
@@ -115,7 +115,9 @@ function decode(L, buf, x0, y0, x1, y1, xs, ys, zs, cs) {
         if (x < x0 || x > x1 || y < y0 || y > y1) continue;
         const c = fmt >= 6 ? v.getUint8(16) : v.getUint8(15) & 31;
         if (NOISE.has(c)) continue;
-        xs.push(x); ys.push(y); zs.push(v.getInt32(8, true) * sz + oz); cs.push(c);
+        // Number of returns of this pulse (1 = a single hit, typical of roofs; several = foliage, edges).
+        const rb = v.getUint8(14), nr = fmt >= 6 ? rb >> 4 : (rb >> 3) & 7;
+        xs.push(x); ys.push(y); zs.push(v.getInt32(8, true) * sz + oz); cs.push(c); rs.push(nr);
       }
     } finally { L._free(pp); }
   } finally { lz.delete(); L._free(fp); }
@@ -149,7 +151,7 @@ export async function loadLidar(bbox, fwd, onStatus) {
     X[i] = px; Y[i] = py;
     if (pc.c[i] === BUILDING) hasB = true;
   }
-  return { name: used.name, year: flownOf(used.name), n: pc.x.length, mb: pc.bytes / 1e6, hasBuildingClass: hasB, x: X, y: Y, z: pc.z, c: pc.c };
+  return { name: used.name, year: flownOf(used.name), n: pc.x.length, mb: pc.bytes / 1e6, hasBuildingClass: hasB, x: X, y: Y, z: pc.z, c: pc.c, r: pc.r };
 }
 
 /** Points bucketed on a coarse grid (native units) for neighbourhood lookups. */
@@ -182,7 +184,7 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
   const idx = lid._idx ??= bucket(lid, 10 * m);
   const cellM = Math.max(0.25, cellFt * 0.3048), cell = cellM * m;
   const fine = cellM < 1.2;                                // finer than the lidar's point spacing: interpolate
-  let used = 0, flat = 0, shaped = 0, skipped = 0;
+  let used = 0, flat = 0, shaped = 0, skipped = 0, rejected = 0;
   for (const b of list) {
     const R = b.ring;
     if (!R || R.length < 3) { skipped++; continue; }
@@ -201,8 +203,11 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
     });
     const g = median(gl), gDem = median(gd.filter(Number.isFinite));
     if (gl.length < 5 || !Number.isFinite(gDem)) { skipped++; continue; }
-    const pts = pin.filter(i => lid.z[i] - g > 1.5);
-    if (pts.length < Math.max(6, areaM2 * 0.2)) { skipped++; continue; } // too few returns: new building, or no coverage
+    // Roofs return a pulse once; tree canopy over a roof splits it into several returns. Use single returns
+    // only (unless this lidar doesn't record return counts), so trees don't raise or reshape the roof.
+    let pts = pin.filter(i => lid.z[i] - g > 1.5);
+    if (lid.r && pts.some(i => lid.r[i] > 0)) pts = pts.filter(i => lid.r[i] === 1);
+    if (pts.length < Math.max(6, areaM2 * 0.2)) { skipped++; continue; } // too few returns: new building, under trees, or no coverage
     // Roof raster. Coarse cells: highest return per cell. Fine cells (smaller than the point spacing): a TIN
     // through the returns, sampled at each cell centre. Then a 3×3 median drops spikes, and holes are filled.
     const nx = Math.max(1, Math.ceil((x1 - x0) / cell)), ny = Math.max(1, Math.ceil((y1 - y0) / cell));
@@ -283,7 +288,8 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
     for (let cy = 0; cy < ny; cy++) for (let cx = 0; cx < nx; cx++) if (inFp(cx, cy)) roofH.push(sm[cy * nx + cx]);
     if (!roofH.length) { skipped++; continue; }
     const lo = pct(roofH, 0.1), hi = pct(roofH, 0.9);
-    const isFlat = hi - lo < 0.8 || !reg.planes.length;
+    const nPlanes = reg.planes.filter(Boolean).length;
+    const isFlat = hi - lo < 0.8 || !nPlanes;
     const v = [], f = [];                    // vertices [x, y, z] (native XY, output Z) and faces (index lists)
     const add = (x, y, z) => { v.push([x, y, z]); return v.length - 1; };
     const prism = (ring, topZ, roofTris, withBottom) => {
@@ -304,6 +310,7 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
       prism(R, R.map(() => zb), polyTris(R, D, (x, y) => inRing(R, x, y)), true);
       for (let li = 0; li < reg.planes.length; li++) {
         const pl = reg.planes[li];
+        if (!pl) continue;
         const mask = (cx, cy) => cx >= 0 && cy >= 0 && cx < nx && cy < ny && reg.lab[cy * nx + cx] === li;
         for (let ring of traceMask(mask, nx, ny)) {
           if (ring.length < 3) continue;
@@ -322,18 +329,23 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
       topMax = Math.max(topMax, zb);
     }
     if (!f.length) { skipped++; continue; }
+    // Trust checks: the roof must sit on its planes (trees and clutter don't), and a lidar height far above the
+    // building's dataset height on a rough roof is more likely canopy than building. Otherwise keep the dataset.
+    const dataH = b.heightKnown ? (b.top - b.base) / zPerM : null;   // metres
+    const lidH = (topMax - b.base) / zPerM;
+    if (reg.fit < 0.5 || (dataH && lidH > Math.max(2 * dataH, dataH + 6) && reg.fit < 0.75)) { rejected++; skipped++; continue; }
     const labAt = (x, y) => { const cx = Math.floor((x - x0) / cell), cy = Math.floor((y - y0) / cell); return cx >= 0 && cy >= 0 && cx < nx && cy < ny ? reg.lab[cy * nx + cx] : -1; };
     const flatZ = zOf(pct(roofH, 0.6));
     b.mass = { v, f };
     b.roofAt = isFlat ? () => flatZ : (x, y) => { const l = labAt(x, y), pl = reg.planes[l]; return pl ? zOf(pl[0] * (x - x0) / m + pl[1] * (y - y0) / m + pl[2]) : zOf(pct(roofH, 0.03)); };
     b.roofType = isFlat ? 'flat' : 'shaped';
-    b.roofPlanes = reg.planes.length;
+    b.roofPlanes = nPlanes;
     b.top = topMax;
     b.heightKnown = true;
     b.hSrc = 'lidar';
     used++; if (isFlat) flat++; else shaped++;
   }
-  return { used, flat, shaped, skipped };
+  return { used, flat, shaped, skipped, rejected };
 }
 
 /**
@@ -345,7 +357,8 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
 function regularize(h, nx, ny, cellM, isInside) {
   const cells = [];
   for (let cy = 0; cy < ny; cy++) for (let cx = 0; cx < nx; cx++) if (isInside(cx, cy) && Number.isFinite(h[cy * nx + cx])) cells.push(cy * nx + cx);
-  if (cells.length < 12) return { planes: [], lab: new Int16Array(nx * ny).fill(-1) };
+  if (cells.length < 12) return { planes: [], lab: new Int16Array(nx * ny).fill(-1), fit: 0 };
+  const orig = h.slice();
   const X = q => (q % nx) * cellM, Y = q => ((q / nx) | 0) * cellM;
   let seed = 12345;
   const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
@@ -382,7 +395,7 @@ function regularize(h, nx, ny, cellM, isInside) {
     const used = new Set(inl);
     rest = rest.filter(q => !used.has(q));
   }
-  if (!planes.length) return { planes, lab: new Int16Array(nx * ny).fill(-1) };
+  if (!planes.length) return { planes, lab: new Int16Array(nx * ny).fill(-1), fit: 0 };
   // Label every roof cell with its best plane.
   const lab = new Int16Array(nx * ny).fill(-1);
   for (const q of cells) {
@@ -445,11 +458,22 @@ function regularize(h, nx, ny, cellM, isInside) {
     lab2.set(next);
     if (!left) break;
   }
+  // A plane is only trusted if most of its cells really lie on it (a tree crown fits a plane loosely).
+  const tot = new Array(planes.length).fill(0), good = new Array(planes.length).fill(0);
+  for (const q of cells) {
+    const l = lab2[q]; if (l < 0) continue;
+    const p = planes[l]; tot[l]++;
+    if (Math.abs(p[0] * X(q) + p[1] * Y(q) + p[2] - orig[q]) < 0.3) good[l]++;
+  }
+  const okPlane = planes.map((_, l) => tot[l] > 0 && good[l] / tot[l] >= 0.6);
+  let fitN = 0, allN = 0;
   for (const q of cells) {
     const l = lab2[q];
-    if (l >= 0) { const p = planes[l]; h[q] = p[0] * X(q) + p[1] * Y(q) + p[2]; }
+    allN++;
+    if (l >= 0 && okPlane[l]) { const p = planes[l]; h[q] = p[0] * X(q) + p[1] * Y(q) + p[2]; if (Math.abs(h[q] - orig[q]) < 0.3) fitN++; }
+    else lab2[q] = -1;                                    // left to the base block
   }
-  return { planes, lab: lab2 };
+  return { planes: planes.map((p, l) => (okPlane[l] ? p : null)), lab: lab2, fit: allN ? fitN / allN : 0 };
 }
 
 /** Closed outlines of a cell mask, as rings of cell-corner coordinates [i, j] (holes come out as rings too). */
