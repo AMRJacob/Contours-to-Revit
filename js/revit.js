@@ -244,13 +244,24 @@ function render() {
 }
 
 function footer() {
-  return `<p class="hint rv-foot">Plugin ${esc(host?.version || '?')} · Revit ${esc(host?.revit || '?')}</p>`;
+  const cr = !!host?.compatibleRendering;
+  return `<p class="hint rv-foot">Plugin ${esc(host?.version || '?')} · Revit ${esc(host?.revit || '?')}
+    · <a href="#" data-rv="check-update">Check for updates</a>
+    · <a href="#" data-rv="rendering" title="Draw without the graphics card, in case the map or 3D view looks scrambled. Takes effect when Revit restarts.">${cr ? 'Compatible rendering: on' : 'Map looks scrambled?'}</a></p>`;
 }
 
 function updateBanner() {
-  if (!latest || !host?.version || verCmp(latest.version, host.version) <= 0) return '';
-  return `<div class="rv-banner">Plugin update ${esc(latest.version)} is available. <button type="button" class="btn btn-xs" data-rv="update">Download</button><span class="hint"> Close Revit, run it, reopen Revit.</span></div>`;
+  const u = host?.update;
+  if (renderNote) return `<div class="rv-banner">${esc(renderNote)}</div>`;
+  if (u && /checking|downloading|installing/.test(u.state)) return `<div class="rv-banner">${{ checking: 'Checking for a plugin update…', downloading: 'Downloading the plugin update…', installing: 'Installing the plugin update…' }[u.state]}</div>`;
+  if (u?.pending) return `<div class="rv-banner">Plugin ${esc(u.pending)} is installed — <strong>restart Revit</strong> to start using it.</div>`;
+  if (u?.state === 'error' && u.error) return `<div class="rv-banner rv-banner-warn">${esc(u.error)} <button type="button" class="btn btn-xs" data-rv="update">Try again</button></div>`;
+  const v = u?.latest || latest?.version;
+  if (!v || !host?.version || verCmp(v, host.version) <= 0) return '';
+  if (!u) return `<div class="rv-banner">Plugin update ${esc(v)} is available. <button type="button" class="btn btn-xs" data-rv="download">Download</button><span class="hint"> Run it, then restart Revit.</span></div>`;
+  return `<div class="rv-banner">Plugin update ${esc(v)} is available. <button type="button" class="btn btn-xs" data-rv="update">Install now</button><span class="hint"> Revit stays open; the update loads when Revit restarts.</span></div>`;
 }
+let renderNote = '';
 
 function fmtPlacement(p, site) {
   const u = p.units || site.units;
@@ -421,7 +432,21 @@ async function onClick(e) {
   const site = api.site();
   try {
     if (a === 'refresh') await refresh();
-    else if (a === 'update') call('openUrl', { url: latest.url });
+    else if (a === 'download') call('openUrl', { url: latest?.url || PLUGIN_DOWNLOAD });
+    else if (a === 'update' || a === 'check-update') {
+      if (!host?.update) { await checkUpdates(); render(); return; }       // plugin 0.1.0: no built-in updater
+      host.update = { ...host.update, state: a === 'update' ? 'downloading' : 'checking' }; render();
+      host.update = await call(a === 'update' ? 'installUpdate' : 'checkUpdate', {}, 10 * 60 * 1000);
+      if (a === 'check-update' && !host.update.available && !host.update.pending && host.update.state !== 'error') api.setStatus(`The plugin is up to date (${host.version}).`);
+      render();
+    } else if (a === 'rendering') {
+      if (host?.compatibleRendering === undefined) { api.setStatus('Update the plugin first — this option arrived in plugin 0.2.0.', true); return; }
+      const on = !host.compatibleRendering;
+      await call('setRendering', { compatible: on });
+      host.compatibleRendering = on;
+      renderNote = on ? 'Compatible rendering is on — restart Revit for it to take effect. If the map still looks wrong, turn it off again here.' : 'Compatible rendering is off — restart Revit for it to take effect.';
+      render();
+    }
     else if (a === 'goto-place') api.revealPlace();
     else if (a === 'change-place') { changing = true; render(); }
     else if (a === 'place-cancel') { changing = false; render(); }
@@ -594,6 +619,16 @@ export async function initRevit(appApi) {
   try { host = await call('hello', {}, 10000); } catch { host = null; }
   await refresh();
   checkUpdates();
+  // The plugin may finish a background update while this page is open: pick up its status now and then.
+  setInterval(async () => {
+    if (busy || document.hidden) return;
+    try {
+      const h = await call('hello', {}, 10000);
+      const changed = JSON.stringify(h?.update) !== JSON.stringify(host?.update);
+      host = { ...h, compatibleRendering: host?.compatibleRendering ?? h.compatibleRendering };
+      if (changed && !document.activeElement?.closest?.('#rv-body')) render();
+    } catch { /* ignore */ }
+  }, 60000);
 }
 
 /** app.js calls this after Generate, when the design changes, and when origin/north/datum change. */

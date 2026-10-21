@@ -46,6 +46,7 @@ namespace ContoursToRevit
             data.SetContextualHelp(new ContextualHelp(ContextualHelpType.Url, "https://amrjacob.github.io/Contours-to-Revit/"));
             panel.AddItem(data);
 
+            Updater.StartBackground();
             app.ViewActivated += OnViewActivated;
             app.ControlledApplication.DocumentClosed += OnDocumentClosed;
             return Result.Succeeded;

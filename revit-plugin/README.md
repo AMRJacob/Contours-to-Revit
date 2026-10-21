@@ -16,9 +16,22 @@ of the site + design are saved inside the .rvt, so later sends — and coworkers
 ## Install (for coworkers)
 
 Download **ContoursToRevit-Setup.exe** from the
-[latest release](https://github.com/AMRJacob/Contours-to-Revit/releases/latest), close Revit, run it.
-No admin rights; it installs for the current Windows user into
-`%AppData%\Autodesk\Revit\Addins\2026`. Uninstall from Windows Settings › Apps.
+[latest release](https://github.com/AMRJacob/Contours-to-Revit/releases/latest) and run it — Revit can stay open;
+the plugin loads the next time Revit starts. No admin rights; it installs for the current Windows user into
+`%AppData%\Autodesk\Revit\Addins\2026` (`ContoursToRevit.addin` + `ContoursToRevit\<version>\`).
+Uninstall from Windows Settings › Apps.
+
+## Updates
+
+From 0.2.0 the plugin updates itself: about 20 s after Revit starts (at most every 4 hours) it checks the GitHub
+releases, downloads a newer installer and runs it silently. Each version installs into its own folder and the
+`.addin` is pointed at it, so nothing Revit has loaded is overwritten and Revit is never closed; the new version
+loads at the next Revit start (a loaded add-in can't be swapped inside a running Revit). Older version folders are
+removed by the next install once Revit no longer has them loaded. The Send to Revit panel shows the status, has
+**Install now** / **Check for updates**, and says when a restart is needed. Turn off with `"AutoUpdate": false` in
+`%AppData%\ContoursToRevit\settings.json`. The web app itself updates live with every site deploy.
+
+**Map looks scrambled?** in the panel footer switches WebView2 to software drawing (`--disable-gpu`) after a Revit restart.
 
 - Windows may say the publisher is unknown (the installer isn't code-signed): **More info › Run anyway**.
 - Revit asks once whether to load the unsigned add-in: **Always Load**.

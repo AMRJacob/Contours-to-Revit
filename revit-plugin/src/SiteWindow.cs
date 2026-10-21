@@ -91,7 +91,10 @@ namespace ContoursToRevit
                 }
                 var data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ContoursToRevit", "WebView2");
                 Directory.CreateDirectory(data);
-                var env = await CoreWebView2Environment.CreateAsync(null, data);
+                // "Compatible rendering" (Settings) turns off GPU drawing in case a graphics driver garbles the map.
+                var opts = new CoreWebView2EnvironmentOptions();
+                if (Settings.Load().CompatibleRendering) opts.AdditionalBrowserArguments = "--disable-gpu --disable-gpu-compositing";
+                var env = await CoreWebView2Environment.CreateAsync(null, data, opts);
                 _web = new WebView2();
                 _root.Children.Add(_web);
                 await _web.EnsureCoreWebView2Async(env);
@@ -190,6 +193,8 @@ namespace ContoursToRevit
                         ["webview2"] = WebView2Assemblies.LoadedFrom,
                         ["browser"] = _web?.CoreWebView2?.Environment?.BrowserVersionString,
                         ["url"] = Url,
+                        ["compatibleRendering"] = Settings.Load().CompatibleRendering,
+                        ["update"] = Updater.Status(),
                     };
                 case "getModel":
                     return await App.Instance.Jobs.Run(app => ModelInfo.Get(app));
@@ -220,6 +225,15 @@ namespace ContoursToRevit
                     }
                 case "select":
                     return await App.Instance.Jobs.Run(app => ModelInfo.Select(app, msg));
+                case "checkUpdate":
+                    return await Updater.Check(force: true);
+                case "installUpdate":
+                    return await Updater.Install();
+                case "setRendering":
+                    {
+                        var s = Settings.Load(); s.CompatibleRendering = msg.Bool("compatible"); s.Save();
+                        return new Dictionary<string, object> { ["compatibleRendering"] = s.CompatibleRendering, ["restart"] = true };
+                    }
                 case "setUrl":
                     {
                         // Developer option: point the window at another copy of the web app (blank = default).

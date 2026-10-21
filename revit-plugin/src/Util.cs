@@ -105,6 +105,10 @@ namespace ContoursToRevit
         public double? Top { get; set; }
         public bool Maximized { get; set; }
         public string Url { get; set; }
+        public bool CompatibleRendering { get; set; }
+        /// <summary>Install new plugin versions in the background (they load the next time Revit starts).</summary>
+        public bool AutoUpdate { get; set; } = true;
+        public string LastUpdateCheck { get; set; }
 
         private static string FilePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ContoursToRevit", "settings.json");
 
