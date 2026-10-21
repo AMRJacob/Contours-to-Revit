@@ -466,3 +466,31 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 
 .draw-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .draw-row .btn { justify-content: center; }
+
+/* ---------- Send to Revit (only inside the Revit plugin) ---------- */
+#step-revit .rv-model { margin: 0 0 6px; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+#step-revit .rv-q { font-weight: 600; margin: 8px 0 6px; font-size: 13px; }
+#step-revit .rv-opt { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; margin: 0 0 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); font-size: 13px; line-height: 1.4; cursor: pointer; }
+#step-revit .rv-opt > input { margin-top: 3px; }
+#step-revit .rv-opt small, #step-revit .rv-state { display: block; color: var(--ink-3); font-size: 12px; margin-top: 3px; }
+#step-revit .rv-sub { margin: 6px 0 0; font-size: 12px; }
+#step-revit .rv-warn { color: var(--warn); font-style: normal; }
+#step-revit .rv-north { margin-top: 6px; }
+#step-revit .rv-items .check { align-items: flex-start; margin-bottom: 8px; font-size: 13px; }
+#step-revit .rv-items select { max-width: 100%; margin-top: 4px; font-size: 12px; padding: 3px 6px; }
+#step-revit .rv-inline { display: inline-flex; gap: 4px; align-items: center; color: var(--ink); }
+#step-revit .rv-folder { font: 12px/1.35 'IBM Plex Mono', monospace; word-break: break-all; margin: 2px 0 6px; }
+#step-revit .rv-banner { padding: 8px 10px; margin: 0 0 10px; border-radius: 8px; background: #e8f1fb; color: #1e3a5f; font-size: 12.5px; line-height: 1.4; }
+#step-revit .rv-banner-warn { background: #fdf0dc; color: #7a4a0e; }
+#step-revit .rv-banner .align-row { margin-top: 6px; }
+#step-revit .rv-result { margin: 10px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); font-size: 12.5px; }
+#step-revit .rv-result ul { margin: 0 0 6px; padding-left: 18px; }
+#step-revit .rv-result li.ok::marker { content: '✓  '; color: #16a34a; }
+#step-revit .rv-result li.bad { color: #b91c1c; }
+#step-revit .rv-result li.bad::marker { content: '✕  '; }
+#step-revit .rv-foot { margin-top: 10px; opacity: .75; }
+#step-revit #rv-send { margin-top: 10px; }
+@media (prefers-color-scheme: dark) {
+  #step-revit .rv-banner { background: #15283b; color: #cfe3f7; }
+  #step-revit .rv-banner-warn { background: #3a2a14; color: #f3d3a3; }
+}

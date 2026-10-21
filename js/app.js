@@ -1,16 +1,17 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.24.1';
-import { fetchElevation, sample } from './dem.js?v=0.24.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.24.1';
-import { Dxf } from './dxf.js?v=0.24.1';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.24.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.24.1';
-import { Flow } from './flow.js?v=0.24.1';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.24.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.24.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.25.0';
+import { fetchElevation, sample } from './dem.js?v=0.25.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.25.0';
+import { Dxf } from './dxf.js?v=0.25.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.25.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.25.0';
+import { Flow } from './flow.js?v=0.25.0';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.25.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.25.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.25.0';
 
-const VERSION = '0.24.1';
+const VERSION = '0.25.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -594,6 +595,7 @@ async function generate() {
   flowKick();
   imgUi();
   siteImgDraw();
+  revitSiteChanged();
   const missing = pStats.missing - maskedPts;
   setStatus(missing
     ? `Done, but ${fmt(missing, 0)} grid points had no elevation data and were left out of the CSV/DXF.`
@@ -1771,6 +1773,7 @@ function applyOrigin() {
     ? `Z in the files = elevation − ${align.datum.toFixed(2)}. That elevation becomes 0 (Level 1).`
     : 'Enter the finished floor elevation (e.g. 512.50) to make it 0 in the files, so Level 1 can stay at 0′.';
   updateRevitCard();
+  revitSiteChanged();
   drawNorthIndicator();
   $('sum-place').textContent = !on ? 'State Plane coordinates'
     : [state.origin ? 'origin picked' : 'SW corner', align.rot ? `PN ${bearingText(align.rot, 1).replace('EAST', 'E').replace('WEST', 'W')}` : '', align.datum != null ? `datum ${align.datum.toFixed(2)}` : ''].filter(Boolean).join(' · ');
@@ -2703,6 +2706,7 @@ function dzAfterChange(save = true) {
   if (save) dzSave();
   dzUpdateRaster(true);
   dzRefresh(true);
+  revitSiteChanged();
 }
 
 function dzEarthwork() {
@@ -4256,5 +4260,84 @@ $('flow-speed').addEventListener('input', e => {
   if (flow.f) flow.f.speed = flowSpeed();
   try { localStorage.setItem('c2r-flowspeed', e.target.value); } catch { /* ignore */ }
 });
+
+// ---------- Revit plugin bridge (js/revit.js): only what it needs from here ----------
+/** A site/design snapshot from a Revit model opened as a local project (one mirror project per model). */
+async function projImport(snap, name, key) {
+  if (!(await projAskSave('Then the site saved in the Revit model opens.'))) return false;
+  await projLoadList();
+  let meta = key ? PROJ.list.find(p => p.revitKey === key) : null;
+  const now = new Date().toISOString();
+  if (!meta) {
+    meta = { id: `p${Date.now().toString(36)}`, name, created: now, updated: now, place: '', features: 0, revitKey: key || null };
+    PROJ.list.unshift(meta);
+  }
+  meta.updated = now; meta.rect = snap.rect || null; meta.features = snap.summary?.features ?? 0;
+  if (snap.rect) { const c = L.latLngBounds(snap.rect).getCenter(); meta.place = fmtLatLon(c.lat, c.lng); }
+  const clean = { ...snap }; delete clean.savedAt; delete clean.app;
+  await idb.set(projDataKey(meta.id), clean).catch(() => {});
+  await projStoreList();
+  PROJ.dirty = false;
+  await projOpen(meta.id);
+  return true;
+}
+
+function originLL(site) {
+  if (!site) return null;
+  if (state.origin && $('local-origin').checked) return { ...state.origin };
+  if (!site.originNative) return null;
+  const [lon, lat] = projector(site.zone).inv(site.originNative);
+  return { lat, lon, label: 'South-west corner of the site' };
+}
+
+let revitDesignLoading = null;
+initRevit({
+  version: VERSION,
+  align,
+  site: () => state.result,
+  setStatus,
+  outXY,
+  datum: datumOf,
+  revitValues,
+  aerial: site => fetchAerialExport(site),
+  aerialExtent,
+  makeDxf: site => makeDxf(site, vis()),
+  makeNewDxf: site => makeNewDxf(site, vis()),
+  prefix: () => (folder.prefix || 'site').replace(/[\\/:*?"<>|]+/g, '-'),
+  snapshot: () => projSnapshot(),
+  openSnapshot: projImport,
+  /** The site's design when it has changes (loads the saved design for this site the first time). */
+  design: site => {
+    if (!site) return null;
+    if (dz.site !== site && !revitDesignLoading) revitDesignLoading = dzEnsure().finally(() => { revitDesignLoading = null; revitSiteChanged(); });
+    return dz.site === site && dz.design?.changed ? dz.design : null;
+  },
+  /** The local origin as a point: picked origin, else the south-west corner (null when the local origin is off). */
+  origin: site => (site && $('local-origin').checked ? originLL(site) : null),
+  /** Turn the local origin on and make it a fixed point (so it can't move when the boundary changes). */
+  fixOrigin: site => {
+    if (!$('local-origin').checked) { $('local-origin').checked = true; saveSettings(); applyOrigin(); }
+    if (!state.origin) { const o = originLL(site); if (o) { state.origin = o; session.set('origin', o); } }
+    applyOrigin();
+  },
+  setPlacement: ({ origin, rot, datum, northRef }) => {
+    if (origin) { state.origin = { lat: origin.lat, lon: origin.lon, label: origin.label || 'Origin from the Revit model' }; session.set('origin', state.origin); }
+    $('local-origin').checked = true; saveSettings();
+    align.rot = Math.round(normDeg(Number(rot) || 0) * 1e4) / 1e4;
+    align.datum = datum ?? null; align.zeroAtOrigin = false; align.northRef = northRef || 'grid';
+    saveAlign();
+    $('rot-deg').value = String(align.rot); $('datum').value = align.datum != null ? String(align.datum) : '';
+    applyOrigin();
+    projTouch();
+  },
+  toNative: (site, ll) => projector(site.zone).fwd([ll.lon, ll.lat]),
+  fromNative: (site, xy) => { const [lon, lat] = projector(site.zone).inv(xy); return { lat, lon }; },
+  distanceToSite: (site, ll) => {
+    const p = projector(site.zone), [x, y] = p.fwd([ll.lon, ll.lat]);
+    const cx = (site.box.xmin + site.box.xmax) / 2, cy = (site.box.ymin + site.box.ymax) / 2;
+    return Math.hypot(x - cx, y - cy) / (zoneUnitsPerMeter(site.zone) * 0.3048);
+  },
+  revealPlace: () => { const d = $('step-place'); d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); },
+}).catch(err => console.error('Revit bridge:', err));
 
 window.c2r = { state, map, makers: MAKERS, dz, get v3() { return v3; }, flow }; // for debugging in the console
