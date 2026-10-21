@@ -333,13 +333,17 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
     // building's dataset height on a rough roof is more likely canopy than building. Otherwise keep the dataset.
     const dataH = b.heightKnown ? (b.top - b.base) / zPerM : null;   // metres
     const lidH = (topMax - b.base) / zPerM;
-    if (reg.fit < 0.5 || (dataH && lidH > Math.max(2 * dataH, dataH + 6) && reg.fit < 0.75)) { rejected++; skipped++; continue; }
+    // Trees top out around 35 m here, so taller results are buildings whatever the roughness or dataset says
+    // (the dataset estimates undercount towers badly).
+    const canopyRange = lidH < 35;
+    if (canopyRange && (reg.fit < 0.4 || (dataH && lidH > Math.max(2 * dataH, dataH + 6) && reg.fit < 0.75))) { rejected++; skipped++; continue; }
     const labAt = (x, y) => { const cx = Math.floor((x - x0) / cell), cy = Math.floor((y - y0) / cell); return cx >= 0 && cy >= 0 && cx < nx && cy < ny ? reg.lab[cy * nx + cx] : -1; };
     const flatZ = zOf(pct(roofH, 0.6));
     b.mass = { v, f };
     b.roofAt = isFlat ? () => flatZ : (x, y) => { const l = labAt(x, y), pl = reg.planes[l]; return pl ? zOf(pl[0] * (x - x0) / m + pl[1] * (y - y0) / m + pl[2]) : zOf(pct(roofH, 0.03)); };
     b.roofType = isFlat ? 'flat' : 'shaped';
     b.roofPlanes = nPlanes;
+    b.roofFit = reg.fit;
     b.top = topMax;
     b.heightKnown = true;
     b.hSrc = 'lidar';
