@@ -1,17 +1,17 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.27.2';
-import { fetchElevation, sample } from './dem.js?v=0.27.2';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.27.2';
-import { Dxf } from './dxf.js?v=0.27.2';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.27.2';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.27.2';
-import { Flow } from './flow.js?v=0.27.2';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.27.2';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.27.2';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.27.2';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.28.0';
+import { fetchElevation, sample } from './dem.js?v=0.28.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.28.0';
+import { Dxf } from './dxf.js?v=0.28.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.28.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.28.0';
+import { Flow } from './flow.js?v=0.28.0';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.28.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.28.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.28.0';
 
-const VERSION = '0.27.2';
+const VERSION = '0.28.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -71,8 +71,14 @@ const drawControl = new L.Control.Draw({
   position: 'topleft',
   draw: { polyline: false, polygon: false, circle: false, marker: false, circlemarker: false,
     rectangle: { shapeOptions: { color: '#e8913f', weight: 2, fillOpacity: 0.08 }, showArea: false } },
-  edit: { featureGroup: drawn, remove: true },
+  edit: { featureGroup: drawn, edit: false, remove: true },
 });
+// The boundary stays editable: corner handles (rectangle) or vertex handles (polygon; drag a midpoint to add a
+// corner) are always shown on the Existing site tab. Leaflet.draw hides them while the layer is off the map
+// (Site design tab) and brings them back with it.
+drawn.on('layeradd', e => { try { e.layer.editing?.enable(); } catch { /* not editable */ } });
+drawn.on('layerremove', e => { try { e.layer.editing?.disable(); } catch { /* ignore */ } });
+drawn.on('edit', () => { saveRect(); onSiteChanged(true); if (state.result) setStatus('Boundary changed — click Generate to update the site.'); });
 map.addControl(drawControl);
 let rectDrawer = null;
 
@@ -129,7 +135,7 @@ function maskGrid(g, R) {
   }
   return n;
 }
-map.on('draw:editmove draw:editresize', () => onSiteChanged(false));
+map.on('draw:editmove draw:editresize draw:editvertex', () => onSiteChanged(false));
 map.on(L.Draw.Event.DELETED, () => {
   state.rect = drawn.getLayers()[0] || null;
   saveRect();
