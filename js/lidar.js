@@ -3,7 +3,7 @@
 // the browser with laz-perf (WASM), and turned into a roof surface per footprint. Heights are measured against the
 // lidar's own ground points next to each building, so the lidar's vertical datum never matters.
 
-import { orthogonalize, dominantAngle, prismMass, mergeMass, clipHalf, polyArea } from './massing.js?v=0.37.1';
+import { orthogonalize, dominantAngle, prismMass, mergeMass, clipHalf, polyArea } from './massing.js?v=0.37.2';
 
 const RESOURCES = 'https://raw.githubusercontent.com/hobuinc/usgs-lidar/master/boundaries/resources.geojson';
 const R_EARTH = 6378137;
@@ -703,7 +703,26 @@ function cleanBuilding(b, idx, lid, g, gDem, zPerM, m, tris) {
     .sort((a2, b2) => a2.rms - b2.rms)[0];
   let mass, roofAt, kind;
   b.roofFitInfo = { flatRms: +flatRms.toFixed(2), area: Math.round(areaM2), p10: +p10.toFixed(1), p90: +p90.toFixed(1), models: models.map(md => ({ k: md.kind + (md.axis || ''), rms: +md.rms.toFixed(2), deg: +(Math.atan(md.s) * 180 / Math.PI).toFixed(0), e: +md.e.toFixed(1) })) };
-  if (pitched && pitched.rms < 0.7 * flatRms && pitched.rms < 1.2) {
+  // Low-rise buildings (houses, small commercial): this lidar is too sparse to measure a pitch well (fitted slopes
+  // come out shallow), so take the shape from the fits but the heights from the returns: ridge = top of the roof,
+  // eave from the low returns, pitch kept between 4:12 and 12:12. From a distance that reads right.
+  let chosen = pitched && pitched.rms < 0.7 * flatRms && pitched.rms < 1.2 ? pitched : null;
+  if (!chosen && areaM2 < 600 && p90 < 15 && p90 - p10 >= 0.8 && models.length) {
+    const long = hu >= hv ? 'u' : 'v';
+    let pick = models.find(md => md.kind === 'gable' && md.axis === long) || models[0];
+    const other = models.find(md => md.kind === 'gable' && md.axis !== long), hipM = models.find(md => md.kind === 'hip');
+    if (other && other.rms < pick.rms * 0.85) pick = other;
+    if (hipM && hipM.rms <= pick.rms * 1.02) pick = hipM;
+    const half = pick.kind === 'hip' ? Math.min(hu, hv) : pick.axis === 'u' ? hv : hu;
+    const ridge = pct(hs, 0.95);
+    let sl = (ridge - pct(hs, 0.1)) / half;
+    sl = Math.min(Math.tan(45 * Math.PI / 180), Math.max(Math.tan(18.4 * Math.PI / 180), sl));
+    let eave = ridge - sl * half;
+    if (eave < 2.4) { eave = 2.4; sl = Math.max(0.05, (ridge - eave) / half); }
+    chosen = { kind: pick.kind, axis: pick.axis, e: eave, s: sl };
+  }
+  if (chosen) {
+    const pitched = chosen;
     kind = pitched.kind;
     const e = pitched.e, sl = pitched.s;
     const hF = pitched.kind === 'hip' ? (u, v) => e + sl * Math.min(hv - Math.abs(v - vm), hu - Math.abs(u - um))
