@@ -590,8 +590,8 @@ async function send() {
         const d = api.datum(site), P0 = model.pbp, r4 = v => Math.round(v * 1e4) / 1e4;
         const T = (x, y, z) => { const [X, Y] = api.outXY(site, x, y); return [r4(P0.x + X * k), r4(P0.y + Y * k), r4(P0.z + (z - d) * k)]; };
         job.masses = { phaseCreated: Number(o.phaseE) || null, buildings: list.map(({ b, src, tag }, n) => {
-          const R = b.ring, N = R.length, v = [], f = [];
-          const tz = i => (b.ringTop ? b.ringTop[i] : b.top);
+          const R = b.wall?.ring || b.ring, N = R.length, v = [], f = [];
+          const tz = i => (b.wall ? b.wall.top[i] : b.ringTop ? b.ringTop[i] : b.top);
           R.forEach(([x, y]) => v.push(...T(x, y, b.base)));
           R.forEach(([x, y], i) => v.push(...T(x, y, tz(i))));
           for (let i = 0; i < N; i++) f.push([i, (i + 1) % N, N + (i + 1) % N, N + i]);

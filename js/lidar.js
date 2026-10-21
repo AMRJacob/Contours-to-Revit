@@ -273,6 +273,9 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
       if (!left) break;
     }
     for (let q = 0; q < sm.length; q++) if (!Number.isFinite(sm[q])) sm[q] = med;
+    // Buildings are made of flat decks and flat roof planes: fit planes to the roof and snap every cell to its
+    // plane, so steps stay crisp, decks stay level and pitched faces stay straight (instead of a melted surface).
+    const planesN = regularize(sm, nx, ny, cell / m, (cx, cy) => inRing(R, x0 + (cx + 0.5) * cell, y0 + (cy + 0.5) * cell));
     const hAt = (x, y) => {
       const fx = (x - x0) / cell - 0.5, fy = (y - y0) / cell - 0.5;
       const i = Math.max(0, Math.min(nx - 1, Math.floor(fx))), j = Math.max(0, Math.min(ny - 1, Math.floor(fy)));
@@ -280,15 +283,26 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
       const tx = Math.max(0, Math.min(1, fx - i)), ty = Math.max(0, Math.min(1, fy - j));
       return (sm[j * nx + i] * (1 - tx) + sm[j * nx + i2] * tx) * (1 - ty) + (sm[j2 * nx + i] * (1 - tx) + sm[j2 * nx + i2] * tx) * ty;
     };
-    const lo = pct(vals, 0.1), hi = pct(vals, 0.9);
+    const vals2 = [...sm].filter(Number.isFinite);
+    const lo = pct(vals2, 0.1), hi = pct(vals2, 0.9);
     const isFlat = hi - lo < 0.8;
-    const flatH = pct(vals, 0.6);
+    const flatH = pct(vals2, 0.6);
+    const hNear = (x, y) => sm[Math.max(0, Math.min(ny - 1, Math.floor((y - y0) / cell))) * nx + Math.max(0, Math.min(nx - 1, Math.floor((x - x0) / cell)))];
     const zOf = h => gDem + h * zPerM;       // roof elevation in output units
     // Corner heights sampled a little inside the footprint (edges catch walls and eaves only partly).
     let cxm = 0, cym = 0; for (const [x, y] of R) { cxm += x; cym += y; } cxm /= R.length; cym /= R.length;
     const inward = ([x, y]) => { const dx = cxm - x, dy = cym - y, d = Math.hypot(dx, dy) || 1, s = Math.min(0.75 * m, d * 0.3); return [x + dx / d * s, y + dy / d * s]; };
-    const ringTop = R.map(p => zOf(isFlat ? flatH : hAt(...inward(p))));
-    const mesh = R.map((p, i) => [p[0], p[1], ringTop[i]]);
+    const ringTop = R.map(p => zOf(isFlat ? flatH : hNear(...inward(p))));
+    // Footprint edges densified (about every 2 m), in order, so the roof triangles follow the outline and the
+    // walls follow the roof edge.
+    const step = Math.max(2 * m, 2 * cell);
+    const wall = [];
+    for (let i = 0; i < R.length; i++) {
+      const [ax, ay] = R[i], [bx, by] = R[(i + 1) % R.length], k = Math.floor(Math.hypot(bx - ax, by - ay) / step);
+      for (let t = 0; t <= k; t++) wall.push([ax + (bx - ax) * t / (k + 1), ay + (by - ay) * t / (k + 1)]);
+    }
+    const wallTop = wall.map(p => zOf(isFlat ? flatH : hNear(...inward(p))));
+    const mesh = wall.map((p, i) => [p[0], p[1], wallTop[i]]);
     // Roof mesh by greedy refinement: start from the footprint corners and keep adding the roof cell the current
     // triangles miss by the most, until every cell is within TOL. Flat decks and plane roof slopes need only a few
     // points; ridges, valleys and steps get them where needed. Capped per building.
@@ -296,7 +310,7 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
     for (let cy = 0; cy < ny; cy++) for (let cx = 0; cx < nx; cx++) {
       if (inRing(R, x0 + (cx + 0.5) * cell, y0 + (cy + 0.5) * cell)) inside.push(cy * nx + cx);
     }
-    const TOL = 0.45, CAP = 1500;                      // metres (~1.5 ft); points per roof
+    const TOL = 0.2, CAP = 1500;                       // metres (~8 in; the roof is planar now); points per roof
     const cellXY = q => [x0 + ((q % nx) + 0.5) * cell, y0 + (((q / nx) | 0) + 0.5) * cell];
     const triangulateMesh = () => {
       const del = D.from(mesh.map(p => [p[0], p[1]]));
@@ -304,7 +318,10 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
       for (let t = 0; t < del.triangles.length; t += 3) {
         const a = del.triangles[t], c = del.triangles[t + 1], d = del.triangles[t + 2];
         const mx = (mesh[a][0] + mesh[c][0] + mesh[d][0]) / 3, my = (mesh[a][1] + mesh[c][1] + mesh[d][1]) / 3;
-        if (inRing(R, mx, my)) out.push([a, c, d]);
+        if (!inRing(R, mx, my)) continue;
+        // Every edge must stay inside too (no triangles bridging a notch or courtyard); test just inside each edge.
+        const inEdge = (u, w) => { const ex = (mesh[u][0] + mesh[w][0]) / 2, ey = (mesh[u][1] + mesh[w][1]) / 2; return inRing(R, ex + (mx - ex) * 0.02, ey + (my - ey) * 0.02); };
+        if (inEdge(a, c) && inEdge(c, d) && inEdge(d, a)) out.push([a, c, d]);
       }
       return out;
     };
@@ -341,6 +358,7 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
         const block = new Set();
         const gap = Math.max(1, Math.round(1.5 / cellM));
         let added = 0;
+        bad.length = Math.min(bad.length, 20000);
         for (const [, q] of bad) {
           if (added >= room) break;
           const cx = q % nx, cy = (q / nx) | 0, key = `${Math.floor(cx / (gap + 1))}:${Math.floor(cy / (gap + 1))}`;
@@ -358,6 +376,8 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
     if (!tris.length) { skipped++; continue; }
     b.roof = { pts: mesh, tris };
     b.ringTop = ringTop;
+    b.wall = { ring: wall, top: wallTop };
+    b.roofPlanes = planesN;
     b.roofAt = isFlat ? () => zOf(flatH) : (x, y) => zOf(hAt(x, y));
     b.roofType = isFlat ? 'flat' : 'shaped';
     b.top = Math.max(...mesh.map(p => p[2]));
@@ -366,4 +386,101 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
     used++; if (isFlat) flat++; else shaped++;
   }
   return { used, flat, shaped, skipped };
+}
+
+/**
+ * Snap a roof raster (metres) to planes. Sequential RANSAC finds up to 10 planes (each must carry ≥ 3 % of the
+ * roof); nearly level ones (< 4°) become exactly level at their median height. Each roof cell then takes the
+ * height of the plane it fits best (within 0.6 m; others keep their measured height), and a 3×3 majority vote
+ * cleans ragged plane borders. Mutates h. Returns the number of planes.
+ */
+function regularize(h, nx, ny, cellM, isInside) {
+  const cells = [];
+  for (let cy = 0; cy < ny; cy++) for (let cx = 0; cx < nx; cx++) if (isInside(cx, cy) && Number.isFinite(h[cy * nx + cx])) cells.push(cy * nx + cx);
+  if (cells.length < 12) return 0;
+  const X = q => (q % nx) * cellM, Y = q => ((q / nx) | 0) * cellM;
+  let seed = 12345;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const TH = 0.25, minSup = Math.max(8, Math.round(cells.length * 0.03));
+  const planes = [];
+  let rest = cells.slice();
+  for (let k = 0; k < 10 && rest.length >= minSup; k++) {
+    const sample = rest.length > 3000 ? Array.from({ length: 3000 }, () => rest[(rnd() * rest.length) | 0]) : rest;
+    let best = null, bestN = 0;
+    for (let it = 0; it < 160; it++) {
+      // Three cells near each other (planes are local), so a sample rarely straddles two roof parts.
+      const a = rest[(rnd() * rest.length) | 0], ax = X(a), ay = Y(a);
+      const near = [];
+      for (let tries = 0; tries < 60 && near.length < 2; tries++) {
+        const q = rest[(rnd() * rest.length) | 0];
+        const d = Math.hypot(X(q) - ax, Y(q) - ay);
+        if (d > 1.5 * cellM && d < 12) near.push(q);
+      }
+      if (near.length < 2) continue;
+      const [b, c] = near;
+      const p = plane3(ax, ay, h[a], X(b), Y(b), h[b], X(c), Y(c), h[c]);
+      if (!p) continue;
+      let n = 0;
+      for (const q of sample) if (Math.abs(p[0] * X(q) + p[1] * Y(q) + p[2] - h[q]) < TH) n++;
+      if (n > bestN) { bestN = n; best = p; }
+    }
+    if (!best) break;
+    let inl = rest.filter(q => Math.abs(best[0] * X(q) + best[1] * Y(q) + best[2] - h[q]) < TH);
+    if (inl.length < minSup) break;
+    let p = fitPlane(inl, X, Y, h) || best;
+    if (Math.hypot(p[0], p[1]) < 0.07) p = [0, 0, median(inl.map(q => h[q]))];
+    inl = rest.filter(q => Math.abs(p[0] * X(q) + p[1] * Y(q) + p[2] - h[q]) < TH);
+    planes.push(p);
+    const used = new Set(inl);
+    rest = rest.filter(q => !used.has(q));
+  }
+  if (!planes.length) return 0;
+  // Label every roof cell with its best plane.
+  const lab = new Int16Array(nx * ny).fill(-1);
+  for (const q of cells) {
+    let bi = -1, be = 0.6;
+    planes.forEach((p, i) => { const e = Math.abs(p[0] * X(q) + p[1] * Y(q) + p[2] - h[q]); if (e < be) { be = e; bi = i; } });
+    lab[q] = bi;
+  }
+  // Majority vote (3×3) so plane borders are straight-ish and stray cells join their neighbours.
+  const lab2 = lab.slice();
+  for (const q of cells) {
+    const cx = q % nx, cy = (q / nx) | 0, cnt = new Map();
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const a = cx + dx, c = cy + dy;
+      if (a < 0 || a >= nx || c < 0 || c >= ny) continue;
+      const l = lab[c * nx + a]; if (l < 0) continue;
+      cnt.set(l, (cnt.get(l) || 0) + 1);
+    }
+    let bl = lab[q], bc = 0;
+    for (const [l, n] of cnt) if (n > bc) { bc = n; bl = l; }
+    if (bc >= 5) lab2[q] = bl;
+  }
+  for (const q of cells) {
+    const l = lab2[q];
+    if (l >= 0) { const p = planes[l]; h[q] = p[0] * X(q) + p[1] * Y(q) + p[2]; }
+  }
+  return planes.length;
+}
+
+function plane3(x1, y1, z1, x2, y2, z2, x3, y3, z3) {
+  const det = (x2 - x1) * (y3 - y1) - (x3 - x1) * (y2 - y1);
+  if (Math.abs(det) < 1e-6) return null;
+  const a = ((z2 - z1) * (y3 - y1) - (z3 - z1) * (y2 - y1)) / det;
+  const b = ((x2 - x1) * (z3 - z1) - (x3 - x1) * (z2 - z1)) / det;
+  if (Math.hypot(a, b) > 3) return null; // steeper than ~70°: a wall or noise, not a roof
+  return [a, b, z1 - a * x1 - b * y1];
+}
+
+/** Least-squares plane z = a x + b y + c through the cells. */
+function fitPlane(qs, X, Y, h) {
+  let sx = 0, sy = 0, sz = 0, sxx = 0, sxy = 0, syy = 0, sxz = 0, syz = 0;
+  const n = qs.length;
+  for (const q of qs) { const x = X(q), y = Y(q), z = h[q]; sx += x; sy += y; sz += z; sxx += x * x; sxy += x * y; syy += y * y; sxz += x * z; syz += y * z; }
+  const mx = sx / n, my = sy / n, mz = sz / n;
+  const cxx = sxx / n - mx * mx, cxy = sxy / n - mx * my, cyy = syy / n - my * my, cxz = sxz / n - mx * mz, cyz = syz / n - my * mz;
+  const det = cxx * cyy - cxy * cxy;
+  if (Math.abs(det) < 1e-9) return null;
+  const a = (cxz * cyy - cyz * cxy) / det, b = (cyz * cxx - cxz * cxy) / det;
+  return [a, b, mz - a * mx - b * my];
 }

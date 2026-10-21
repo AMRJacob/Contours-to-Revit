@@ -1,18 +1,18 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.32.2';
-import { fetchElevation, sample } from './dem.js?v=0.32.2';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.32.2';
-import { Dxf } from './dxf.js?v=0.32.2';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.32.2';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.32.2';
-import { Flow } from './flow.js?v=0.32.2';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.32.2';
-import { loadLidar, applyLidar } from './lidar.js?v=0.32.2';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.32.2';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.32.2';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.33.0';
+import { fetchElevation, sample } from './dem.js?v=0.33.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.33.0';
+import { Dxf } from './dxf.js?v=0.33.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.33.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.33.0';
+import { Flow } from './flow.js?v=0.33.0';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.33.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.33.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.33.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.33.0';
 
-const VERSION = '0.32.2';
+const VERSION = '0.33.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -1301,9 +1301,9 @@ function addBuildings(d, list, otln, mass, P) {
   for (const b of list) {
     const ring = b.ring;
     d.polyline3d(otln, ring.map(([x, y]) => P(x, y, b.base)), true);
-    const tz = i => (b.ringTop ? b.ringTop[i] : b.top);
-    for (let i = 0; i < ring.length; i++) {
-      const i2 = (i + 1) % ring.length, [x0, y0] = ring[i], [x1, y1] = ring[i2];
+    const W = b.wall?.ring || ring, tz = i => (b.wall ? b.wall.top[i] : b.ringTop ? b.ringTop[i] : b.top);
+    for (let i = 0; i < W.length; i++) {
+      const i2 = (i + 1) % W.length, [x0, y0] = W[i], [x1, y1] = W[i2];
       d.face3d(mass, [P(x0, y0, b.base), P(x1, y1, b.base), P(x1, y1, tz(i2)), P(x0, y0, tz(i))]);
     }
     if (b.roof) for (const [i, j, k] of b.roof.tris) d.face3d(mass, [P(...b.roof.pts[i]), P(...b.roof.pts[j]), P(...b.roof.pts[k])]);
@@ -4160,9 +4160,9 @@ function v3Buildings(site) {
     if (!visibility[src.key]) continue;
     const list = src.key === 'buildings' ? site.context?.buildings : site.context?.[src.key];
     for (const b of list || []) {
-      const R = b.ring, n = R.length;
+      const R = b.wall?.ring || b.ring, n = R?.length;
       if (!R || n < 3) continue;
-      const tz = i => (b.ringTop ? b.ringTop[i] : b.top);
+      const tz = i => (b.wall ? b.wall.top[i] : b.ringTop ? b.ringTop[i] : b.top);
       for (let i = 0; i < n; i++) {
         const i2 = (i + 1) % n, [x0, y0] = R[i], [x1, y1] = R[i2];
         out.push(x0, y0, b.base, x1, y1, b.base, x1, y1, tz(i2), x0, y0, b.base, x1, y1, tz(i2), x0, y0, tz(i));
