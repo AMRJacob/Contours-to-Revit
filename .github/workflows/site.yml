@@ -38,13 +38,15 @@ jobs:
         with:
           path: _ctx
           # Manual runs ("Update data") always rebuild from a fresh download.
-          key: ctx-${{ steps.wk.outputs.key }}-${{ hashFiles('tools/build_data.py', 'tools/build_index.py', 'context-states.txt') }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'wk' }}
+          key: ctx-${{ steps.wk.outputs.key }}-${{ hashFiles('tools/build_data.py', 'tools/build_ms.py', 'tools/build_index.py', 'context-states.txt') }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'wk' }}
 
       - name: Build context tiles for each state in context-states.txt
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
           rm -rf _ctx && mkdir -p _ctx
+          # Microsoft Global ML Building Footprints (footprints + height estimates), by zoom-9 quadkey.
+          curl -sSfL -o ms-links.csv "https://minedbuildings.z5.web.core.windows.net/global-buildings/dataset-links.csv" || echo "::warning::Microsoft building index unavailable"
           for st in $(grep -v '^\s*#' context-states.txt | tr -d '\r' | awk 'NF{print $1}'); do
             echo "::group::$st"
             curl -sSfL -o "$st.osm.pbf" "https://download.geofabrik.de/north-america/us/$st-latest.osm.pbf" || { echo "::warning::No Geofabrik extract for '$st'"; echo "::endgroup::"; continue; }
@@ -52,6 +54,7 @@ jobs:
             osmium tags-filter "$st.osm.pbf" w/amenity=parking w/area:highway w/footway=sidewalk w/highway=pedestrian,footway,service,residential,unclassified -o "$st.sel.osm.pbf"
             osmium export "$st.sel.osm.pbf" -f geojsonseq --geometry-types=linestring,polygon -a id -o "$st.geojsonseq"
             python3 tools/build_data.py "$st.geojsonseq" "_ctx/$st" "${SRC_DATE:-unknown}"
+            if [ -s ms-links.csv ]; then python3 tools/build_ms.py "_ctx/$st" ms-links.csv || echo "::warning::Microsoft buildings for '$st' failed"; fi
             rm -f "$st.osm.pbf" "$st.sel.osm.pbf" "$st.geojsonseq"
             echo "::endgroup::"
           done

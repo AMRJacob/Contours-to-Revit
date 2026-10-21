@@ -572,8 +572,39 @@ export const BUILDING_SOURCES = [
 const MS_BFP = 'https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/MSBFP2/FeatureServer/0';
 const ESRI_OSM_BLDG = 'https://services6.arcgis.com/Do88DoK2xjTUCXd1/arcgis/rest/services/OSM_NA_Buildings/FeatureServer/0';
 
-/** Microsoft Building Footprints (Esri-hosted, nationwide). No heights. */
+/**
+ * Microsoft footprints with height estimates, from this site's hosted tiles (Global ML Building Footprints, built
+ * weekly for the states in context-states.txt). Null when the site isn't inside a hosted state.
+ */
+async function fetchBuildingsMsLocal([w, s, e, n]) {
+  if (typeof DecompressionStream === 'undefined') return null;
+  const idx = await hostedContextIndex();
+  const hit = (idx?.states || []).filter(st => st.n?.m && !(e < st.ext[0] || w > st.ext[2] || n < st.ext[1] || s > st.ext[3]));
+  if (!hit.length) return null;
+  const T = idx.tile, seen = new Set(), out = [];
+  const jobs = [];
+  for (const st of hit) for (let tx = Math.floor(w / T); tx <= Math.floor(e / T); tx++) for (let ty = Math.floor(s / T); ty <= Math.floor(n / T); ty++) {
+    jobs.push(gunzipJson(`${CTX_DIR}/${st.id}/m/${tx}_${ty}.bin`).catch(() => ({ b: [] })));
+  }
+  for (const t of await Promise.all(jobs)) {
+    for (const [hd, ring] of t.b || []) {
+      const key = ring.slice(0, 4).join(',') + ':' + ring.length;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const pts = dec(ring, idx.scale);
+      if (!pts.some(([x, y]) => x >= w && x <= e && y >= s && y <= n)) continue;
+      const known = hd > 0;
+      out.push({ rings: [[...pts, pts[0]]], heightM: known ? hd / 10 : DEFAULT_HEIGHT_M, heightKnown: known, use: '', address: '', imageDate: '', source: 'Microsoft' });
+    }
+  }
+  out.dataDate = hit.map(h => h.ms).filter(Boolean).join(', ');
+  return out;
+}
+
+/** Microsoft Building Footprints: hosted tiles with height estimates when available, else Esri-hosted (no heights). */
 export async function fetchBuildingsMs(bbox) {
+  const local = await fetchBuildingsMsLocal(bbox).catch(() => null);
+  if (local) return local;
   let feats;
   try { feats = await arcgisQueryAll(MS_BFP, bbox, 'OBJECTID', 2000); } catch (err) {
     throw new Error(`Microsoft footprints unavailable: ${err.message === 'Failed to fetch' ? 'no response' : err.message}`);

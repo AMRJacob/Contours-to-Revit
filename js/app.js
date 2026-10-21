@@ -1,17 +1,17 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.28.1';
-import { fetchElevation, sample } from './dem.js?v=0.28.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.28.1';
-import { Dxf } from './dxf.js?v=0.28.1';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.28.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.28.1';
-import { Flow } from './flow.js?v=0.28.1';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.28.1';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.28.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.28.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.29.0';
+import { fetchElevation, sample } from './dem.js?v=0.29.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.29.0';
+import { Dxf } from './dxf.js?v=0.29.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.29.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.29.0';
+import { Flow } from './flow.js?v=0.29.0';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.29.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.29.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.29.0';
 
-const VERSION = '0.28.1';
+const VERSION = '0.29.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -871,7 +871,7 @@ function showResults(site) {
     const dates = [...new Set(site.context.buildings.map(b => b.imageDate).filter(Boolean))].sort();
     html += `<div style="margin:10px 0 4px;font-weight:600;color:var(--ink)">Site context</div>`;
     const np = site.context.roads.length - nr;
-    if (site.ctxInclude.b) html += `<div>Footprints — USA Structures: ${nb}${dates.length ? ` (imagery ${escapeHtml(dates[0].slice(0, 4))}${dates.length > 1 && dates.at(-1).slice(0, 4) !== dates[0].slice(0, 4) ? '–' + escapeHtml(dates.at(-1).slice(0, 4)) : ''})` : ''}, ${nh} with heights · Microsoft: ${(site.context.bldgMs || []).length} (no heights) · OpenStreetMap: ${(site.context.bldgOsm || []).length}, ${(site.context.bldgOsm || []).filter(b => b.heightKnown).length} with heights</div>`;
+    if (site.ctxInclude.b) html += `<div>Footprints — USA Structures: ${nb}${dates.length ? ` (imagery ${escapeHtml(dates[0].slice(0, 4))}${dates.length > 1 && dates.at(-1).slice(0, 4) !== dates[0].slice(0, 4) ? '–' + escapeHtml(dates.at(-1).slice(0, 4)) : ''})` : ''}, ${nh} with heights · Microsoft: ${(site.context.bldgMs || []).length}, ${(site.context.bldgMs || []).filter(b => b.heightKnown).length} with estimated heights · OpenStreetMap: ${(site.context.bldgOsm || []).length}, ${(site.context.bldgOsm || []).filter(b => b.heightKnown).length} with heights</div>`;
     if (site.ctxInclude.r) html += `<div>${nr} road segment${nr === 1 ? '' : 's'}${np ? `, ${np} path${np === 1 ? '' : 's'}` : ''} (${site.roadsSource === 'tiger' ? 'US Census TIGER' : 'OpenStreetMap'}) — centerlines only; no source publishes pavement edges</div>`;
     if (site.ctxInclude.p) {
       const npc = site.context.parcels.length;
@@ -1493,8 +1493,12 @@ function makeReadme(site, v = vis()) {
     }
     if (v.bldgMs) {
       const ms = site.context.bldgMs || [];
-      L_(`Buildings (MSFT):     ${ms.length} footprints from Microsoft Building Footprints (machine-detected from imagery;`,
-        '                      Esri-hosted copy). No heights or capture dates: massing uses 3.5 m (one storey).');
+      const mh = ms.filter(b => b.heightKnown).length;
+      L_(`Buildings (MSFT):     ${ms.length} footprints from Microsoft Building Footprints (machine-detected from imagery).`,
+        mh ? `                      Heights: ${mh} of ${ms.length} are Microsoft's machine-learning estimates (Global ML Building Footprints, ODbL),`
+          : '                      Esri-hosted copy, no heights.',
+        mh ? '                      not measured; others use 3.5 m. Flat roofs — roof shapes are not in the data.'
+          : '                      Massing uses 3.5 m (one storey).');
     }
     if (v.bldgOsm) {
       const os = site.context.bldgOsm || [];
@@ -3880,7 +3884,7 @@ async function refreshHostedList() {
   const ul = $('hosted-states');
   if (!idx?.states?.length) { ul.innerHTML = '<li><span>No hosted data yet — the public OpenStreetMap servers are used everywhere.</span></li>'; return; }
   const title = id => id.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-  ul.innerHTML = idx.states.map(st => `<li><span><strong>${escapeHtml(title(st.id))}</strong> — ${fmt(st.n.p, 0)} lots, ${fmt(st.n.w, 0)} sidewalks</span><span>OSM ${escapeHtml(st.src)} · ${st.mb} MB</span></li>`).join('');
+  ul.innerHTML = idx.states.map(st => `<li><span><strong>${escapeHtml(title(st.id))}</strong> — ${fmt(st.n.p, 0)} lots, ${fmt(st.n.w, 0)} sidewalks${st.n.m ? `, ${fmt(st.n.m, 0)} Microsoft buildings (${fmt(st.n.mh, 0)} with heights)` : ''}</span><span>OSM ${escapeHtml(st.src)} · ${st.mb} MB</span></li>`).join('');
 }
 refreshHostedList();
 
