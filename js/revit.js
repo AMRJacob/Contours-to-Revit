@@ -229,7 +229,7 @@ function renderSettings() {
   const u = host?.update, pend = u?.pending, busyU = /checking|downloading|installing/.test(u?.state || '');
   const cr = !!host?.compatibleRendering;
   box.innerHTML = `<h4 class="set-h">Revit plugin</h4>
-    <p class="rv-ver">Running <strong>${esc(host?.version || '?')}</strong>${pend ? ` · <strong>${esc(pend)}</strong> installed — restart Revit to use it` : ''}</p>
+    <p class="rv-ver">Web app <strong>${esc(api.version)}</strong> · plugin <strong>${esc(host?.version || '?')}</strong>${pend ? ` · <strong>${esc(pend)}</strong> installed — restart Revit to use it` : ''}</p>
     <button type="button" class="btn btn-primary btn-block" data-rv="check-update" ${busyU ? 'disabled' : ''}>${busyU ? 'Updating…' : 'Check for updates and install'}</button>
     ${updNote ? `<p class="hint rv-upd">${esc(updNote)}</p>` : ''}
     <p class="hint">Updates also install by themselves when Revit starts. Revit can stay open; a new version loads the next time Revit starts.</p>
@@ -266,7 +266,7 @@ function render() {
 function footer() {
   const cr = !!host?.compatibleRendering;
   const pend = host?.update?.pending;
-  return `<p class="hint rv-foot">Plugin ${esc(host?.version || '?')}${pend ? ` <strong>(${esc(pend)} installed — restart Revit)</strong>` : ''} · Revit ${esc(host?.revit || '?')}
+  return `<p class="hint rv-foot">Web app ${esc(api.version)} · Plugin ${esc(host?.version || '?')}${pend ? ` <strong>(${esc(pend)} installed — restart Revit)</strong>` : ''} · Revit ${esc(host?.revit || '?')}
     · <a href="#" data-rv="settings">Plugin settings &amp; updates</a></p>`;
 }
 

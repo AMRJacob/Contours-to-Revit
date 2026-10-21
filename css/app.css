@@ -499,3 +499,4 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 #rv-settings .rv-ver { margin: 4px 0 8px; font-size: 13px; }
 #rv-settings .btn-block + .hint { margin-top: 6px; }
 #rv-settings .btn-block { margin-top: 6px; }
+.app-ver { font: 500 11px/1 var(--mono); color: var(--ink-3); vertical-align: middle; margin-left: 4px; letter-spacing: 0; }
