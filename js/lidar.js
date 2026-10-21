@@ -282,6 +282,10 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
     // plane, then build the massing as clean blocks: one prism per plane region (outline traced from the cells and
     // straightened), topped by its exact plane, standing on a base block that is the footprint itself.
     const inFp = (cx, cy) => inRing(R, x0 + (cx + 0.5) * cell, y0 + (cy + 0.5) * cell);
+    const raw = sm.slice();                  // measured roof heights before snapping to planes
+    const rawRoof = [];
+    for (let cy = 0; cy < ny; cy++) for (let cx = 0; cx < nx; cx++) if (inFp(cx, cy)) rawRoof.push(raw[cy * nx + cx]);
+    const canopyRange = pct(rawRoof, 0.9) < 35;   // trees top out around 35 m; anything taller is a building
     const reg = regularize(sm, nx, ny, cell / m, inFp);
     const zOf = h => gDem + h * zPerM;       // roof elevation in output units
     const roofH = [];
@@ -326,6 +330,41 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
           topMax = Math.max(topMax, ...tz);
         }
       }
+      // Roof areas no trusted plane covers (rooftop clutter, parts of big complexes): flat blocks at their
+      // measured height, one per connected area of at least ~6 m². Below tree height they must not rise more
+      // than 3 m above the trusted planes (that would be canopy).
+      let maxPl = -Infinity;
+      for (let q = 0; q < sm.length; q++) if (reg.lab[q] >= 0 && sm[q] > maxPl) maxPl = sm[q];
+      const seen = new Uint8Array(nx * ny), minCells = Math.max(4, Math.round(6 / ((cell / m) ** 2)));
+      for (let cy0 = 0; cy0 < ny; cy0++) for (let cx0 = 0; cx0 < nx; cx0++) {
+        const q0 = cy0 * nx + cx0;
+        if (seen[q0] || reg.lab[q0] >= 0 || !inFp(cx0, cy0)) continue;
+        const comp = [q0]; seen[q0] = 1;
+        for (let k = 0; k < comp.length; k++) {
+          const q = comp[k], cx = q % nx, cy = (q / nx) | 0;
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const a = cx + dx, c = cy + dy; if (a < 0 || a >= nx || c < 0 || c >= ny) continue;
+            const r = c * nx + a; if (seen[r] || reg.lab[r] >= 0 || !inFp(a, c)) continue;
+            seen[r] = 1; comp.push(r);
+          }
+        }
+        if (comp.length < minCells) continue;
+        const hh = median(comp.map(q => raw[q]));
+        if (canopyRange && Number.isFinite(maxPl) && hh > maxPl + 3) continue;
+        if (zOf(hh) <= zb + 0.3 * zPerM) continue;
+        const set = new Set(comp);
+        const mask = (cx, cy) => cx >= 0 && cy >= 0 && cx < nx && cy < ny && set.has(cy * nx + cx);
+        for (let ring of traceMask(mask, nx, ny)) {
+          ring = simplifyRing(ring, Math.max(0.9, 0.5 / (cell / m)));
+          if (ring.length < 3) continue;
+          const pts = ring.map(([i, j]) => [x0 + i * cell, y0 + j * cell]);
+          const tris = polyTris(pts, D, (x, y) => mask(Math.floor((x - x0) / cell), Math.floor((y - y0) / cell)));
+          if (!tris.length) continue;
+          const z = zOf(hh);
+          prism(pts, pts.map(() => z), tris);
+          topMax = Math.max(topMax, z);
+        }
+      }
       topMax = Math.max(topMax, zb);
     }
     if (!f.length) { skipped++; continue; }
@@ -333,9 +372,8 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
     // building's dataset height on a rough roof is more likely canopy than building. Otherwise keep the dataset.
     const dataH = b.heightKnown ? (b.top - b.base) / zPerM : null;   // metres
     const lidH = (topMax - b.base) / zPerM;
-    // Trees top out around 35 m here, so taller results are buildings whatever the roughness or dataset says
-    // (the dataset estimates undercount towers badly).
-    const canopyRange = lidH < 35;
+    // Only below tree height: taller results are buildings whatever the roughness or dataset says (the dataset
+    // estimates undercount towers badly).
     if (canopyRange && (reg.fit < 0.4 || (dataH && lidH > Math.max(2 * dataH, dataH + 6) && reg.fit < 0.75))) { rejected++; skipped++; continue; }
     const labAt = (x, y) => { const cx = Math.floor((x - x0) / cell), cy = Math.floor((y - y0) / cell); return cx >= 0 && cy >= 0 && cx < nx && cy < ny ? reg.lab[cy * nx + cx] : -1; };
     const flatZ = zOf(pct(roofH, 0.6));
@@ -366,10 +404,12 @@ function regularize(h, nx, ny, cellM, isInside) {
   const X = q => (q % nx) * cellM, Y = q => ((q / nx) | 0) * cellM;
   let seed = 12345;
   const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
-  const TH = 0.25, minSup = Math.max(8, Math.round(cells.length * 0.03));
+  // Big roofs (complexes, towers with podiums) get more, smaller planes.
+  const big = cells.length * cellM * cellM > 2000;
+  const TH = 0.25, minSup = Math.max(8, Math.round(cells.length * (big ? 0.012 : 0.03))), maxPlanes = big ? 24 : 10;
   const planes = [];
   let rest = cells.slice();
-  for (let k = 0; k < 10 && rest.length >= minSup; k++) {
+  for (let k = 0; k < maxPlanes && rest.length >= minSup; k++) {
     const sample = rest.length > 3000 ? Array.from({ length: 3000 }, () => rest[(rnd() * rest.length) | 0]) : rest;
     let best = null, bestN = 0;
     for (let it = 0; it < 160; it++) {
