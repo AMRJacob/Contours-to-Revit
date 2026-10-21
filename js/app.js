@@ -4299,7 +4299,12 @@ initRevit({
   outXY,
   datum: datumOf,
   revitValues,
-  aerial: site => fetchAerialExport(site),
+  /** Aerial for Revit: at most 0.5 ft/px (finer images make Revit views slow); a coarser chosen resolution is kept. */
+  aerial: async site => {
+    const prev = aerialRes;
+    if (!aerialRes || aerialRes < 0.5) aerialRes = 0.5;
+    try { return await fetchAerialExport(site); } finally { aerialRes = prev; }
+  },
   aerialExtent,
   makeDxf: site => makeDxf(site, vis()),
   makeNewDxf: site => makeNewDxf(site, vis()),

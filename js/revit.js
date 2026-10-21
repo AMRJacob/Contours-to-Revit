@@ -342,7 +342,7 @@ function defaults(site) {
     exist: true, prop: true, img: true, dxf: true, pdxf: false,
     typeId: type?.id, levelId: lvl?.id, viewId: av,
     phaseE: ph[0]?.id, phaseD: ph.length > 1 ? ph[ph.length - 1].id : '', phaseP: ph[ph.length - 1]?.id,
-    tol: TOLS[site.units][1],
+    tol: TOLS[site.units][2],
   };
 }
 
@@ -355,7 +355,7 @@ function readForm() {
     exist: c('rv-exist'), prop: c('rv-prop'), img: c('rv-img'), dxf: c('rv-dxf'), pdxf: c('rv-pdxf'),
     typeId: v('rv-type'), levelId: v('rv-level'), viewId: v('rv-view'),
     phaseE: v('rv-phE'), phaseD: v('rv-phD'), phaseP: v('rv-phP'),
-    tol: Number(v('rv-tol')) || TOLS[site.units][1],
+    tol: Number(v('rv-tol')) || TOLS[site.units][2],
   });
   saveOpts(o);
   return { ...defaults(site), ...o };
@@ -625,7 +625,7 @@ function mockHost() {
   });
   let shared = null;
   const mockShared = () => shared || { ew: 0, ns: 0, elev: 0, angle: 0 };
-  const reply = (id, ok, result, error) => setTimeout(() => listeners.forEach(f => f({ data: { type: 'reply', id, ok, result, error } })), 30);
+  const reply = (id, ok, result, error) => Promise.resolve().then(() => listeners.forEach(f => f({ data: { type: 'reply', id, ok, result, error } }))); // no timers: hidden tabs throttle them
   window.c2rMock = { jobs, elements, stored, fireDocChanged: () => listeners.forEach(f => f({ data: { type: 'event', event: 'documentChanged' } })) };
   return {
     addEventListener: (t, f) => { if (t === 'message') listeners.push(f); },
