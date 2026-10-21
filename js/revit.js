@@ -590,6 +590,11 @@ async function send() {
         const d = api.datum(site), P0 = model.pbp, r4 = v => Math.round(v * 1e4) / 1e4;
         const T = (x, y, z) => { const [X, Y] = api.outXY(site, x, y); return [r4(P0.x + X * k), r4(P0.y + Y * k), r4(P0.z + (z - d) * k)]; };
         job.masses = { phaseCreated: Number(o.phaseE) || null, buildings: list.map(({ b, src, tag }, n) => {
+          if (b.mass) {
+            const how = `lidar ${site.lidar?.year || ''}`.trim();
+            return { id: `${tag}-${n}`, name: `Existing building (${tag})`, v: b.mass.v.flatMap(p => T(...p)), f: b.mass.f, comment: `Contours to Revit — ${src}, ${how}`,
+              meta: JSON.stringify({ src: tag, h: r4((b.top - b.base) * k), how }) };
+          }
           const R = b.wall?.ring || b.ring, N = R.length, v = [], f = [];
           const tz = i => (b.wall ? b.wall.top[i] : b.ringTop ? b.ringTop[i] : b.top);
           R.forEach(([x, y]) => v.push(...T(x, y, b.base)));

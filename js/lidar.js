@@ -273,114 +273,62 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
       if (!left) break;
     }
     for (let q = 0; q < sm.length; q++) if (!Number.isFinite(sm[q])) sm[q] = med;
-    // Buildings are made of flat decks and flat roof planes: fit planes to the roof and snap every cell to its
-    // plane, so steps stay crisp, decks stay level and pitched faces stay straight (instead of a melted surface).
-    const planesN = regularize(sm, nx, ny, cell / m, (cx, cy) => inRing(R, x0 + (cx + 0.5) * cell, y0 + (cy + 0.5) * cell));
-    const hAt = (x, y) => {
-      const fx = (x - x0) / cell - 0.5, fy = (y - y0) / cell - 0.5;
-      const i = Math.max(0, Math.min(nx - 1, Math.floor(fx))), j = Math.max(0, Math.min(ny - 1, Math.floor(fy)));
-      const i2 = Math.min(nx - 1, i + 1), j2 = Math.min(ny - 1, j + 1);
-      const tx = Math.max(0, Math.min(1, fx - i)), ty = Math.max(0, Math.min(1, fy - j));
-      return (sm[j * nx + i] * (1 - tx) + sm[j * nx + i2] * tx) * (1 - ty) + (sm[j2 * nx + i] * (1 - tx) + sm[j2 * nx + i2] * tx) * ty;
-    };
-    const vals2 = [...sm].filter(Number.isFinite);
-    const lo = pct(vals2, 0.1), hi = pct(vals2, 0.9);
-    const isFlat = hi - lo < 0.8;
-    const flatH = pct(vals2, 0.6);
-    const hNear = (x, y) => sm[Math.max(0, Math.min(ny - 1, Math.floor((y - y0) / cell))) * nx + Math.max(0, Math.min(nx - 1, Math.floor((x - x0) / cell)))];
+    // Buildings are made of flat decks and flat roof planes. Fit planes to the roof, give every roof cell its
+    // plane, then build the massing as clean blocks: one prism per plane region (outline traced from the cells and
+    // straightened), topped by its exact plane, standing on a base block that is the footprint itself.
+    const inFp = (cx, cy) => inRing(R, x0 + (cx + 0.5) * cell, y0 + (cy + 0.5) * cell);
+    const reg = regularize(sm, nx, ny, cell / m, inFp);
     const zOf = h => gDem + h * zPerM;       // roof elevation in output units
-    // Corner heights sampled a little inside the footprint (edges catch walls and eaves only partly).
-    let cxm = 0, cym = 0; for (const [x, y] of R) { cxm += x; cym += y; } cxm /= R.length; cym /= R.length;
-    const inward = ([x, y]) => { const dx = cxm - x, dy = cym - y, d = Math.hypot(dx, dy) || 1, s = Math.min(0.75 * m, d * 0.3); return [x + dx / d * s, y + dy / d * s]; };
-    const ringTop = R.map(p => zOf(isFlat ? flatH : hNear(...inward(p))));
-    // Footprint edges densified (about every 2 m), in order, so the roof triangles follow the outline and the
-    // walls follow the roof edge.
-    const step = Math.max(2 * m, 2 * cell);
-    const wall = [];
-    for (let i = 0; i < R.length; i++) {
-      const [ax, ay] = R[i], [bx, by] = R[(i + 1) % R.length], k = Math.floor(Math.hypot(bx - ax, by - ay) / step);
-      for (let t = 0; t <= k; t++) wall.push([ax + (bx - ax) * t / (k + 1), ay + (by - ay) * t / (k + 1)]);
-    }
-    const wallTop = wall.map(p => zOf(isFlat ? flatH : hNear(...inward(p))));
-    const mesh = wall.map((p, i) => [p[0], p[1], wallTop[i]]);
-    // Roof mesh by greedy refinement: start from the footprint corners and keep adding the roof cell the current
-    // triangles miss by the most, until every cell is within TOL. Flat decks and plane roof slopes need only a few
-    // points; ridges, valleys and steps get them where needed. Capped per building.
-    const inside = [];
-    for (let cy = 0; cy < ny; cy++) for (let cx = 0; cx < nx; cx++) {
-      if (inRing(R, x0 + (cx + 0.5) * cell, y0 + (cy + 0.5) * cell)) inside.push(cy * nx + cx);
-    }
-    const TOL = 0.2, CAP = 1500;                       // metres (~8 in; the roof is planar now); points per roof
-    const cellXY = q => [x0 + ((q % nx) + 0.5) * cell, y0 + (((q / nx) | 0) + 0.5) * cell];
-    const triangulateMesh = () => {
-      const del = D.from(mesh.map(p => [p[0], p[1]]));
-      const out = [];
-      for (let t = 0; t < del.triangles.length; t += 3) {
-        const a = del.triangles[t], c = del.triangles[t + 1], d = del.triangles[t + 2];
-        const mx = (mesh[a][0] + mesh[c][0] + mesh[d][0]) / 3, my = (mesh[a][1] + mesh[c][1] + mesh[d][1]) / 3;
-        if (!inRing(R, mx, my)) continue;
-        // Every edge must stay inside too (no triangles bridging a notch or courtyard); test just inside each edge.
-        const inEdge = (u, w) => { const ex = (mesh[u][0] + mesh[w][0]) / 2, ey = (mesh[u][1] + mesh[w][1]) / 2; return inRing(R, ex + (mx - ex) * 0.02, ey + (my - ey) * 0.02); };
-        if (inEdge(a, c) && inEdge(c, d) && inEdge(d, a)) out.push([a, c, d]);
-      }
-      return out;
+    const roofH = [];
+    for (let cy = 0; cy < ny; cy++) for (let cx = 0; cx < nx; cx++) if (inFp(cx, cy)) roofH.push(sm[cy * nx + cx]);
+    if (!roofH.length) { skipped++; continue; }
+    const lo = pct(roofH, 0.1), hi = pct(roofH, 0.9);
+    const isFlat = hi - lo < 0.8 || !reg.planes.length;
+    const v = [], f = [];                    // vertices [x, y, z] (native XY, output Z) and faces (index lists)
+    const add = (x, y, z) => { v.push([x, y, z]); return v.length - 1; };
+    const prism = (ring, topZ, roofTris) => {
+      // Walls from the ground (b.base) to the roof edge, the roof, and the bottom.
+      const n = ring.length, bot = ring.map(([x, y]) => add(x, y, b.base)), top = ring.map(([x, y], i) => add(x, y, topZ[i]));
+      for (let i = 0; i < n; i++) { const j = (i + 1) % n; f.push([bot[i], bot[j], top[j], top[i]]); }
+      for (const [a, c, d] of roofTris) f.push([top[a], top[c], top[d]]);
+      for (const [a, c, d] of roofTris) f.push([bot[d], bot[c], bot[a]]);
     };
-    let tris = triangulateMesh();
-    if (!isFlat) {
-      const approx = new Float32Array(nx * ny);
-      const used2 = new Uint8Array(nx * ny);
-      for (let iter = 0; iter < 30 && mesh.length < CAP; iter++) {
-        approx.fill(NaN);
-        // Rasterize the current roof triangles (metres above ground) onto the cell centres.
-        for (const [a, c, d] of tris) {
-          const A = mesh[a], B2 = mesh[c], C = mesh[d];
-          const det = (B2[1] - C[1]) * (A[0] - C[0]) + (C[0] - B2[0]) * (A[1] - C[1]);
-          if (Math.abs(det) < 1e-12) continue;
-          const i0 = Math.max(0, Math.floor((Math.min(A[0], B2[0], C[0]) - x0) / cell - 0.5)), i1 = Math.min(nx - 1, Math.ceil((Math.max(A[0], B2[0], C[0]) - x0) / cell - 0.5));
-          const j0 = Math.max(0, Math.floor((Math.min(A[1], B2[1], C[1]) - y0) / cell - 0.5)), j1 = Math.min(ny - 1, Math.ceil((Math.max(A[1], B2[1], C[1]) - y0) / cell - 0.5));
-          for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
-            const x = x0 + (i + 0.5) * cell, y = y0 + (j + 0.5) * cell;
-            const l1 = ((B2[1] - C[1]) * (x - C[0]) + (C[0] - B2[0]) * (y - C[1])) / det, l2 = ((C[1] - A[1]) * (x - C[0]) + (A[0] - C[0]) * (y - C[1])) / det, l3 = 1 - l1 - l2;
-            if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) continue;
-            approx[j * nx + i] = ((l1 * A[2] + l2 * B2[2] + l3 * C[2]) - gDem) / zPerM;
-          }
+    let topMax = -Infinity;
+    if (isFlat) {
+      const z = zOf(pct(roofH, 0.6));
+      prism(R, R.map(() => z), polyTris(R, D, (x, y) => inRing(R, x, y)));
+      topMax = z;
+    } else {
+      // Base block: the exact footprint up to the lowest roof level, so traced outlines never leave gaps.
+      const zb = zOf(pct(roofH, 0.03));
+      prism(R, R.map(() => zb), polyTris(R, D, (x, y) => inRing(R, x, y)));
+      for (let li = 0; li < reg.planes.length; li++) {
+        const pl = reg.planes[li];
+        const mask = (cx, cy) => cx >= 0 && cy >= 0 && cx < nx && cy < ny && reg.lab[cy * nx + cx] === li;
+        for (let ring of traceMask(mask, nx, ny)) {
+          if (ring.length < 3) continue;
+          ring = simplifyRing(ring, 0.9);                         // in cell units
+          if (ring.length < 3) continue;
+          const pts = ring.map(([i, j]) => [x0 + i * cell, y0 + j * cell]);
+          const zAtPl = ([x, y]) => zOf(pl[0] * (x - x0) / m + pl[1] * (y - y0) / m + pl[2]);
+          const inside = (x, y) => { const cx = Math.floor((x - x0) / cell), cy = Math.floor((y - y0) / cell); return mask(cx, cy); };
+          const tris = polyTris(pts, D, inside);
+          if (!tris.length) continue;
+          const tz = pts.map(zAtPl);
+          prism(pts, tz, tris);
+          topMax = Math.max(topMax, ...tz);
         }
-        const bad = [];
-        for (const q of inside) {
-          if (used2[q]) continue;
-          const e = Number.isFinite(approx[q]) ? Math.abs(approx[q] - sm[q]) : 1e6;
-          if (e > TOL) bad.push([e, q]);
-        }
-        if (!bad.length) break;
-        bad.sort((u, v) => v[0] - u[0]);
-        // Add the worst cells, a few cells apart so one pass doesn't spend its budget on a single edge.
-        const room = Math.min(CAP - mesh.length, Math.max(16, Math.round(mesh.length * 0.6)));
-        const block = new Set();
-        const gap = Math.max(1, Math.round(1.5 / cellM));
-        let added = 0;
-        bad.length = Math.min(bad.length, 20000);
-        for (const [, q] of bad) {
-          if (added >= room) break;
-          const cx = q % nx, cy = (q / nx) | 0, key = `${Math.floor(cx / (gap + 1))}:${Math.floor(cy / (gap + 1))}`;
-          if (block.has(key)) continue;
-          block.add(key);
-          const [x, y] = cellXY(q);
-          mesh.push([x, y, zOf(sm[q])]);
-          used2[q] = 1;
-          added++;
-        }
-        if (!added) break;
-        tris = triangulateMesh();
       }
+      topMax = Math.max(topMax, zb);
     }
-    if (!tris.length) { skipped++; continue; }
-    b.roof = { pts: mesh, tris };
-    b.ringTop = ringTop;
-    b.wall = { ring: wall, top: wallTop };
-    b.roofPlanes = planesN;
-    b.roofAt = isFlat ? () => zOf(flatH) : (x, y) => zOf(hAt(x, y));
+    if (!f.length) { skipped++; continue; }
+    const labAt = (x, y) => { const cx = Math.floor((x - x0) / cell), cy = Math.floor((y - y0) / cell); return cx >= 0 && cy >= 0 && cx < nx && cy < ny ? reg.lab[cy * nx + cx] : -1; };
+    const flatZ = zOf(pct(roofH, 0.6));
+    b.mass = { v, f };
+    b.roofAt = isFlat ? () => flatZ : (x, y) => { const l = labAt(x, y), pl = reg.planes[l]; return pl ? zOf(pl[0] * (x - x0) / m + pl[1] * (y - y0) / m + pl[2]) : zOf(pct(roofH, 0.03)); };
     b.roofType = isFlat ? 'flat' : 'shaped';
-    b.top = Math.max(...mesh.map(p => p[2]));
+    b.roofPlanes = reg.planes.length;
+    b.top = topMax;
     b.heightKnown = true;
     b.hSrc = 'lidar';
     used++; if (isFlat) flat++; else shaped++;
@@ -397,7 +345,7 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
 function regularize(h, nx, ny, cellM, isInside) {
   const cells = [];
   for (let cy = 0; cy < ny; cy++) for (let cx = 0; cx < nx; cx++) if (isInside(cx, cy) && Number.isFinite(h[cy * nx + cx])) cells.push(cy * nx + cx);
-  if (cells.length < 12) return 0;
+  if (cells.length < 12) return { planes: [], lab: new Int16Array(nx * ny).fill(-1) };
   const X = q => (q % nx) * cellM, Y = q => ((q / nx) | 0) * cellM;
   let seed = 12345;
   const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
@@ -434,7 +382,7 @@ function regularize(h, nx, ny, cellM, isInside) {
     const used = new Set(inl);
     rest = rest.filter(q => !used.has(q));
   }
-  if (!planes.length) return 0;
+  if (!planes.length) return { planes, lab: new Int16Array(nx * ny).fill(-1) };
   // Label every roof cell with its best plane.
   const lab = new Int16Array(nx * ny).fill(-1);
   for (const q of cells) {
@@ -456,11 +404,94 @@ function regularize(h, nx, ny, cellM, isInside) {
     for (const [l, n] of cnt) if (n > bc) { bc = n; bl = l; }
     if (bc >= 5) lab2[q] = bl;
   }
+  // Cells no plane fits take their neighbours' plane, so the planes tile the whole roof.
+  for (let pass = 0; pass < 50; pass++) {
+    let left = 0;
+    const next = lab2.slice();
+    for (const q of cells) {
+      if (lab2[q] >= 0) continue;
+      const cx = q % nx, cy = (q / nx) | 0;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const a = cx + dx, c = cy + dy;
+        if (a >= 0 && a < nx && c >= 0 && c < ny && lab2[c * nx + a] >= 0) { next[q] = lab2[c * nx + a]; break; }
+      }
+      if (next[q] < 0) left++;
+    }
+    lab2.set(next);
+    if (!left) break;
+  }
   for (const q of cells) {
     const l = lab2[q];
     if (l >= 0) { const p = planes[l]; h[q] = p[0] * X(q) + p[1] * Y(q) + p[2]; }
   }
-  return planes.length;
+  return { planes, lab: lab2 };
+}
+
+/** Closed outlines of a cell mask, as rings of cell-corner coordinates [i, j] (holes come out as rings too). */
+function traceMask(mask, nx, ny) {
+  // Directed boundary edges with the mask on the left; then chain them into loops.
+  const edges = new Map();
+  const put = (a, b) => { const k = a[0] + ',' + a[1]; (edges.get(k) || edges.set(k, []).get(k)).push(b); };
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    if (!mask(i, j)) continue;
+    if (!mask(i, j - 1)) put([i, j], [i + 1, j]);
+    if (!mask(i + 1, j)) put([i + 1, j], [i + 1, j + 1]);
+    if (!mask(i, j + 1)) put([i + 1, j + 1], [i, j + 1]);
+    if (!mask(i - 1, j)) put([i, j + 1], [i, j]);
+  }
+  const rings = [];
+  for (const [k0, outs] of edges) {
+    while (outs.length) {
+      const start = k0.split(',').map(Number);
+      const ring = [start];
+      let cur = outs.pop();
+      let guard = 0;
+      while (guard++ < 1e6) {
+        const k = cur[0] + ',' + cur[1];
+        if (k === k0) break;
+        ring.push(cur);
+        const nxt = edges.get(k);
+        if (!nxt || !nxt.length) break;
+        cur = nxt.pop();
+      }
+      if (ring.length >= 4) rings.push(ring);
+    }
+  }
+  return rings;
+}
+
+/** Douglas–Peucker on a closed ring (tolerance in the ring's units), then drop near-collinear corners. */
+function simplifyRing(ring, tol) {
+  if (ring.length < 5) return ring;
+  // Split at the two farthest-apart points and simplify each half.
+  let far = 0, fd = -1;
+  for (let i = 1; i < ring.length; i++) { const d = Math.hypot(ring[i][0] - ring[0][0], ring[i][1] - ring[0][1]); if (d > fd) { fd = d; far = i; } }
+  const dp = pts => {
+    if (pts.length < 3) return pts;
+    const [ax, ay] = pts[0], [bx, by] = pts[pts.length - 1], L = Math.hypot(bx - ax, by - ay) || 1e-9;
+    let mi = 0, md = -1;
+    for (let i = 1; i < pts.length - 1; i++) { const d = Math.abs((bx - ax) * (ay - pts[i][1]) - (ax - pts[i][0]) * (by - ay)) / L; if (d > md) { md = d; mi = i; } }
+    if (md <= tol) return [pts[0], pts[pts.length - 1]];
+    const l = dp(pts.slice(0, mi + 1)), r = dp(pts.slice(mi));
+    return l.slice(0, -1).concat(r);
+  };
+  const a = dp(ring.slice(0, far + 1)), b = dp(ring.slice(far).concat([ring[0]]));
+  return a.slice(0, -1).concat(b.slice(0, -1));
+}
+
+/** Triangles (indices into pts) covering a polygon, keeping those whose centroid and edge midpoints are inside. */
+function polyTris(pts, D, inside) {
+  if (pts.length < 3) return [];
+  const del = D.from(pts);
+  const out = [];
+  for (let t = 0; t < del.triangles.length; t += 3) {
+    const a = del.triangles[t], c = del.triangles[t + 1], d = del.triangles[t + 2];
+    const mx = (pts[a][0] + pts[c][0] + pts[d][0]) / 3, my = (pts[a][1] + pts[c][1] + pts[d][1]) / 3;
+    if (!inside(mx, my)) continue;
+    const ok = (u, w) => { const ex = (pts[u][0] + pts[w][0]) / 2, ey = (pts[u][1] + pts[w][1]) / 2; return inside(ex + (mx - ex) * 0.05, ey + (my - ey) * 0.05); };
+    if (ok(a, c) && ok(c, d) && ok(d, a)) out.push([a, c, d]);
+  }
+  return out;
 }
 
 function plane3(x1, y1, z1, x2, y2, z2, x3, y3, z3) {
