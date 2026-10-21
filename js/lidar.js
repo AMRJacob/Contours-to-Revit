@@ -244,6 +244,19 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
       if (v.length >= 3) sm[cy * nx + cx] = median(v);
       else if (Number.isFinite(top[cy * nx + cx])) sm[cy * nx + cx] = top[cy * nx + cx];
     }
+    if (fine) {
+      // Interpolated fine grids carry the returns' noise (equipment, trees, scan jitter): one more 3×3 median.
+      const sm2 = sm.slice();
+      for (let cy = 0; cy < ny; cy++) for (let cx = 0; cx < nx; cx++) {
+        const v = [];
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const a = cx + dx, c = cy + dy;
+          if (a >= 0 && a < nx && c >= 0 && c < ny && Number.isFinite(sm[c * nx + a])) v.push(sm[c * nx + a]);
+        }
+        if (v.length >= 5) sm2[cy * nx + cx] = median(v);
+      }
+      sm.set(sm2);
+    }
     const vals = [...sm].filter(Number.isFinite);
     const med = median(vals);
     for (let pass = 0; pass < (fine ? 40 : 12); pass++) {
@@ -283,7 +296,7 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
     for (let cy = 0; cy < ny; cy++) for (let cx = 0; cx < nx; cx++) {
       if (inRing(R, x0 + (cx + 0.5) * cell, y0 + (cy + 0.5) * cell)) inside.push(cy * nx + cx);
     }
-    const TOL = 0.3, CAP = 2500;                       // metres; points per roof
+    const TOL = 0.45, CAP = 1500;                      // metres (~1.5 ft); points per roof
     const cellXY = q => [x0 + ((q % nx) + 0.5) * cell, y0 + (((q / nx) | 0) + 0.5) * cell];
     const triangulateMesh = () => {
       const del = D.from(mesh.map(p => [p[0], p[1]]));
