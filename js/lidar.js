@@ -286,28 +286,28 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
     const isFlat = hi - lo < 0.8 || !reg.planes.length;
     const v = [], f = [];                    // vertices [x, y, z] (native XY, output Z) and faces (index lists)
     const add = (x, y, z) => { v.push([x, y, z]); return v.length - 1; };
-    const prism = (ring, topZ, roofTris) => {
-      // Walls from the ground (b.base) to the roof edge, the roof, and the bottom.
+    const prism = (ring, topZ, roofTris, withBottom) => {
+      // Walls from the ground (b.base) to the roof edge, the roof, and (base block only) the bottom.
       const n = ring.length, bot = ring.map(([x, y]) => add(x, y, b.base)), top = ring.map(([x, y], i) => add(x, y, topZ[i]));
       for (let i = 0; i < n; i++) { const j = (i + 1) % n; f.push([bot[i], bot[j], top[j], top[i]]); }
       for (const [a, c, d] of roofTris) f.push([top[a], top[c], top[d]]);
-      for (const [a, c, d] of roofTris) f.push([bot[d], bot[c], bot[a]]);
+      if (withBottom) for (const [a, c, d] of roofTris) f.push([bot[d], bot[c], bot[a]]);
     };
     let topMax = -Infinity;
     if (isFlat) {
       const z = zOf(pct(roofH, 0.6));
-      prism(R, R.map(() => z), polyTris(R, D, (x, y) => inRing(R, x, y)));
+      prism(R, R.map(() => z), polyTris(R, D, (x, y) => inRing(R, x, y)), true);
       topMax = z;
     } else {
       // Base block: the exact footprint up to the lowest roof level, so traced outlines never leave gaps.
       const zb = zOf(pct(roofH, 0.03));
-      prism(R, R.map(() => zb), polyTris(R, D, (x, y) => inRing(R, x, y)));
+      prism(R, R.map(() => zb), polyTris(R, D, (x, y) => inRing(R, x, y)), true);
       for (let li = 0; li < reg.planes.length; li++) {
         const pl = reg.planes[li];
         const mask = (cx, cy) => cx >= 0 && cy >= 0 && cx < nx && cy < ny && reg.lab[cy * nx + cx] === li;
         for (let ring of traceMask(mask, nx, ny)) {
           if (ring.length < 3) continue;
-          ring = simplifyRing(ring, 0.9);                         // in cell units
+          ring = simplifyRing(ring, Math.max(0.9, 0.5 / (cell / m)));  // in cell units: ≥ 0.5 m
           if (ring.length < 3) continue;
           const pts = ring.map(([i, j]) => [x0 + i * cell, y0 + j * cell]);
           const zAtPl = ([x, y]) => zOf(pl[0] * (x - x0) / m + pl[1] * (y - y0) / m + pl[2]);
@@ -390,19 +390,44 @@ function regularize(h, nx, ny, cellM, isInside) {
     planes.forEach((p, i) => { const e = Math.abs(p[0] * X(q) + p[1] * Y(q) + p[2] - h[q]); if (e < be) { be = e; bi = i; } });
     lab[q] = bi;
   }
-  // Majority vote (3×3) so plane borders are straight-ish and stray cells join their neighbours.
-  const lab2 = lab.slice();
-  for (const q of cells) {
-    const cx = q % nx, cy = (q / nx) | 0, cnt = new Map();
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-      const a = cx + dx, c = cy + dy;
-      if (a < 0 || a >= nx || c < 0 || c >= ny) continue;
-      const l = lab[c * nx + a]; if (l < 0) continue;
-      cnt.set(l, (cnt.get(l) || 0) + 1);
+  // Majority vote (3×3, three passes) so plane borders are straight-ish and stray cells join their neighbours.
+  let lab2 = lab.slice();
+  for (let pass = 0; pass < 3; pass++) {
+    const src = lab2.slice();
+    for (const q of cells) {
+      const cx = q % nx, cy = (q / nx) | 0, cnt = new Map();
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const a = cx + dx, c = cy + dy;
+        if (a < 0 || a >= nx || c < 0 || c >= ny) continue;
+        const l = src[c * nx + a]; if (l < 0) continue;
+        cnt.set(l, (cnt.get(l) || 0) + 1);
+      }
+      let bl = src[q], bc = 0;
+      for (const [l, n] of cnt) if (n > bc) { bc = n; bl = l; }
+      if (bc >= 5) lab2[q] = bl;
     }
-    let bl = lab[q], bc = 0;
-    for (const [l, n] of cnt) if (n > bc) { bc = n; bl = l; }
-    if (bc >= 5) lab2[q] = bl;
+  }
+  // Pieces of a plane smaller than ~6 m² are absorbed by the plane around them.
+  const minCells = Math.max(4, Math.round(6 / (cellM * cellM)));
+  const seen = new Uint8Array(nx * ny);
+  const isCell = new Uint8Array(nx * ny); for (const q of cells) isCell[q] = 1;
+  for (const q0 of cells) {
+    if (seen[q0] || lab2[q0] < 0) continue;
+    const l = lab2[q0], comp = [q0], border = new Map();
+    seen[q0] = 1;
+    for (let k = 0; k < comp.length; k++) {
+      const q = comp[k], cx = q % nx, cy = (q / nx) | 0;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const a = cx + dx, c = cy + dy; if (a < 0 || a >= nx || c < 0 || c >= ny) continue;
+        const r = c * nx + a; if (!isCell[r]) continue;
+        if (lab2[r] === l) { if (!seen[r]) { seen[r] = 1; comp.push(r); } }
+        else if (lab2[r] >= 0) border.set(lab2[r], (border.get(lab2[r]) || 0) + 1);
+      }
+    }
+    if (comp.length < minCells && border.size) {
+      let bl = -1, bc = 0; for (const [k2, n] of border) if (n > bc) { bc = n; bl = k2; }
+      for (const q of comp) lab2[q] = bl;
+    }
   }
   // Cells no plane fits take their neighbours' plane, so the planes tile the whole roof.
   for (let pass = 0; pass < 50; pass++) {
