@@ -176,11 +176,13 @@ const pct = (a, p) => { if (!a.length) return NaN; const s = Float64Array.from(a
  * Others are left as they were (their dataset height, or the assumed one). Returns counts.
  * opts: { zAt (native → output Z, the site's DEM), zPerM (m → output), nativePerM }.
  */
-export async function applyLidar(list, lid, { zAt, zPerM, nativePerM }) {
+export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5 }) {
   const D = await delaunator();
   const m = nativePerM;                       // native units per metre
   const idx = lid._idx ??= bucket(lid, 10 * m);
-  const cellM = 1.5, cell = cellM * m;
+  const cellM = Math.max(0.25, cellFt * 0.3048), cell = cellM * m;
+  const lattice = Math.max(2, Math.round(3.6 / cellM));   // keep a sparse lattice of roof points (~12 ft)
+  const fine = cellM < 1.2;                                // finer than the lidar's point spacing: interpolate
   let used = 0, flat = 0, shaped = 0, skipped = 0;
   for (const b of list) {
     const R = b.ring;
@@ -202,13 +204,36 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM }) {
     if (gl.length < 5 || !Number.isFinite(gDem)) { skipped++; continue; }
     const pts = pin.filter(i => lid.z[i] - g > 1.5);
     if (pts.length < Math.max(6, areaM2 * 0.2)) { skipped++; continue; } // too few returns: new building, or no coverage
-    // Roof raster: highest return per 1.5 m cell, then a 3×3 median to drop spikes, then fill holes.
+    // Roof raster. Coarse cells: highest return per cell. Fine cells (smaller than the point spacing): a TIN
+    // through the returns, sampled at each cell centre. Then a 3×3 median drops spikes, and holes are filled.
     const nx = Math.max(1, Math.ceil((x1 - x0) / cell)), ny = Math.max(1, Math.ceil((y1 - y0) / cell));
     const top = new Float32Array(nx * ny).fill(NaN);
-    for (const i of pts) {
-      const cx = Math.min(nx - 1, Math.floor((lid.x[i] - x0) / cell)), cy = Math.min(ny - 1, Math.floor((lid.y[i] - y0) / cell));
-      const h = lid.z[i] - g, q = cy * nx + cx;
-      if (!(top[q] >= h)) top[q] = h;
+    if (!fine) {
+      for (const i of pts) {
+        const cx = Math.min(nx - 1, Math.floor((lid.x[i] - x0) / cell)), cy = Math.min(ny - 1, Math.floor((lid.y[i] - y0) / cell));
+        const h = lid.z[i] - g, q = cy * nx + cx;
+        if (!(top[q] >= h)) top[q] = h;
+      }
+    } else {
+      const px = pts.map(i => lid.x[i]), py = pts.map(i => lid.y[i]), ph = pts.map(i => lid.z[i] - g);
+      const tin = D.from(pts.map((_, k) => [px[k], py[k]]));
+      const maxEdge = 4 * m; // longer triangles bridge gaps (courtyards, missing returns): leave those to the fill
+      const T = tin.triangles;
+      for (let t = 0; t < T.length; t += 3) {
+        const a = T[t], b2 = T[t + 1], c = T[t + 2];
+        const ax = px[a], ay = py[a], bx = px[b2], by = py[b2], cx2 = px[c], cy2 = py[c];
+        if (Math.hypot(bx - ax, by - ay) > maxEdge || Math.hypot(cx2 - bx, cy2 - by) > maxEdge || Math.hypot(ax - cx2, ay - cy2) > maxEdge) continue;
+        const det = (by - cy2) * (ax - cx2) + (cx2 - bx) * (ay - cy2);
+        if (Math.abs(det) < 1e-12) continue;
+        const i0 = Math.max(0, Math.floor((Math.min(ax, bx, cx2) - x0) / cell - 0.5)), i1 = Math.min(nx - 1, Math.ceil((Math.max(ax, bx, cx2) - x0) / cell - 0.5));
+        const j0 = Math.max(0, Math.floor((Math.min(ay, by, cy2) - y0) / cell - 0.5)), j1 = Math.min(ny - 1, Math.ceil((Math.max(ay, by, cy2) - y0) / cell - 0.5));
+        for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+          const x = x0 + (i + 0.5) * cell, y = y0 + (j + 0.5) * cell;
+          const l1 = ((by - cy2) * (x - cx2) + (cx2 - bx) * (y - cy2)) / det, l2 = ((cy2 - ay) * (x - cx2) + (ax - cx2) * (y - cy2)) / det, l3 = 1 - l1 - l2;
+          if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) continue;
+          top[j * nx + i] = l1 * ph[a] + l2 * ph[b2] + l3 * ph[c];
+        }
+      }
     }
     const sm = new Float32Array(nx * ny).fill(NaN);
     for (let cy = 0; cy < ny; cy++) for (let cx = 0; cx < nx; cx++) {
@@ -222,7 +247,7 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM }) {
     }
     const vals = [...sm].filter(Number.isFinite);
     const med = median(vals);
-    for (let pass = 0; pass < 12; pass++) {
+    for (let pass = 0; pass < (fine ? 40 : 12); pass++) {
       let left = 0;
       for (let q = 0; q < sm.length; q++) {
         if (Number.isFinite(sm[q])) continue;
@@ -262,7 +287,7 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM }) {
         const v = sm[cy * nx + cx];
         const lapX = Math.abs(at(cx - 1, cy) + at(cx + 1, cy) - 2 * v), lapY = Math.abs(at(cx, cy - 1) + at(cx, cy + 1) - 2 * v);
         const lapD = Math.abs(at(cx - 1, cy - 1) + at(cx + 1, cy + 1) - 2 * v), lapE = Math.abs(at(cx - 1, cy + 1) + at(cx + 1, cy - 1) - 2 * v);
-        if (Math.max(lapX, lapY, lapD, lapE) > 0.8 || (cx % 8 === 0 && cy % 8 === 0)) mesh.push([x, y, zOf(v)]);
+        if (Math.max(lapX, lapY, lapD, lapE) > 0.8 || (cx % lattice === 0 && cy % lattice === 0)) mesh.push([x, y, zOf(v)]);
       }
     }
     const del = D.from(mesh.map(p => [p[0], p[1]]));

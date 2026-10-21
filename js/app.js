@@ -1,18 +1,18 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.31.0';
-import { fetchElevation, sample } from './dem.js?v=0.31.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.31.0';
-import { Dxf } from './dxf.js?v=0.31.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.31.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.31.0';
-import { Flow } from './flow.js?v=0.31.0';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.31.0';
-import { loadLidar, applyLidar } from './lidar.js?v=0.31.0';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.31.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.31.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.32.0';
+import { fetchElevation, sample } from './dem.js?v=0.32.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.32.0';
+import { Dxf } from './dxf.js?v=0.32.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.32.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.32.0';
+import { Flow } from './flow.js?v=0.32.0';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.32.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.32.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.32.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.32.0';
 
-const VERSION = '0.31.0';
+const VERSION = '0.32.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -259,7 +259,7 @@ function saveSettings() {
     units: units(), spacing: $('spacing').value, interval: $('interval').value,
     localOrigin: $('local-origin').checked, smooth: $('smooth').checked,
     zone: $('zone').value, bldgMode: $('bldg-mode').value, bldgFfe: $('bldg-ffe').value, bldgH: $('bldg-h').value,
-    bldgLidar: $('bldg-lidar').checked,
+    bldgLidar: $('bldg-lidar').checked, bldgLidarRes: $('bldg-lidar-res').value,
   });
 }
 
@@ -276,12 +276,14 @@ function restoreSettings() {
   if (s.bldgFfe != null) $('bldg-ffe').value = s.bldgFfe;
   if (s.bldgH != null) $('bldg-h').value = s.bldgH;
   $('bldg-lidar').checked = !!s.bldgLidar;
+  if (['1', '2', '5'].includes(String(s.bldgLidarRes))) $('bldg-lidar-res').value = String(s.bldgLidarRes);
   bldgUi();
 }
 function bldgUi() {
   const m = $('bldg-mode').value;
   $('bldg-pad-row').hidden = m !== 'pad';
   $('bldg-h-row').hidden = m !== 'block';
+  $('bldg-lidar-row').hidden = !$('bldg-lidar').checked;
   $('bldg-hint').textContent = m === 'off' ? ''
     : m === 'pad' ? 'Each footprint becomes a level pad (the CSV, contours and design surface all use it). Uses the building layer shown on the map — Microsoft, OpenStreetMap or FEMA. Assumed, not surveyed.'
     : 'Each footprint is raised to its roof (data height where known). Good for 3D views and water flow around buildings; for a Revit Toposolid you usually want pads or bare earth.';
@@ -292,7 +294,8 @@ document.querySelectorAll('input[name="units"]').forEach(r => r.addEventListener
 }));
 $('local-origin').addEventListener('change', () => { saveSettings(); applyOrigin(); });
 $('bldg-mode').addEventListener('change', bldgUi);
-['spacing', 'interval', 'smooth', 'bldg-mode', 'bldg-ffe', 'bldg-h', 'bldg-lidar'].forEach(id => $(id).addEventListener('change', () => {
+$('bldg-lidar').addEventListener('change', bldgUi);
+['spacing', 'interval', 'smooth', 'bldg-mode', 'bldg-ffe', 'bldg-h', 'bldg-lidar', 'bldg-lidar-res'].forEach(id => $(id).addEventListener('change', () => {
   onSiteChanged(false); saveSettings(); invalidate();
 }));
 $('zone').addEventListener('change', () => { updateZoneHint(); onSiteChanged(false); saveSettings(); invalidate(); });
@@ -569,10 +572,10 @@ async function generate() {
       const lid = await loadLidar(bbox, p.fwd, msg => setStatus(msg));
       setStatus('Fitting roofs to the lidar…');
       await tick();
-      lidarInfo = { name: lid.name, year: lid.year, n: lid.n, mb: lid.mb, hasBuildingClass: lid.hasBuildingClass, counts: {} };
+      lidarInfo = { cellFt: Number($('bldg-lidar-res').value) || 1, name: lid.name, year: lid.year, n: lid.n, mb: lid.mb, hasBuildingClass: lid.hasBuildingClass, counts: {} };
       for (const k of ['buildings', 'bldgMs', 'bldgOsm']) {
         const list = k === 'buildings' ? context.buildings : context[k];
-        if (list?.length) lidarInfo.counts[k] = await applyLidar(list, lid, { zAt, zPerM, nativePerM });
+        if (list?.length) lidarInfo.counts[k] = await applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt: Number($('bldg-lidar-res').value) || 1 });
       }
     } catch (err) {
       console.error(err);
@@ -1537,8 +1540,9 @@ function makeReadme(site, v = vis()) {
           : '                      Massing uses 3.5 m (one storey).');
     }
     if (site.lidar) L_(`Building lidar:       ${lidarSummary(site, false)}`,
-      '                      Heights are measured against the lidar ground beside each footprint; roofs are a 1.5 m surface',
-      '                      fitted to the returns (small dormers, parapets and rooftop equipment are smoothed away).');
+      '                      Heights are measured against the lidar ground beside each footprint; roofs are a',
+      `                      ${site.lidar.cellFt || 5} ft grid fitted to the returns. The lidar has roughly one return per 2–3 ft, so a`,
+      '                      finer grid is interpolated between them; small dormers, parapets and equipment are smoothed.');
     if (v.bldgOsm) {
       const os = site.context.bldgOsm || [];
       L_(`Buildings (OSM):      ${os.length} footprints from OpenStreetMap (© OpenStreetMap contributors, ODbL; hand-mapped).`,

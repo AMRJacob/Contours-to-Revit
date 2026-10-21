@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.31.0">
+  <link rel="stylesheet" href="css/app.css?v=0.32.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -126,6 +126,14 @@
               <input type="checkbox" id="bldg-lidar">
               <span><strong>Building heights &amp; roofs from lidar</strong> — measures each footprint in the USGS lidar point cloud (flat or sloped roofs). Larger download; footprints the lidar can't read keep their data height.</span>
             </label>
+            <div class="bldg-opt" id="bldg-lidar-row">
+              <label for="bldg-lidar-res">Roof grid</label>
+              <select id="bldg-lidar-res">
+                <option value="1">1 ft</option>
+                <option value="2">2 ft</option>
+                <option value="5">5 ft (lightest)</option>
+              </select>
+            </div>
           </div>
           <details class="sub-details">
             <summary>Coordinate system</summary>
@@ -525,6 +533,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.31.0"></script>
+  <script type="module" src="js/app.js?v=0.32.0"></script>
 </body>
 </html>
