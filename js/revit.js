@@ -320,6 +320,10 @@ function sendForm(site, P, snapBtn) {
       <small class="rv-state">${des ? (prop ? 'Replaces the one sent before.' : 'New.') : 'Make changes in Site design first (pads, walls, slopes, grading).'}</small></span></label>
     <label class="check"><input type="checkbox" id="rv-img" ${o.img ? 'checked' : ''}><span><strong>Aerial image</strong> in plan view ${sel('view', model.views, o.viewId)}
       <small class="rv-state">${img ? 'Updates the one placed before.' : 'Linked JPG, drawn in the background of that view.'}</small></span></label>
+    ${host?.features?.includes('drape')
+      ? `<label class="check"><input type="checkbox" id="rv-drape" ${o.drape ? 'checked' : ''}><span><strong>Aerial on the Toposolids</strong> — render material
+      <small class="rv-state">Painted on the top of the existing and proposed Toposolids, for Realistic views and renderings.</small></span></label>`
+      : `<p class="hint rv-state">Update the plugin to drape the aerial on the Toposolids as a material.</p>`}
     <label class="check"><input type="checkbox" id="rv-dxf" ${o.dxf ? 'checked' : ''}><span><strong>Contours &amp; context</strong> — DXF link (the map's shown layers)
       <small class="rv-state">${dxf ? 'Reloads the existing link.' : 'Linked and pinned at the Project Base Point.'}</small></span></label>
     <label class="check"><input type="checkbox" id="rv-pdxf" ${o.pdxf && des ? 'checked' : ''} ${des ? '' : 'disabled'}><span><strong>Proposed contours</strong> — DXF link
@@ -350,7 +354,7 @@ function defaults(site) {
   const av = model.activeView?.image ? model.activeView.id : (model.views.find(v => /site/i.test(v.name)) || model.views[0])?.id;
   const type = model.toposolidTypes.find(t => /site|topo|existing/i.test(t.name)) || model.toposolidTypes[0];
   return {
-    exist: true, prop: true, img: true, dxf: true, pdxf: false,
+    exist: true, prop: true, img: true, drape: true, dxf: true, pdxf: false,
     typeId: type?.id, levelId: lvl?.id, viewId: av,
     phaseE: ph[0]?.id, phaseD: ph.length > 1 ? ph[ph.length - 1].id : '', phaseP: ph[ph.length - 1]?.id,
     tol: TOLS[site.units][2],
@@ -364,7 +368,7 @@ function readForm() {
   // A disabled box (no design yet) keeps the remembered choice instead of saving "off".
   const c = (id, key) => { const el = $(id); return !el || el.disabled ? (o[key] ?? defaults(site)[key]) : el.checked; };
   Object.assign(o, {
-    exist: c('rv-exist', 'exist'), prop: c('rv-prop', 'prop'), img: c('rv-img', 'img'), dxf: c('rv-dxf', 'dxf'), pdxf: c('rv-pdxf', 'pdxf'),
+    exist: c('rv-exist', 'exist'), prop: c('rv-prop', 'prop'), img: c('rv-img', 'img'), drape: c('rv-drape', 'drape'), dxf: c('rv-dxf', 'dxf'), pdxf: c('rv-pdxf', 'pdxf'),
     typeId: v('rv-type'), levelId: v('rv-level'), viewId: v('rv-view'),
     phaseE: v('rv-phE'), phaseD: v('rv-phD'), phaseP: v('rv-phP'),
     tol: Number(v('rv-tol')) || TOLS[site.units][2],
@@ -410,13 +414,14 @@ function replaceReason(site, ex, tol, meta) {
 const demLabel = site => (site.dem?.contributions || []).map(c => c.tier?.label).join('+');
 
 function resultList(r) {
-  const name = { coordinates: 'Shared coordinates', existing: 'Existing Toposolid', proposed: 'Proposed Toposolid', aerial: 'Aerial image', 'dxf-existing': 'Contours DXF', 'dxf-proposed': 'Proposed DXF', state: 'Site saved in the model' };
+  const name = { drape: 'Aerial on the Toposolids', coordinates: 'Shared coordinates', existing: 'Existing Toposolid', proposed: 'Proposed Toposolid', aerial: 'Aerial image', 'dxf-existing': 'Contours DXF', 'dxf-proposed': 'Proposed DXF', state: 'Site saved in the model' };
   const ids = r.results.filter(x => x.ok && x.id).map(x => x.id);
   const items = r.results.map(x => `<li class="${x.ok ? 'ok' : 'bad'}">${esc(name[x.role] || x.role)}: ${x.ok
     ? (x.kept ? 'already in the model — kept as is'
       : x.role === 'existing' || x.role === 'proposed' ? `${x.replaced ? 'replaced' : 'created'}, ${Number(x.points).toLocaleString()} points${x.profile ? ', boundary outline' : ''}`
       : x.role === 'coordinates' ? (x.check > 0.9999 ? 'set and checked' : 'set — check the angle')
       : x.role === 'aerial' ? `${x.reloaded ? 'reloaded' : 'placed'} in “${esc(x.view)}”`
+      : x.role === 'drape' ? `material “${esc(x.material)}” on ${x.painted} Toposolid${x.painted === 1 ? '' : 's'} (${x.faces} face${x.faces === 1 ? '' : 's'})`
       : x.role.startsWith('dxf') ? (x.reloaded ? 'reloaded' : 'linked') : 'done')
     : esc(x.error)}</li>`).join('');
   const warn = r.warnings?.length ? `<details class="sub-details rv-warns"><summary>${r.warnings.length} Revit warning${r.warnings.length === 1 ? '' : 's'}</summary><ul>${r.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul></details>` : '';
@@ -535,12 +540,22 @@ async function send() {
       const t = toInternal(site, pr.pts);
       job.toposolids.push({ role: 'proposed', points: t.pts, profile, typeId: Number(o.typeId), levelId: Number(o.levelId), phaseCreated: Number(o.phaseP) || null, phaseDemolished: null, replaceId: taggedOne('proposed')?.id ?? null, meta: meta(pr, t.extent), comment: `Contours to Revit — proposed grading (${date})` });
     }
+    const drape = o.drape && host?.features?.includes('drape');
+    let aerialFid = null, aerialImg = null;
+    const e = api.aerialExtent(site);
+    if (o.img || drape) {
+      status('Preparing the aerial…');
+      aerialImg = await api.aerial(site);
+      aerialFid = await upload(aerialImg.blob, 'aerial', status);
+    }
+    if (drape) {
+      // The JPG covers aerialExtent (project-north up), so in Revit it spans these internal coordinates.
+      job.drape = { fid: aerialFid, file: `${api.prefix()}_aerial.jpg`, name: `Site aerial - ${api.prefix()}`,
+        x0: model.pbp.x + e.x0 * k, y0: model.pbp.y + e.y0 * k, w: e.w * k, h: e.h * k, roles: ['existing', 'proposed'] };
+    }
     if (o.img) {
       if (!o.viewId) throw new Error('This model has no plan view for the aerial — add a floor plan or untick Aerial image.');
-      status('Preparing the aerial…');
-      const a = await api.aerial(site);
-      const e = api.aerialExtent(site);
-      const fid = await upload(a.blob, 'aerial', status);
+      const a = aerialImg, fid = aerialFid;
       job.image = { fid, file: `${api.prefix()}_aerial.jpg`, viewId: Number(o.viewId), cx: model.pbp.x + (e.x0 + e.x1) / 2 * k, cy: model.pbp.y + (e.y0 + e.y1) / 2 * k, w: e.w * k, h: e.h * k, replaceId: taggedOne('aerial')?.id ?? null, meta: JSON.stringify({ v: 1, date, px: [a.w, a.h] }) };
     }
     const dxfAt = { ox: model.pbp.x, oy: model.pbp.y, oz: model.pbp.z, unit: site.units };
@@ -669,7 +684,7 @@ function mockHost() {
     addEventListener: (t, f) => { if (t === 'message') listeners.push(f); },
     postMessage(m) {
       const { id, type } = m;
-      if (type === 'hello') return reply(id, true, { host: 'mock', version: '0.0.1', revit: '2026 (mock)' });
+      if (type === 'hello') return reply(id, true, { host: 'mock', version: '0.0.1', revit: '2026 (mock)', features: ['drape'] });
       if (type === 'getModel') return reply(id, true, model());
       if (type === 'chunk') return reply(id, true, { fid: m.fid, bytes: m.b64.length * 0.75 });
       if (type === 'pickFolder') return reply(id, true, 'D:\\Shared\\Mock site');
@@ -687,6 +702,7 @@ function mockHost() {
         };
         for (const t of m.toposolids) put(t.role, t.meta, { points: t.points.length / 3, profile: !!t.profile });
         if (m.image) put('aerial', m.image.meta, { view: 'Level 1', reloaded: false });
+        if (m.drape) results.push({ role: 'drape', ok: true, material: m.drape.name, painted: elements.filter(e => m.drape.roles.includes(e.role)).length, faces: 1 });
         for (const d of m.dxfs) put(d.role, d.meta, { reloaded: false });
         if (m.state) { stored.placement = m.state.placement; stored.snapshot = m.state.snapshot; stored.folder = m.folder; results.push({ role: 'state', ok: true }); }
         return reply(id, true, { results, warnings: [], folder: m.folder });

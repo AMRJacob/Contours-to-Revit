@@ -195,6 +195,7 @@ namespace ContoursToRevit
                         ["url"] = Url,
                         ["compatibleRendering"] = Settings.Load().CompatibleRendering,
                         ["update"] = Updater.Status(),
+                        ["features"] = new[] { "drape" },
                     };
                 case "getModel":
                     return await App.Instance.Jobs.Run(app => ModelInfo.Get(app));

@@ -42,6 +42,11 @@ namespace ContoursToRevit
                     var im = job.Obj("image");
                     results.Add(Step("aerial", warnings, () => Image(doc, im, files, folder, prefix, warnings)));
                 }
+                if (job.Has("drape"))
+                {
+                    var dr = job.Obj("drape");
+                    results.Add(Step("drape", warnings, () => Drape.Run(doc, dr, files, folder, warnings)));
+                }
                 foreach (var d in job.Arr("dxfs"))
                 {
                     var role = d.Str("role");
@@ -85,14 +90,14 @@ namespace ContoursToRevit
         }
 
         /// <summary>Commit, or throw with Revit's own error text when Revit rolled the step back.</summary>
-        private static void Commit(Transaction t, List<string> warnings)
+        internal static void Commit(Transaction t, List<string> warnings)
         {
             var st = t.Commit();
             if (st != TransactionStatus.Committed)
                 throw new InvalidOperationException(QuietWarnings.LastErrors.Count > 0 ? string.Join(" ", QuietWarnings.LastErrors) : "Revit cancelled this step (" + st + ").");
         }
 
-        private static Transaction Begin(Document doc, string name, List<string> warnings)
+        internal static Transaction Begin(Document doc, string name, List<string> warnings)
         {
             QuietWarnings.LastErrors.Clear();
             var t = new Transaction(doc, name);
