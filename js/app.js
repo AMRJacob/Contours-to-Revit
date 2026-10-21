@@ -1,19 +1,19 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.37.3';
-import { fetchElevation, sample } from './dem.js?v=0.37.3';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.37.3';
-import { Dxf } from './dxf.js?v=0.37.3';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.37.3';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.37.3';
-import { Flow } from './flow.js?v=0.37.3';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.37.3';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.37.3';
-import { loadLidar, applyLidar } from './lidar.js?v=0.37.3';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.37.3';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.37.3';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.37.4';
+import { fetchElevation, sample } from './dem.js?v=0.37.4';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.37.4';
+import { Dxf } from './dxf.js?v=0.37.4';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.37.4';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.37.4';
+import { Flow } from './flow.js?v=0.37.4';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.37.4';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.37.4';
+import { loadLidar, applyLidar } from './lidar.js?v=0.37.4';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.37.4';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.37.4';
 
-const VERSION = '0.37.3';
+const VERSION = '0.37.4';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -1569,7 +1569,8 @@ function makeReadme(site, v = vis()) {
       const cb = site.context.bldgBest || [];
       const from = k => cb.filter(b => b.combinedFrom === k).length;
       L_(`Buildings (BEST):     ${cb.length} combined footprints — ${from('bldgOsm')} OpenStreetMap, ${from('bldgMs')} Microsoft, ${from('buildings')} FEMA/ORNL`,
-        '                      (a footprint is skipped when a better source already maps it). Heights: lidar where measured,',
+        '                      (a footprint is skipped when a better source already maps it; FEMA/ORNL footprints, which include',
+        '                      demolished buildings, only when the site has no OSM or Microsoft ones). Heights: lidar where measured,',
         `                      else the footprint's own or an overlapping dataset height; ${cb.filter(b => !b.heightKnown).length} use 3.5 m. ${massStyle() === 'clean' ? 'Footprints squared up' : 'Footprints as mapped'}.`);
     }
     if (v.bldgMs) {

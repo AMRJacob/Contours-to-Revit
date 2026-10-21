@@ -146,11 +146,15 @@ export function clipHalf(P, a, b, c) {
 
 /**
  * One combined building layer: OpenStreetMap footprints (hand-mapped) first, then Microsoft footprints that don't
- * duplicate them, then FEMA/ORNL ones that duplicate neither. A footprint that would swallow several already-chosen
+ * duplicate them; FEMA/ORNL footprints only on sites where neither has any. A footprint that would swallow several already-chosen
  * ones (a merged blob) is skipped. Footprints without a height borrow the best overlapping dataset height.
  */
 export function combineBuildings(ctx) {
-  const srcs = [['bldgOsm', ctx.bldgOsm || []], ['bldgMs', ctx.bldgMs || []], ['buildings', ctx.buildings || []]];
+  // FEMA/ORNL footprints include buildings that have since been demolished, so they are only used when neither
+  // OpenStreetMap nor Microsoft has any footprint on the site (their heights can still be borrowed below).
+  const hasNewer = (ctx.bldgOsm || []).length + (ctx.bldgMs || []).length > 0;
+  const srcs = [['bldgOsm', ctx.bldgOsm || []], ['bldgMs', ctx.bldgMs || []], ...(hasNewer ? [] : [['buildings', ctx.buildings || []]])];
+  const femaHeights = (ctx.buildings || []).filter(b => b.ring?.length >= 3 && b.heightKnown);
   const samples = R => {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const [x, y] of R) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
@@ -166,6 +170,7 @@ export function combineBuildings(ctx) {
     return n / A.s.pts.length;
   };
   const all = srcs.flatMap(([key, list]) => list.filter(b => b.ring?.length >= 3).map(b => ({ key, b, s: samples(b.ring) })));
+  const donors = hasNewer ? all.concat(femaHeights.map(b => ({ key: 'buildings', b, s: samples(b.ring) }))) : all;
   const chosen = [];
   for (const [key] of srcs) {
     for (const it of all.filter(a => a.key === key)) {
@@ -182,7 +187,7 @@ export function combineBuildings(ctx) {
     if (!b.heightKnown) {
       // Borrow: FEMA/ORNL first (lidar-derived where ORNL had lidar), then OSM tags, then Microsoft's estimate.
       for (const key of ['buildings', 'bldgOsm', 'bldgMs']) {
-        const best = all.filter(o => o.key === key && o.b.heightKnown && o !== it).map(o => [overlap(it, o), o]).filter(([v]) => v > 0.3).sort((p, q) => q[0] - p[0])[0];
+        const best = donors.filter(o => o.key === key && o.b.heightKnown && o.b !== it.b).map(o => [overlap(it, o), o]).filter(([v]) => v > 0.3).sort((p, q) => q[0] - p[0])[0];
         if (best) { b.top = b.base + (best[1].b.top - best[1].b.base); b.heightKnown = true; b.heightFrom = key; break; }
       }
     }
