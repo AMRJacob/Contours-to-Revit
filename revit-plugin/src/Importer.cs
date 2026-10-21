@@ -84,8 +84,17 @@ namespace ContoursToRevit
             }
         }
 
+        /// <summary>Commit, or throw with Revit's own error text when Revit rolled the step back.</summary>
+        private static void Commit(Transaction t, List<string> warnings)
+        {
+            var st = t.Commit();
+            if (st != TransactionStatus.Committed)
+                throw new InvalidOperationException(QuietWarnings.LastErrors.Count > 0 ? string.Join(" ", QuietWarnings.LastErrors) : "Revit cancelled this step (" + st + ").");
+        }
+
         private static Transaction Begin(Document doc, string name, List<string> warnings)
         {
+            QuietWarnings.LastErrors.Clear();
             var t = new Transaction(doc, name);
             var o = t.GetFailureHandlingOptions();
             o.SetFailuresPreprocessor(new QuietWarnings(warnings));
@@ -126,7 +135,7 @@ namespace ContoursToRevit
                 if (dot2 > dot) { dot = dot2; flipped = true; }
                 else loc.SetProjectPosition(p, new ProjectPosition(ew, ns, elev, ang));
             }
-            t.Commit();
+            Commit(t, warnings);
             if (dot < 0.9999) warnings.Add($"Project north in the shared coordinates is off by {Math.Acos(Math.Max(-1, Math.Min(1, dot))) * 180 / Math.PI:0.00}° from what the web app expected. Check Manage › Coordinates.");
             var now = loc.GetProjectPosition(p);
             return new Dictionary<string, object> { ["check"] = dot, ["flipped"] = flipped, ["position"] = ModelInfo.Pos(now) };
@@ -153,15 +162,21 @@ namespace ContoursToRevit
             var role = t.Str("role") ?? "existing";
             using var tr = Begin(doc, role == "proposed" ? "Contours to Revit - proposed Toposolid" : "Contours to Revit - existing Toposolid", warnings);
 
+            // A Toposolid's flat bottom starts at its level minus the type's thickness, so ground below that ("too thin
+            // for its given type") fails. Build it with every point above the level, then move it down into place.
+            var level = (Level)doc.GetElement(levelId);
+            var lift = Math.Max(0, level.ProjectElevation + 1.0 - pts.Min(q => q.Z));
+            var build = lift > 0 ? pts.Select(q => new XYZ(q.X, q.Y, q.Z + lift)).ToList() : pts;
+
             Toposolid ts = null;
             var profile = Profile(doc, t);
             var usedProfile = false;
             if (profile != null)
             {
-                try { ts = Toposolid.Create(doc, new List<CurveLoop> { profile }, pts, typeId, levelId); usedProfile = true; }
+                try { ts = Toposolid.Create(doc, new List<CurveLoop> { profile }, build, typeId, levelId); usedProfile = true; }
                 catch (Exception ex) { warnings.Add("The boundary outline couldn't be used (" + ex.Message + "); the Toposolid follows the outer points instead."); }
             }
-            ts ??= Toposolid.Create(doc, pts, typeId, levelId);
+            ts ??= Toposolid.Create(doc, build, typeId, levelId);
 
             SetPhase(ts, BuiltInParameter.PHASE_CREATED, t.Id("phaseCreated"));
             SetPhase(ts, BuiltInParameter.PHASE_DEMOLISHED, t.Id("phaseDemolished"));
@@ -169,7 +184,8 @@ namespace ContoursToRevit
             if (!string.IsNullOrEmpty(comment)) ts.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.Set(comment);
             Storage.Tag(ts, role, t.Str("meta"));
 
-            // Points may be taken relative to the level: compare the top with the highest point and move to match.
+            // Move it to the real elevations: compare its top with the highest point (also covers points being
+            // taken relative to the level).
             doc.Regenerate();
             double moved = 0;
             var bb = ts.get_BoundingBox(null);
@@ -181,8 +197,9 @@ namespace ContoursToRevit
             }
 
             var replaced = Replace(doc, t.Id("replaceId"), ts.Id, warnings);
-            tr.Commit();
-            return new Dictionary<string, object> { ["id"] = ts.Id.Value, ["points"] = pts.Count, ["profile"] = usedProfile, ["moved"] = moved, ["replaced"] = replaced };
+            var id = ts.Id.Value;
+            Commit(tr, warnings);
+            return new Dictionary<string, object> { ["id"] = id, ["points"] = pts.Count, ["profile"] = usedProfile, ["moved"] = moved, ["replaced"] = replaced, ["lift"] = lift };
         }
 
         private static CurveLoop Profile(Document doc, JsonElement t)
@@ -255,7 +272,7 @@ namespace ContoursToRevit
             inst.SetLocation(center, BoxPlacement.Center);
             try { inst.DrawLayer = DrawLayer.Background; } catch { /* ignore */ }
             Storage.Tag(inst, "aerial", im.Str("meta"));
-            t.Commit();
+            Commit(t, warnings);
             return new Dictionary<string, object> { ["id"] = inst.Id.Value, ["path"] = path, ["reloaded"] = reused, ["view"] = view.Name };
         }
 
@@ -306,7 +323,7 @@ namespace ContoursToRevit
             }
             else inst.Pinned = true;
             Storage.Tag(inst, role, d.Str("meta"));
-            t.Commit();
+            Commit(t, warnings);
             return new Dictionary<string, object> { ["id"] = inst.Id.Value, ["path"] = path, ["reloaded"] = reloaded };
         }
 
@@ -325,17 +342,28 @@ namespace ContoursToRevit
         private readonly List<string> _sink;
         public QuietWarnings(List<string> sink) { _sink = sink; }
 
+        /// <summary>Errors from the last transaction that was rolled back (shown in the web panel instead of a Revit dialog).</summary>
+        public static readonly List<string> LastErrors = new();
+
         public FailureProcessingResult PreprocessFailures(FailuresAccessor a)
         {
+            var error = false;
             foreach (var f in a.GetFailureMessages())
             {
-                if (f.GetSeverity() == FailureSeverity.Warning)
+                var sev = f.GetSeverity();
+                if (sev == FailureSeverity.Warning)
                 {
                     _sink.Add(f.GetDescriptionText());
                     a.DeleteWarning(f);
                 }
+                else if (sev == FailureSeverity.Error || sev == FailureSeverity.DocumentCorruption)
+                {
+                    error = true;
+                    LastErrors.Add(f.GetDescriptionText());
+                }
             }
-            return FailureProcessingResult.Continue;
+            // An error can't be ignored: undo just this step quietly and report it, rather than stopping on a dialog.
+            return error ? FailureProcessingResult.ProceedWithRollBack : FailureProcessingResult.Continue;
         }
     }
 }
