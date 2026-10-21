@@ -3,6 +3,8 @@
 // the browser with laz-perf (WASM), and turned into a roof surface per footprint. Heights are measured against the
 // lidar's own ground points next to each building, so the lidar's vertical datum never matters.
 
+import { orthogonalize, dominantAngle, prismMass, mergeMass, clipHalf, polyArea } from './massing.js?v=0.37.0';
+
 const RESOURCES = 'https://raw.githubusercontent.com/hobuinc/usgs-lidar/master/boundaries/resources.geojson';
 const R_EARTH = 6378137;
 const GROUND = 2, BUILDING = 6, NOISE = new Set([7, 18]);
@@ -178,7 +180,7 @@ const pct = (a, p) => { if (!a.length) return NaN; const s = Float64Array.from(a
  * Others are left as they were (their dataset height, or the assumed one). Returns counts.
  * opts: { zAt (native → output Z, the site's DEM), zPerM (m → output), nativePerM }.
  */
-export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5 }) {
+export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5, style = 'clean', tris = null }) {
   const D = await delaunator();
   const m = nativePerM;                       // native units per metre
   const idx = lid._idx ??= bucket(lid, 10 * m);
@@ -208,6 +210,13 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
     let pts = pin.filter(i => lid.z[i] - g > 1.5);
     if (lid.r && pts.some(i => lid.r[i] > 0)) pts = pts.filter(i => lid.r[i] === 1);
     if (pts.length < Math.max(6, areaM2 * 0.2)) { skipped++; continue; } // too few returns: new building, under trees, or no coverage
+    if (style === 'clean') {
+      const r = cleanBuilding(b, pts, lid, g, gDem, zPerM, m, tris);
+      if (r === 'rejected') { rejected++; skipped++; }
+      else if (r) { used++; if (r === 'flat') flat++; else shaped++; b.roofType = r; }
+      else skipped++;
+      continue;
+    }
     // Roof raster. Coarse cells: highest return per cell. Fine cells (smaller than the point spacing): a TIN
     // through the returns, sampled at each cell centre. Then a 3×3 median drops spikes, and holes are filled.
     const nx = Math.max(1, Math.ceil((x1 - x0) / cell)), ny = Math.max(1, Math.ceil((y1 - y0) / cell));
@@ -608,3 +617,182 @@ function fitPlane(qs, X, Y, h) {
   const a = (cxz * cyy - cyz * cxy) / det, b = (cyz * cxx - cxz * cxy) / det;
   return [a, b, mz - a * mx - b * my];
 }
+
+
+/**
+ * Clean massing from lidar: a squared-up footprint and one simple roof — flat, gable, hip, or up to four stepped
+ * flat tiers — whichever explains the roof returns best. Works in the building's own frame (x along its main
+ * direction), so tiers come out square to the walls. Returns 'flat' | 'gable' | 'hip' | 'tiered', 'rejected', or
+ * null (nothing usable). Sets b.mass, b.top, b.roofAt, b.heightKnown, b.hSrc, b.massRing.
+ */
+function cleanBuilding(b, idx, lid, g, gDem, zPerM, m, tris) {
+  const ring = orthogonalize(b.ring, 0.6 * m);
+  const ang = dominantAngle(ring), c = Math.cos(ang), s = Math.sin(ang);
+  let cx = 0, cy = 0; for (const [x, y] of ring) { cx += x; cy += y; } cx /= ring.length; cy /= ring.length;
+  // Frame in metres: u along the main direction, v across.
+  const toF = (x, y) => [((x - cx) * c + (y - cy) * s) / m, (-(x - cx) * s + (y - cy) * c) / m];
+  const fromF = (u, v) => [cx + (u * c - v * s) * m, cy + (u * s + v * c) * m];
+  const RF = ring.map(([x, y]) => toF(x, y));
+  let u0 = Infinity, v0 = Infinity, u1 = -Infinity, v1 = -Infinity;
+  for (const [u, v] of RF) { if (u < u0) u0 = u; if (u > u1) u1 = u; if (v < v0) v0 = v; if (v > v1) v1 = v; }
+  const areaM2 = polyArea(RF);
+  // Roof heights on a 1 m raster in the frame: highest single return per cell, 3×3 median, holes filled.
+  const C = 1, nu = Math.max(1, Math.ceil((u1 - u0) / C)), nv = Math.max(1, Math.ceil((v1 - v0) / C));
+  const top = new Float32Array(nu * nv).fill(NaN);
+  for (const i of idx) {
+    const [u, v] = toF(lid.x[i], lid.y[i]);
+    if (!inRing(RF, u, v)) continue;
+    const a = Math.min(nu - 1, Math.max(0, Math.floor((u - u0) / C))), bq = Math.min(nv - 1, Math.max(0, Math.floor((v - v0) / C)));
+    const h = lid.z[i] - g, q = bq * nu + a;
+    if (!(top[q] >= h)) top[q] = h;
+  }
+  const inC = new Uint8Array(nu * nv), cells = [];
+  for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) if (inRing(RF, u0 + (i + 0.5) * C, v0 + (j + 0.5) * C)) { inC[j * nu + i] = 1; cells.push(j * nu + i); }
+  if (cells.length < 4) return null;
+  const H = new Float32Array(nu * nv).fill(NaN);
+  for (const q of cells) {
+    const i = q % nu, j = (q / nu) | 0, vals = [];
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      const a = i + di, bq = j + dj; if (a < 0 || bq < 0 || a >= nu || bq >= nv) continue;
+      const t = top[bq * nu + a]; if (Number.isFinite(t)) vals.push(t);
+    }
+    if (vals.length >= 2) H[q] = median(vals);
+  }
+  const have = cells.filter(q => Number.isFinite(H[q]));
+  if (have.length < Math.max(4, cells.length * 0.25)) return null;
+  for (let pass = 0; pass < 60; pass++) {
+    let left = 0;
+    for (const q of cells) {
+      if (Number.isFinite(H[q])) continue;
+      const i = q % nu, j = (q / nu) | 0; let sum = 0, k = 0;
+      for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const a = i + di, bq = j + dj; if (a < 0 || bq < 0 || a >= nu || bq >= nv) continue;
+        const t = H[bq * nu + a]; if (Number.isFinite(t)) { sum += t; k++; }
+      }
+      if (k) H[q] = sum / k; else left++;
+    }
+    if (!left) break;
+  }
+  const hs = cells.map(q => H[q]).filter(Number.isFinite);
+  const p10 = pct(hs, 0.1), p50 = pct(hs, 0.5), p80 = pct(hs, 0.8), p90 = pct(hs, 0.9);
+  // Trees: below tree height, a rough roof far above the dataset height is canopy, not building.
+  const dataH = b.heightKnown ? (b.top - b.base) / zPerM : null;
+  if (p90 < 35 && dataH && p90 > Math.max(2 * dataH, dataH + 6)) return 'rejected';
+  const zOf = h => gDem + h * zPerM;
+  const triF = P => (tris ? tris(P) : []);
+
+  // --- candidate roofs: flat, gable (ridge along u or v), hip ---
+  const um = (u0 + u1) / 2, vm = (v0 + v1) / 2, hu = (u1 - u0) / 2, hv = (v1 - v0) / 2;
+  const at = q => [u0 + ((q % nu) + 0.5) * C, v0 + (((q / nu) | 0) + 0.5) * C];
+  const fitLin = xf => { // h = e + s·x by least squares over the roof cells; returns { e, s, rms }
+    let n = 0, sx = 0, sy = 0, sxx = 0, sxy = 0;
+    for (const q of cells) { const h = H[q]; if (!Number.isFinite(h)) continue; const x = xf(...at(q)); n++; sx += x; sy += h; sxx += x * x; sxy += x * h; }
+    const d = n * sxx - sx * sx; if (n < 4 || Math.abs(d) < 1e-9) return null;
+    const sl = (n * sxy - sx * sy) / d, e = (sy - sl * sx) / n;
+    let r = 0; for (const q of cells) { const h = H[q]; if (!Number.isFinite(h)) continue; const x = xf(...at(q)); r += (h - e - sl * x) ** 2; }
+    return { e, s: sl, rms: Math.sqrt(r / n) };
+  };
+  const flatRms = Math.sqrt(hs.reduce((a, h) => a + (h - p50) ** 2, 0) / hs.length);
+  const models = [];
+  if (areaM2 < 2500 && Math.min(hu, hv) > 2) {
+    const gU = fitLin((u, v) => hv - Math.abs(v - vm)); if (gU) models.push({ kind: 'gable', axis: 'u', ...gU });
+    const gV = fitLin((u, v) => hu - Math.abs(u - um)); if (gV) models.push({ kind: 'gable', axis: 'v', ...gV });
+    const hp = fitLin((u, v) => Math.min(hv - Math.abs(v - vm), hu - Math.abs(u - um))); if (hp) models.push({ kind: 'hip', ...hp, rms: hp.rms * 1.03 });
+  }
+  const pitched = models.filter(md => md.s > Math.tan(8 * Math.PI / 180) && md.s < Math.tan(55 * Math.PI / 180) && md.e > 2)
+    .sort((a2, b2) => a2.rms - b2.rms)[0];
+  let mass, roofAt, kind;
+  if (pitched && pitched.rms < 0.7 * flatRms && pitched.rms < 1.2) {
+    kind = pitched.kind;
+    const e = pitched.e, sl = pitched.s;
+    const hF = pitched.kind === 'hip' ? (u, v) => e + sl * Math.min(hv - Math.abs(v - vm), hu - Math.abs(u - um))
+      : pitched.axis === 'u' ? (u, v) => e + sl * (hv - Math.abs(v - vm)) : (u, v) => e + sl * (hu - Math.abs(u - um));
+    // Roof pieces: the footprint clipped to each plane's zone (each piece is exactly planar).
+    const d = hv - hu;
+    const pieces = pitched.kind === 'hip'
+      ? [[[0, 1, -vm], [-1, 1, um - vm - d], [1, 1, -um - vm - d]],      // v ≥ vm side
+         [[0, -1, vm], [-1, -1, um + vm - d], [1, -1, -um + vm - d]],    // v ≤ vm side
+         [[1, 0, -um], [1, -1, -um + vm + d], [1, 1, -um - vm + d]],     // u ≥ um end
+         [[-1, 0, um], [-1, -1, um + vm + d], [-1, 1, um - vm + d]]]     // u ≤ um end
+      : pitched.axis === 'u' ? [[[0, 1, -vm]], [[0, -1, vm]]] : [[[1, 0, -um]], [[-1, 0, um]]];
+    mass = { v: [], f: [] };
+    // Walls: the outline with every crossing of a crease inserted, tops following the roof.
+    const creases = pitched.kind === 'hip'
+      ? [[0, 1, -vm], [1, 0, -um], [-1, 1, um - vm - d], [1, 1, -um - vm - d], [-1, 1, um - vm + d], [1, 1, -um - vm + d]]
+      : pitched.axis === 'u' ? [[0, 1, -vm]] : [[1, 0, -um]];
+    const W = [];
+    for (let i = 0; i < RF.length; i++) {
+      const p = RF[i], q = RF[(i + 1) % RF.length];
+      W.push(p);
+      const ts = [];
+      for (const [a2, b2, c2] of creases) { const fp = a2 * p[0] + b2 * p[1] + c2, fq = a2 * q[0] + b2 * q[1] + c2; if ((fp > 0) !== (fq > 0) && fp !== fq) ts.push(fp / (fp - fq)); }
+      ts.sort((x, y) => x - y).forEach(t => { if (t > 1e-3 && t < 1 - 1e-3) W.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]); });
+    }
+    const nW = W.length;
+    W.forEach(([u, v]) => mass.v.push([...fromF(u, v), b.base]));
+    W.forEach(([u, v]) => mass.v.push([...fromF(u, v), zOf(hF(u, v))]));
+    for (let i = 0; i < nW; i++) { const j = (i + 1) % nW; mass.f.push([i, j, nW + j, nW + i]); }
+    const bot = RF.map(([u, v]) => { mass.v.push([...fromF(u, v), b.base]); return mass.v.length - 1; });
+    for (const [a, b2, c2] of triF(RF)) mass.f.push([bot[c2], bot[b2], bot[a]]);
+    for (const hp of pieces) {
+      let P = RF.slice();
+      for (const [a2, b2, c2] of hp) { P = clipHalf(P, a2, b2, c2); if (P.length < 3) break; }
+      if (P.length < 3 || polyArea(P) < 0.05) continue;
+      const ids = P.map(([u, v]) => { mass.v.push([...fromF(u, v), zOf(hF(u, v))]); return mass.v.length - 1; });
+      for (const [a, b2, c2] of triF(P)) mass.f.push([ids[a], ids[b2], ids[c2]]);
+    }
+    roofAt = (x, y) => { const [u, v] = toF(x, y); return zOf(hF(u, v)); };
+  } else if (p90 - p10 > 3 && areaM2 > 150) {
+    // Stepped: up to four level tiers (peaks of the height histogram ≥ 8 % of the roof, ≥ 3 m apart).
+    kind = 'tiered';
+    const bins = new Map();
+    for (const h of hs) { const k2 = Math.round(h); bins.set(k2, (bins.get(k2) || 0) + 1); }
+    const sm = [...bins.keys()].sort((a2, b2) => a2 - b2).map(k2 => [k2, (bins.get(k2 - 1) || 0) * 0.5 + bins.get(k2) + (bins.get(k2 + 1) || 0) * 0.5]);
+    const peaks = sm.filter(([k2, n], i) => n >= hs.length * 0.08 && (i === 0 || n >= sm[i - 1][1]) && (i === sm.length - 1 || n >= sm[i + 1][1]))
+      .sort((a2, b2) => b2[1] - a2[1]);
+    const levels = [];
+    for (const [k2] of peaks) if (levels.every(l => Math.abs(l - k2) >= 3) && levels.length < 4) levels.push(k2);
+    if (!levels.length) levels.push(p80);
+    levels.sort((a2, b2) => a2 - b2);
+    const lab = new Int8Array(nu * nv).fill(-1);
+    for (const q of cells) { let bi = 0, bd = Infinity; levels.forEach((l, i) => { const dd = Math.abs(H[q] - l); if (dd < bd) { bd = dd; bi = i; } }); lab[q] = bi; }
+    for (let pass = 0; pass < 2; pass++) {               // majority clean-up
+      const src = lab.slice();
+      for (const q of cells) {
+        const i = q % nu, j = (q / nu) | 0, cnt = new Map();
+        for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) { const a = i + di, bq = j + dj; if (a < 0 || bq < 0 || a >= nu || bq >= nv || !inC[bq * nu + a]) continue; const l = src[bq * nu + a]; cnt.set(l, (cnt.get(l) || 0) + 1); }
+        let bl = src[q], bc = 0; for (const [l, n] of cnt) if (n > bc) { bc = n; bl = l; }
+        if (bc >= 5) lab[q] = bl;
+      }
+    }
+    // Tier heights: the 70th percentile of each tier's cells.
+    const tierH = levels.map((l, i) => { const v = cells.filter(q => lab[q] === i).map(q => H[q]); return v.length ? pct(v, 0.7) : l; });
+    mass = prismMass(RF.map(([u, v]) => fromF(u, v)), b.base, zOf(tierH[0]), P => triF(P));
+    for (let t = 1; t < levels.length; t++) {
+      const mask = (i, j) => i >= 0 && j >= 0 && i < nu && j < nv && inC[j * nu + i] && lab[j * nu + i] >= t;
+      for (let rg of traceCells(mask, nu, nv)) {
+        rg = rg.map(([i, j]) => [u0 + i * C, v0 + j * C]);
+        if (polyArea(rg) < 25) continue;                   // ignore tier bits under ~270 sf
+        rg = orthogonalize(rg, 1.2, 0);                     // already square to the frame: tidy the stair-steps
+        if (rg.length < 3) continue;
+        mergeMass(mass, prismMass(rg.map(([u, v]) => fromF(u, v)), b.base, zOf(tierH[t]), P => triF(P)));
+      }
+    }
+    roofAt = (x, y) => { const [u, v] = toF(x, y); const i = Math.floor((u - u0) / C), j = Math.floor((v - v0) / C); const l = i >= 0 && j >= 0 && i < nu && j < nv ? lab[j * nu + i] : 0; return zOf(tierH[Math.max(0, l)]); };
+  } else {
+    kind = 'flat';
+    const z = zOf(p80);
+    mass = prismMass(ring, b.base, z, P => triF(P));
+    roofAt = () => z;
+  }
+  if (!mass.f.length) return null;
+  b.mass = mass;
+  b.massRing = ring;
+  b.roofAt = roofAt;
+  b.top = Math.max(...mass.v.map(p => p[2]));
+  b.heightKnown = true;
+  b.hSrc = 'lidar';
+  return kind;
+}
+
+const traceCells = (mask, nx, ny) => traceMask(mask, nx, ny);

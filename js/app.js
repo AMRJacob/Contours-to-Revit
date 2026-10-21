@@ -1,18 +1,19 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.36.0';
-import { fetchElevation, sample } from './dem.js?v=0.36.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.36.0';
-import { Dxf } from './dxf.js?v=0.36.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.36.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.36.0';
-import { Flow } from './flow.js?v=0.36.0';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.36.0';
-import { loadLidar, applyLidar } from './lidar.js?v=0.36.0';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.36.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.36.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.37.0';
+import { fetchElevation, sample } from './dem.js?v=0.37.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.37.0';
+import { Dxf } from './dxf.js?v=0.37.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.37.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.37.0';
+import { Flow } from './flow.js?v=0.37.0';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.37.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.37.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.37.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.37.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.37.0';
 
-const VERSION = '0.36.0';
+const VERSION = '0.37.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -261,7 +262,7 @@ function saveSettings() {
     units: units(), spacing: $('spacing').value, interval: $('interval').value,
     localOrigin: $('local-origin').checked, smooth: $('smooth').checked,
     zone: $('zone').value, bldgMode: $('bldg-mode').value, bldgFfe: $('bldg-ffe').value, bldgH: $('bldg-h').value,
-    bldgLidar: $('bldg-lidar').checked, bldgLidarRes: $('bldg-lidar-res').value,
+    bldgLidar: $('bldg-lidar').checked, bldgLidarRes: $('bldg-lidar-res').value, bldgStyle: $('bldg-style').value,
   });
 }
 
@@ -279,13 +280,16 @@ function restoreSettings() {
   if (s.bldgH != null) $('bldg-h').value = s.bldgH;
   $('bldg-lidar').checked = !!s.bldgLidar;
   if (['1', '2', '5'].includes(String(s.bldgLidarRes))) $('bldg-lidar-res').value = String(s.bldgLidarRes);
+  if (['clean', 'planes'].includes(s.bldgStyle)) $('bldg-style').value = s.bldgStyle;
   bldgUi();
 }
+/** Building massing style: 'clean' (squared footprints, simple roofs) or 'planes' (lidar roof planes). */
+const massStyle = () => $('bldg-style')?.value === 'planes' ? 'planes' : 'clean';
 function bldgUi() {
   const m = $('bldg-mode').value;
   $('bldg-pad-row').hidden = m !== 'pad';
   $('bldg-h-row').hidden = m !== 'block';
-  $('bldg-lidar-row').hidden = !$('bldg-lidar').checked;
+  $('bldg-lidar-row').hidden = !$('bldg-lidar').checked || massStyle() !== 'planes';
   $('bldg-hint').textContent = m === 'off' ? ''
     : m === 'pad' ? 'Each footprint becomes a level pad (the CSV, contours and design surface all use it). Uses the building layer shown on the map — Microsoft, OpenStreetMap or FEMA. Assumed, not surveyed.'
     : 'Each footprint is raised to its roof (data height where known). Good for 3D views and water flow around buildings; for a Revit Toposolid you usually want pads or bare earth.';
@@ -297,7 +301,8 @@ document.querySelectorAll('input[name="units"]').forEach(r => r.addEventListener
 $('local-origin').addEventListener('change', () => { saveSettings(); applyOrigin(); });
 $('bldg-mode').addEventListener('change', bldgUi);
 $('bldg-lidar').addEventListener('change', bldgUi);
-['spacing', 'interval', 'smooth', 'bldg-mode', 'bldg-ffe', 'bldg-h', 'bldg-lidar', 'bldg-lidar-res'].forEach(id => $(id).addEventListener('change', () => {
+$('bldg-style').addEventListener('change', bldgUi);
+['spacing', 'interval', 'smooth', 'bldg-mode', 'bldg-ffe', 'bldg-h', 'bldg-lidar', 'bldg-lidar-res', 'bldg-style'].forEach(id => $(id).addEventListener('change', () => {
   onSiteChanged(false); saveSettings(); invalidate();
 }));
 $('zone').addEventListener('change', () => { updateZoneHint(); onSiteChanged(false); saveSettings(); invalidate(); });
@@ -414,7 +419,7 @@ $('generate').addEventListener('click', async () => {
 
 /** The building source used for the surface: the one shown on the map for a reopened project, else the most detailed. */
 function pickBuildingKey(c, failed) {
-  const order = ['bldgMs', 'bldgOsm', 'buildings'];
+  const order = ['bldgBest', 'bldgMs', 'bldgOsm', 'buildings'];
   const len = k => (k === 'buildings' ? c.buildings : c[k] || []).length;
   const ok = order.filter(k => !failed?.[k] && len(k) > 0);
   return (state.keepLayers && ok.find(k => visibility[k])) || ok[0] || null;
@@ -542,6 +547,8 @@ async function generate() {
     context.areasSource = aRes.status === 'fulfilled' ? aRes.value : null;
     context.widths = prepareWidths(wRes.status === 'fulfilled' ? wRes.value : [], { fwd: p.fwd, box, zAt, nativePerM, ftToNative: nativePerM * 0.3048 });
     context.bldgOsm = prepareContext({ buildings: osmRes.status === 'fulfilled' ? osmRes.value : [] }, { fwd: p.fwd, box, zAt, nativePerM, zPerM }).buildings;
+    // One layer from all three: hand-mapped OSM outlines first, then Microsoft, then FEMA; heights borrowed across.
+    context.bldgBest = combineBuildings(context);
     if (pRes.status === 'rejected') contextNotes.push(pRes.reason?.message || String(pRes.reason));
     if (fRes.status === 'rejected') contextNotes.push(`${fRes.reason?.message || fRes.reason} — flood zones are NOT included; generate again to retry.`);
     floodFailed = fRes.status === 'rejected';
@@ -575,14 +582,28 @@ async function generate() {
       setStatus('Fitting roofs to the lidar…');
       await tick();
       lidarInfo = { cellFt: Number($('bldg-lidar-res').value) || 1, name: lid.name, year: lid.year, n: lid.n, mb: lid.mb, hasBuildingClass: lid.hasBuildingClass, counts: {} };
-      for (const k of ['buildings', 'bldgMs', 'bldgOsm']) {
+      // The combined layer always; the single-source layers only if they are switched on (saves time).
+      for (const k of ['bldgBest', 'buildings', 'bldgMs', 'bldgOsm']) {
+        if (k !== 'bldgBest' && !visibility[k]) continue;
         const list = k === 'buildings' ? context.buildings : context[k];
-        if (list?.length) lidarInfo.counts[k] = await applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt: Number($('bldg-lidar-res').value) || 1 });
+        if (list?.length) lidarInfo.counts[k] = await applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt: Number($('bldg-lidar-res').value) || 1, style: massStyle(), tris: triangulate });
       }
     } catch (err) {
       console.error(err);
       lidarInfo = { error: err.message || String(err) };
       contextNotes.push(`Lidar building heights unavailable: ${lidarInfo.error}. Buildings use their dataset heights.`);
+    }
+  }
+
+  // Clean massing: every building without lidar massing gets a squared-up footprint extruded to its height.
+  if (context && massStyle() === 'clean') {
+    for (const k of ['bldgBest', 'buildings', 'bldgMs', 'bldgOsm']) {
+      for (const b of (k === 'buildings' ? context.buildings : context[k]) || []) {
+        if (b.mass || !b.ring || b.ring.length < 3) continue;
+        const ring = orthogonalize(b.ring, 0.6 * nativePerM);
+        b.mass = prismMass(ring, b.base, b.top, triangulate);
+        b.massRing = ring;
+      }
     }
   }
 
@@ -942,7 +963,7 @@ const LAYERS = [
   { key: 'points', label: 'Grid points', swatch: '#7bd88f', note: 'DXF only' },
 ];
 const visibility = (() => {
-  const v = { siteImage: true, contours: true, buildings: true, bldgMs: false, bldgOsm: false, roads: true, roadWidths: true, roadEdges: true, streetAreas: true, parking: true, sidewalks: true, imageFrame: true, parcels: true, flood: true, labels: true, points: false };
+  const v = { siteImage: true, contours: true, bldgBest: true, buildings: false, bldgMs: false, bldgOsm: false, roads: true, roadWidths: true, roadEdges: true, streetAreas: true, parking: true, sidewalks: true, imageFrame: true, parcels: true, flood: true, labels: true, points: false };
   try { Object.assign(v, JSON.parse(localStorage.getItem('c2r-layers') || '{}')); } catch { /* ignore */ }
   return v;
 })();
@@ -981,6 +1002,7 @@ function updateLayerCounts(site) {
     contours: site ? `${site.contours.length} levels` : '',
     buildings: c ? (site.bldgFailed?.buildings ? 'failed' : String(c.buildings.length)) : '',
     bldgMs: c ? (site.bldgFailed?.bldgMs ? 'failed' : String((c.bldgMs || []).length)) : '',
+    bldgBest: c ? String((c.bldgBest || []).length) : '',
     bldgOsm: c ? (site.bldgFailed?.bldgOsm ? 'failed' : String((c.bldgOsm || []).length)) : '',
     roads: c ? String(c.roads.length) : '',
     roadWidths: c ? (!site.ctxInclude.p ? 'AR only' : site.widthsFailed ? 'failed' : String((c.widths || []).length)) : '',
@@ -1001,7 +1023,7 @@ function updateLayerCounts(site) {
     layerDefaultsFor = site;
     if (state.keepLayers) state.keepLayers = false;
     else {
-      const order = ['bldgMs', 'bldgOsm', 'buildings'];
+      const order = ['bldgBest', 'bldgMs', 'bldgOsm', 'buildings'];
       const best = order.find(k => /^\d+$/.test(counts[k]) && Number(counts[k]) > 0);
       if (best) {
         for (const k of order) visibility[k] = k === best;
@@ -1299,7 +1321,7 @@ function addContours(d, site, avoid, labelsOn = true, contours = site.contours, 
 function lidarSummary(site, html) {
   const L = site.lidar, e = html ? escapeHtml : t => t;
   if (L.error) return `Lidar building heights unavailable (${e(L.error)}) — buildings use their dataset heights.`;
-  const name = { buildings: 'USA Structures', bldgMs: 'Microsoft', bldgOsm: 'OpenStreetMap' };
+  const name = { bldgBest: 'Combined', buildings: 'USA Structures', bldgMs: 'Microsoft', bldgOsm: 'OpenStreetMap' };
   const parts = Object.entries(L.counts).map(([k, c]) => `${name[k]} ${c.used} of ${c.used + c.skipped} (${c.flat} flat, ${c.shaped} pitched or stepped${c.rejected ? `; ${c.rejected} too tree-covered to trust` : ''})`);
   return `Heights & roofs from USGS lidar ${e(L.name)}${L.year ? ` (flown ${L.year})` : ''}: ${parts.join(' · ') || 'no footprints'}. Others keep their dataset height.`;
 }
@@ -1542,6 +1564,13 @@ function makeReadme(site, v = vis()) {
         `Heights:              ${bs.filter(b => b.heightKnown).length} of ${bs.length} from the dataset (meters; lidar-derived where`,
         '                      available, otherwise modelled by ORNL). Missing heights use 3.5 m (one storey).',
         '                      Massing is a flat-roofed extrusion from the LOWEST ground point under each footprint.');
+    }
+    if (v.bldgBest) {
+      const cb = site.context.bldgBest || [];
+      const from = k => cb.filter(b => b.combinedFrom === k).length;
+      L_(`Buildings (BEST):     ${cb.length} combined footprints — ${from('bldgOsm')} OpenStreetMap, ${from('bldgMs')} Microsoft, ${from('buildings')} FEMA/ORNL`,
+        '                      (a footprint is skipped when a better source already maps it). Heights: lidar where measured,',
+        `                      else the footprint's own or an overlapping dataset height; ${cb.filter(b => !b.heightKnown).length} use 3.5 m. ${massStyle() === 'clean' ? 'Footprints squared up' : 'Footprints as mapped'}.`);
     }
     if (v.bldgMs) {
       const ms = site.context.bldgMs || [];

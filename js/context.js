@@ -564,6 +564,7 @@ export function hatchPolygon(rings, angleDeg, spacing, box) {
 // ---------- Additional building footprint sources ----------
 /** Footprint sources shown as separate toggles. `key` is both the visibility key and the context property. */
 export const BUILDING_SOURCES = [
+  { key: 'bldgBest', label: 'Buildings · Combined', short: 'Combined footprints (OpenStreetMap, then Microsoft, then FEMA/ORNL)', color: '#f5f5f4', tag: 'BEST' },
   { key: 'buildings', label: 'Buildings · FEMA/ORNL', short: 'FEMA/ORNL USA Structures', color: '#4fd1ff', tag: 'FEMA' },
   { key: 'bldgMs', label: 'Buildings · Microsoft', short: 'Microsoft Building Footprints', color: '#a3e635', tag: 'MSFT' },
   { key: 'bldgOsm', label: 'Buildings · OpenStreetMap', short: 'OpenStreetMap buildings', color: '#c084fc', tag: 'OSM' },
