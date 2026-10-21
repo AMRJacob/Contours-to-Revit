@@ -1,17 +1,17 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.25.1';
-import { fetchElevation, sample } from './dem.js?v=0.25.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.25.1';
-import { Dxf } from './dxf.js?v=0.25.1';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.25.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.25.1';
-import { Flow } from './flow.js?v=0.25.1';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.25.1';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.25.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.25.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.25.2';
+import { fetchElevation, sample } from './dem.js?v=0.25.2';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.25.2';
+import { Dxf } from './dxf.js?v=0.25.2';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.25.2';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.25.2';
+import { Flow } from './flow.js?v=0.25.2';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.25.2';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.25.2';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.25.2';
 
-const VERSION = '0.25.1';
+const VERSION = '0.25.2';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -4275,6 +4275,8 @@ async function projImport(snap, name, key) {
   meta.updated = now; meta.rect = snap.rect || null; meta.features = snap.summary?.features ?? 0;
   if (snap.rect) { const c = L.latLngBounds(snap.rect).getCenter(); meta.place = fmtLatLon(c.lat, c.lng); }
   const clean = { ...snap }; delete clean.savedAt; delete clean.app;
+  // The brush layer travels as base64 text in the model (JSON can't hold a Float32Array).
+  if (clean.design && typeof clean.design.brush === 'string') clean.design = { ...clean.design, brush: b64ToF32(clean.design.brush) };
   await idb.set(projDataKey(meta.id), clean).catch(() => {});
   await projStoreList();
   PROJ.dirty = false;
@@ -4309,7 +4311,11 @@ initRevit({
   makeDxf: site => makeDxf(site, vis()),
   makeNewDxf: site => makeNewDxf(site, vis()),
   prefix: () => (folder.prefix || 'site').replace(/[\\/:*?"<>|]+/g, '-'),
-  snapshot: () => projSnapshot(),
+  snapshot: () => {
+    const snap = projSnapshot();
+    if (snap.design?.brush instanceof Float32Array) snap.design = { ...snap.design, brush: f32ToB64(snap.design.brush) };
+    return snap;
+  },
   openSnapshot: projImport,
   /** The site's design when it has changes (loads the saved design for this site the first time). */
   design: site => {

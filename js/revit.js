@@ -350,9 +350,10 @@ function readForm() {
   const site = api.site();
   const o = loadOpts();
   const v = id => $(id)?.value;
-  const c = id => !!$(id)?.checked;
+  // A disabled box (no design yet) keeps the remembered choice instead of saving "off".
+  const c = (id, key) => { const el = $(id); return !el || el.disabled ? (o[key] ?? defaults(site)[key]) : el.checked; };
   Object.assign(o, {
-    exist: c('rv-exist'), prop: c('rv-prop'), img: c('rv-img'), dxf: c('rv-dxf'), pdxf: c('rv-pdxf'),
+    exist: c('rv-exist', 'exist'), prop: c('rv-prop', 'prop'), img: c('rv-img', 'img'), dxf: c('rv-dxf', 'dxf'), pdxf: c('rv-pdxf', 'pdxf'),
     typeId: v('rv-type'), levelId: v('rv-level'), viewId: v('rv-view'),
     phaseE: v('rv-phE'), phaseD: v('rv-phD'), phaseP: v('rv-phP'),
     tol: Number(v('rv-tol')) || TOLS[site.units][2],
@@ -401,7 +402,8 @@ function resultList(r) {
   const name = { coordinates: 'Shared coordinates', existing: 'Existing Toposolid', proposed: 'Proposed Toposolid', aerial: 'Aerial image', 'dxf-existing': 'Contours DXF', 'dxf-proposed': 'Proposed DXF', state: 'Site saved in the model' };
   const ids = r.results.filter(x => x.ok && x.id).map(x => x.id);
   const items = r.results.map(x => `<li class="${x.ok ? 'ok' : 'bad'}">${esc(name[x.role] || x.role)}: ${x.ok
-    ? (x.role === 'existing' || x.role === 'proposed' ? `${x.replaced ? 'replaced' : 'created'}, ${Number(x.points).toLocaleString()} points${x.profile ? ', boundary outline' : ''}`
+    ? (x.kept ? 'already in the model — kept as is'
+      : x.role === 'existing' || x.role === 'proposed' ? `${x.replaced ? 'replaced' : 'created'}, ${Number(x.points).toLocaleString()} points${x.profile ? ', boundary outline' : ''}`
       : x.role === 'coordinates' ? (x.check > 0.9999 ? 'set and checked' : 'set — check the angle')
       : x.role === 'aerial' ? `${x.reloaded ? 'reloaded' : 'placed'} in “${esc(x.view)}”`
       : x.role.startsWith('dxf') ? (x.reloaded ? 'reloaded' : 'linked') : 'done')
@@ -533,6 +535,7 @@ async function send() {
 
     status('Revit is building the site…');
     const r = await call('import', job);
+    if (o.exist && oldEx && !job.toposolids.some(t => t.role === 'existing')) r.results.unshift({ role: 'existing', ok: true, kept: true });
     lastResult = r;
     pendingPlacement = null;
     const bad = r.results.filter(x => !x.ok);
