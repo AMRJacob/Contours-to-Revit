@@ -354,7 +354,7 @@ function sendForm(site, P, snapBtn) {
     <summary>Options <span class="sub" id="rv-more-sum"></span></summary>
     <div class="field"><label for="rv-type">Toposolid type</label>${sel('type', model.toposolidTypes, o.typeId)}</div>
     <div class="field"><label for="rv-level">Level</label>${sel('level', model.levels, o.levelId)}</div>
-    <div class="field"><label for="rv-phE">Existing ground: phase created / demolished</label><div class="align-row">${sel('phE', phases, o.phaseE)}${sel('phD', phases, o.phaseD, '<option value="">not demolished</option>')}</div></div>
+    <div class="field"><label for="rv-phE">Existing ground: phase created / demolished</label><p class="hint">Demolished only when proposed grading is in the model too — otherwise the site would vanish from New Construction views.</p><div class="align-row">${sel('phE', phases, o.phaseE)}${sel('phD', phases, o.phaseD, '<option value="">not demolished</option>')}</div></div>
     <div class="field"><label for="rv-phP">Proposed grading: phase created</label>${sel('phP', phases, o.phaseP)}</div>
     <div class="field"><label for="rv-tol">Surface detail</label><select id="rv-tol">${TOLS[u].map(t => `<option value="${t}" ${t === o.tol ? 'selected' : ''}>within ${t} ${u}</option>`).join('')}</select>
       <p class="hint">Points are kept where the ground bends, so flat areas use few points. Finer detail = more points, slower in Revit.</p></div>
@@ -430,6 +430,9 @@ function replaceReason(site, ex, tol, meta) {
   if (meta.tol && tol * kOf(site) < meta.tol - 1e-6) return 'more detail';
   if (meta.bldg !== (site.bldgSurface ? site.bldgSurface.mode : 'off')) return 'buildings setting changed';
   if (meta.dem && meta.dem !== demLabel(site)) return 'different elevation data';
+  const wantDemo = !!($('rv-prop')?.checked && api.design(site)) || !!taggedOne('proposed');
+  const o = loadOpts();
+  if ((meta.demolished ?? true) !== (wantDemo && o.phaseD !== '')) return wantDemo ? 'to demolish it under the proposed grading' : 'so it shows in New Construction views';
   return '';
 }
 const demLabel = site => (site.dem?.contributions || []).map(c => c.tier?.label).join('+');
@@ -508,7 +511,7 @@ async function onClick(e) {
 function onChange(e) {
   const id = e.target.id;
   if (id === 'rv-exist-replace') e.target.dataset.touched = '1';
-  if (e.target.closest('#rv-body') && id?.startsWith('rv-') && id !== 'rv-setcoords') { readForm(); if (id === 'rv-tol') updateCounts(); }
+  if (e.target.closest('#rv-body') && id?.startsWith('rv-') && id !== 'rv-setcoords') { readForm(); if (id === 'rv-tol' || id === 'rv-prop' || id === 'rv-phD') updateCounts(); }
 }
 
 async function choosePlacement(site) {
@@ -561,10 +564,13 @@ async function send() {
     const profile = profileOf(site);
     const meta = (t, extent) => JSON.stringify({ v: 1, extent, s: site.grid.s * site.toOut * k, tol: o.tol * k, n: t.count, bldg: site.bldgSurface ? site.bldgSurface.mode : 'off', dem: demLabel(site), date, zone: site.zone.code });
     const oldEx = taggedOne('existing');
+    // Existing ground is only demolished (hidden in "Show Complete" New Construction views) when proposed grading
+    // replaces it; with no proposed Toposolid it must stay visible.
+    const hasProposed = !!((o.prop && pr) || taggedOne('proposed'));
     if (o.exist && (!oldEx || $('rv-exist-replace')?.checked)) {
       status('Preparing the existing Toposolid…');
       const t = toInternal(site, ex.pts);
-      job.toposolids.push({ role: 'existing', points: t.pts, profile, typeId: Number(o.typeId), levelId: Number(o.levelId), phaseCreated: Number(o.phaseE) || null, phaseDemolished: Number(o.phaseD) || null, replaceId: oldEx?.id ?? null, meta: meta(ex, t.extent), comment: `Contours to Revit — existing ground (${date})` });
+      job.toposolids.push({ role: 'existing', points: t.pts, profile, typeId: Number(o.typeId), levelId: Number(o.levelId), phaseCreated: Number(o.phaseE) || null, phaseDemolished: hasProposed ? Number(o.phaseD) || null : null, replaceId: oldEx?.id ?? null, meta: JSON.stringify({ ...JSON.parse(meta(ex, t.extent)), demolished: hasProposed && !!Number(o.phaseD) }), comment: `Contours to Revit — existing ground (${date})` });
     }
     if (o.prop && pr) {
       status('Preparing the proposed Toposolid…');
