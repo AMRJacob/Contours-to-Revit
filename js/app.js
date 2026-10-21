@@ -1,18 +1,18 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.35.3';
-import { fetchElevation, sample } from './dem.js?v=0.35.3';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.35.3';
-import { Dxf } from './dxf.js?v=0.35.3';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.35.3';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.35.3';
-import { Flow } from './flow.js?v=0.35.3';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.35.3';
-import { loadLidar, applyLidar } from './lidar.js?v=0.35.3';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.35.3';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.35.3';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.36.0';
+import { fetchElevation, sample } from './dem.js?v=0.36.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.36.0';
+import { Dxf } from './dxf.js?v=0.36.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.36.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.36.0';
+import { Flow } from './flow.js?v=0.36.0';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.36.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.36.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.36.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.36.0';
 
-const VERSION = '0.35.3';
+const VERSION = '0.36.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -1100,6 +1100,12 @@ document.querySelectorAll('.tab[data-view]').forEach(t => t.addEventListener('cl
   if (v === 'preview') renderPreview();
   else if (v === 'map') map.invalidateSize();
   if (v === '3d') v3Open(); else v3?.show(false);
+  // The Layers panel follows into the 3D view (same toggles: they drape on the ground and switch the massing).
+  const lp = document.querySelector('.layers-panel');
+  if (lp) {
+    if (v === '3d') { $('view3d').appendChild(lp); lp.classList.add('lp-3d'); }
+    else if (lp.classList.contains('lp-3d')) { lp.classList.remove('lp-3d'); map._controlCorners.topright.appendChild(lp); }
+  }
   flowKick();
 }));
 document.querySelectorAll('input[name="pv"]').forEach(r => r.addEventListener('change', renderPreview));
@@ -4152,7 +4158,7 @@ function v3Build(resetView = false) {
   const fresh = v3.site !== site;
   v3.setSurface({
     g: site.grid, z: prop ? des.z : site.grid.z, delta: prop && dz.showCf ? des.delta : null, box: site.box, k: site.toOut,
-    image: site.imagery, cutFillScale: dz.site === site ? dzScale() : 5, major: segs?.major, majorLv: segs?.majorLv,
+    image: v3Texture(site), cutFillScale: dz.site === site ? dzScale() : 5, major: visibility.contours ? segs?.major : null, majorLv: segs?.majorLv,
     resetZ: fresh, resetView: fresh || resetView,
   });
   v3.site = site;
@@ -4160,26 +4166,44 @@ function v3Build(resetView = false) {
   v3.setBuildings(v3Buildings(site));
 }
 
-/** Massing of the building layers shown on the map, as triangles (lidar roofs where measured). */
+/** Ground image for the 3D view: the aerial plus the map layers that are switched on (cached per site + layers). */
+let v3Tex = null;
+function v3Texture(site) {
+  if (!site.imagery) return null;
+  const key = JSON.stringify(vis());
+  if (v3Tex && v3Tex.site === site && v3Tex.key === key) return v3Tex.canvas;
+  const c = document.createElement('canvas');
+  c.width = site.imagery.width; c.height = site.imagery.height;
+  drawMap(c, { ...site, tinted: false, vis: vis() }, 'texture');
+  v3Tex = { site, key, canvas: c };
+  return c;
+}
+
+/** Massing of the building layers shown on the map, as triangles (lidar roofs where measured). Heights are kept at
+ *  true scale on the exaggerated ground, so the vertical exaggeration doesn't stretch the buildings. */
 function v3Buildings(site) {
+  const ex = v3?.ex || 1;
   const out = [];
   for (const src of BUILDING_SOURCES) {
     if (!visibility[src.key]) continue;
     const list = src.key === 'buildings' ? site.context?.buildings : site.context?.[src.key];
     for (const b of list || []) {
+      const n0 = out.length;
       if (b.mass) {
         for (const fc of b.mass.f) for (let t = 1; t + 1 < fc.length; t++) out.push(...b.mass.v[fc[0]], ...b.mass.v[fc[t]], ...b.mass.v[fc[t + 1]]);
-        continue;
+      } else {
+        const R = b.wall?.ring || b.ring, n = R?.length;
+        if (!R || n < 3) continue;
+        const tz = i => (b.wall ? b.wall.top[i] : b.ringTop ? b.ringTop[i] : b.top);
+        for (let i = 0; i < n; i++) {
+          const i2 = (i + 1) % n, [x0, y0] = R[i], [x1, y1] = R[i2];
+          out.push(x0, y0, b.base, x1, y1, b.base, x1, y1, tz(i2), x0, y0, b.base, x1, y1, tz(i2), x0, y0, tz(i));
+        }
+        if (b.roof) for (const t of b.roof.tris) for (const q of t) out.push(...b.roof.pts[q]);
+        else for (const t of triangulate(R)) for (const q of t) out.push(R[q][0], R[q][1], b.top);
       }
-      const R = b.wall?.ring || b.ring, n = R?.length;
-      if (!R || n < 3) continue;
-      const tz = i => (b.wall ? b.wall.top[i] : b.ringTop ? b.ringTop[i] : b.top);
-      for (let i = 0; i < n; i++) {
-        const i2 = (i + 1) % n, [x0, y0] = R[i], [x1, y1] = R[i2];
-        out.push(x0, y0, b.base, x1, y1, b.base, x1, y1, tz(i2), x0, y0, b.base, x1, y1, tz(i2), x0, y0, tz(i));
-      }
-      if (b.roof) for (const t of b.roof.tris) for (const q of t) out.push(...b.roof.pts[q]);
-      else for (const t of triangulate(R)) for (const q of t) out.push(R[q][0], R[q][1], b.top);
+      // True-scale height above this building's base (the view multiplies every height by the exaggeration).
+      if (ex !== 1) for (let i = n0 + 2; i < out.length; i += 3) out[i] = b.base + (out[i] - b.base) / ex;
     }
   }
   return out;

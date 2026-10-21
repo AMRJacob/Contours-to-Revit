@@ -1,6 +1,6 @@
 // Canvas rendering for the on-screen preview and the printable PNG contour map.
-import { BUILDING_SOURCES } from './context.js?v=0.35.3';
-import { labelPositions, isMajor } from './contours.js?v=0.35.3';
+import { BUILDING_SOURCES } from './context.js?v=0.36.0';
+import { labelPositions, isMajor } from './contours.js?v=0.36.0';
 
 /** Hillshade (0..1) for a grid; azimuth 315°, altitude 45°. */
 export function hillshade(g, zFactor = 1) {
@@ -82,17 +82,21 @@ function niceLength(target) {
  */
 export function drawMap(canvas, site, mode = 'preview') {
   const g = site.grid;
-  const xmin = g.x0, ymin = g.y0, xmax = g.x0 + (g.nx - 1) * g.s, ymax = g.y0 + (g.ny - 1) * g.s;
+  // 'texture': the 3D ground image — exactly the site box, aerial without hillshade, no contours (3D draws its own).
+  const tex = mode === 'texture';
+  const xmin = tex ? site.box.xmin : g.x0, ymin = tex ? site.box.ymin : g.y0;
+  const xmax = tex ? site.box.xmax : g.x0 + (g.nx - 1) * g.s, ymax = tex ? site.box.ymax : g.y0 + (g.ny - 1) * g.s;
   const W = canvas.width, H = canvas.height;
   const print = mode === 'print';
   const pad = print ? Math.round(W * 0.03) : 0;
   const footer = print ? Math.round(W * 0.16) : 0;
   const availW = W - 2 * pad, availH = H - 2 * pad - footer;
   const k = Math.min(availW / (xmax - xmin), availH / (ymax - ymin));
-  const mapW = (xmax - xmin) * k, mapH = (ymax - ymin) * k;
-  const ox = pad + (availW - mapW) / 2, oy = pad + (availH - mapH) / 2;
-  const X = x => ox + (x - xmin) * k;
-  const Y = y => oy + (ymax - y) * k;
+  const kx = tex ? W / (xmax - xmin) : k, ky = tex ? H / (ymax - ymin) : k;
+  const mapW = (xmax - xmin) * kx, mapH = (ymax - ymin) * ky;
+  const ox = tex ? 0 : pad + (availW - mapW) / 2, oy = tex ? 0 : pad + (availH - mapH) / 2;
+  const X = x => ox + (x - xmin) * kx;
+  const Y = y => oy + (ymax - y) * ky;
   const ctx = canvas.getContext('2d');
   const px = Math.max(1, W / 1400); // stroke scale
 
@@ -103,7 +107,9 @@ export function drawMap(canvas, site, mode = 'preview') {
   ctx.save();
   ctx.beginPath(); ctx.rect(ox, oy, mapW, mapH); ctx.clip();
   ctx.imageSmoothingEnabled = true;
-  if (site.imagery && !site.tinted) {
+  if (tex && site.imagery) {
+    ctx.drawImage(site.imagery, ox, oy, mapW, mapH);
+  } else if (site.imagery && !site.tinted) {
     ctx.drawImage(site.imagery, ox, oy, mapW, mapH);
     ctx.globalCompositeOperation = 'multiply';
     ctx.globalAlpha = 0.55;
@@ -116,8 +122,9 @@ export function drawMap(canvas, site, mode = 'preview') {
 
   // Contours
   const onImagery = site.imagery && !site.tinted;
-  const v = site.vis || { contours: true, buildings: true, roads: true, parcels: true, flood: true, labels: true };
+  const v = { ...(site.vis || { contours: true, buildings: true, roads: true, parcels: true, flood: true, labels: true }) };
   if (v.labels === undefined) v.labels = true;
+  if (tex) v.contours = false;
   const none = [];
   const minorCol = onImagery ? 'rgba(255,255,255,0.85)' : 'rgba(40,30,20,0.55)';
   const majorCol = onImagery ? '#ffb347' : 'rgba(60,30,10,0.95)';

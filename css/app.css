@@ -500,3 +500,4 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 #rv-settings .btn-block + .hint { margin-top: 6px; }
 #rv-settings .btn-block { margin-top: 6px; }
 .app-ver { font: 500 11px/1 var(--mono); color: var(--ink-3); vertical-align: middle; margin-left: 4px; letter-spacing: 0; }
+.layers-panel.lp-3d { position: absolute; top: 56px; right: 12px; z-index: 5; max-height: calc(100% - 70px); overflow: auto; }
