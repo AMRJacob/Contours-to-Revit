@@ -42,6 +42,11 @@ namespace ContoursToRevit
                     var im = job.Obj("image");
                     results.Add(Step("aerial", warnings, () => Image(doc, im, files, folder, prefix, warnings)));
                 }
+                if (job.Has("masses"))
+                {
+                    var ms = job.Obj("masses");
+                    results.Add(Step("masses", warnings, () => Masses.Run(doc, ms, warnings)));
+                }
                 if (job.Has("drape"))
                 {
                     var dr = job.Obj("drape");

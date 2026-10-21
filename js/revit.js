@@ -345,6 +345,11 @@ function sendForm(site, P, snapBtn) {
       ? `<label class="check"><input type="checkbox" id="rv-drape" ${o.drape ? 'checked' : ''}><span><strong>Aerial on the Toposolids</strong> — render material
       <small class="rv-state">Painted on the top of the existing and proposed Toposolids, for Realistic views and renderings.</small></span></label>`
       : `<p class="hint rv-state">Update the plugin to drape the aerial on the Toposolids as a material.</p>`}
+    ${host?.features?.includes('masses') ? (() => {
+      const bl = api.buildings(site), lid = bl.filter(x => x.b.hSrc === 'lidar').length;
+      return `<label class="check"><input type="checkbox" id="rv-masses" ${o.masses ? 'checked' : ''} ${bl.length ? '' : 'disabled'}><span><strong>Existing buildings</strong> — masses
+      <small class="rv-state">${bl.length ? `${bl.length} from the building layer${new Set(bl.map(x => x.tag)).size > 1 ? 's' : ''} shown on the map${lid ? `, ${lid} with lidar roofs` : ''}. Replaces masses sent before.` : 'Turn on a building layer on the map first.'}</small></span></label>`;
+    })() : ''}
     <label class="check"><input type="checkbox" id="rv-dxf" ${o.dxf ? 'checked' : ''}><span><strong>Contours &amp; context</strong> — DXF link (the map's shown layers)
       <small class="rv-state">${dxf ? 'Reloads the existing link.' : 'Linked and pinned at the Project Base Point.'}</small></span></label>
     <label class="check"><input type="checkbox" id="rv-pdxf" ${o.pdxf && des ? 'checked' : ''} ${des ? '' : 'disabled'}><span><strong>Proposed contours</strong> — DXF link
@@ -375,7 +380,7 @@ function defaults(site) {
   const av = model.activeView?.image ? model.activeView.id : (model.views.find(v => /site/i.test(v.name)) || model.views[0])?.id;
   const type = model.toposolidTypes.find(t => /site|topo|existing/i.test(t.name)) || model.toposolidTypes[0];
   return {
-    exist: true, prop: true, img: true, drape: true, dxf: true, pdxf: false,
+    exist: true, prop: true, img: true, drape: true, masses: false, dxf: true, pdxf: false,
     typeId: type?.id, levelId: lvl?.id, viewId: av,
     phaseE: ph[0]?.id, phaseD: ph.length > 1 ? ph[ph.length - 1].id : '', phaseP: ph[ph.length - 1]?.id,
     tol: TOLS[site.units][2],
@@ -389,7 +394,7 @@ function readForm() {
   // A disabled box (no design yet) keeps the remembered choice instead of saving "off".
   const c = (id, key) => { const el = $(id); return !el || el.disabled ? (o[key] ?? defaults(site)[key]) : el.checked; };
   Object.assign(o, {
-    exist: c('rv-exist', 'exist'), prop: c('rv-prop', 'prop'), img: c('rv-img', 'img'), drape: c('rv-drape', 'drape'), dxf: c('rv-dxf', 'dxf'), pdxf: c('rv-pdxf', 'pdxf'),
+    exist: c('rv-exist', 'exist'), prop: c('rv-prop', 'prop'), img: c('rv-img', 'img'), drape: c('rv-drape', 'drape'), masses: c('rv-masses', 'masses'), dxf: c('rv-dxf', 'dxf'), pdxf: c('rv-pdxf', 'pdxf'),
     typeId: v('rv-type'), levelId: v('rv-level'), viewId: v('rv-view'),
     phaseE: v('rv-phE'), phaseD: v('rv-phD'), phaseP: v('rv-phP'),
     tol: Number(v('rv-tol')) || TOLS[site.units][2],
@@ -438,13 +443,14 @@ function replaceReason(site, ex, tol, meta) {
 const demLabel = site => (site.dem?.contributions || []).map(c => c.tier?.label).join('+');
 
 function resultList(r) {
-  const name = { drape: 'Aerial on the Toposolids', coordinates: 'Shared coordinates', existing: 'Existing Toposolid', proposed: 'Proposed Toposolid', aerial: 'Aerial image', 'dxf-existing': 'Contours DXF', 'dxf-proposed': 'Proposed DXF', state: 'Site saved in the model' };
+  const name = { masses: 'Existing buildings', drape: 'Aerial on the Toposolids', coordinates: 'Shared coordinates', existing: 'Existing Toposolid', proposed: 'Proposed Toposolid', aerial: 'Aerial image', 'dxf-existing': 'Contours DXF', 'dxf-proposed': 'Proposed DXF', state: 'Site saved in the model' };
   const ids = r.results.filter(x => x.ok && x.id).map(x => x.id);
   const items = r.results.map(x => `<li class="${x.ok ? 'ok' : 'bad'}">${esc(name[x.role] || x.role)}: ${x.ok
     ? (x.kept ? 'already in the model — kept as is'
       : x.role === 'existing' || x.role === 'proposed' ? `${x.replaced ? 'replaced' : 'created'}, ${Number(x.points).toLocaleString()} points${x.profile ? ', boundary outline' : ''}`
       : x.role === 'coordinates' ? (x.check > 0.9999 ? 'set and checked' : 'set — check the angle')
       : x.role === 'aerial' ? `${x.reloaded ? 'reloaded' : 'placed'} in “${esc(x.view)}”`
+      : x.role === 'masses' ? `${x.made} building mass${x.made === 1 ? '' : 'es'}${x.failed ? `, ${x.failed} failed` : ''}${x.removed ? ` (replaced ${x.removed})` : ''}`
       : x.role === 'drape' ? `material “${esc(x.material)}” on ${x.painted} Toposolid${x.painted === 1 ? '' : 's'} (${x.faces} face${x.faces === 1 ? '' : 's'})`
       : x.role.startsWith('dxf') ? (x.reloaded ? 'reloaded' : 'linked') : 'done')
     : esc(x.error)}</li>`).join('');
@@ -576,6 +582,28 @@ async function send() {
       status('Preparing the proposed Toposolid…');
       const t = toInternal(site, pr.pts);
       job.toposolids.push({ role: 'proposed', points: t.pts, profile, typeId: Number(o.typeId), levelId: Number(o.levelId), phaseCreated: Number(o.phaseP) || null, phaseDemolished: null, replaceId: taggedOne('proposed')?.id ?? null, meta: meta(pr, t.extent), comment: `Contours to Revit — proposed grading (${date})` });
+    }
+    if (o.masses && host?.features?.includes('masses')) {
+      const list = api.buildings(site);
+      if (list.length) {
+        status(`Preparing ${list.length} building masses…`);
+        const d = api.datum(site), P0 = model.pbp, r4 = v => Math.round(v * 1e4) / 1e4;
+        const T = (x, y, z) => { const [X, Y] = api.outXY(site, x, y); return [r4(P0.x + X * k), r4(P0.y + Y * k), r4(P0.z + (z - d) * k)]; };
+        job.masses = { phaseCreated: Number(o.phaseE) || null, buildings: list.map(({ b, src, tag }, n) => {
+          const R = b.ring, N = R.length, v = [], f = [];
+          const tz = i => (b.ringTop ? b.ringTop[i] : b.top);
+          R.forEach(([x, y]) => v.push(...T(x, y, b.base)));
+          R.forEach(([x, y], i) => v.push(...T(x, y, tz(i))));
+          for (let i = 0; i < N; i++) f.push([i, (i + 1) % N, N + (i + 1) % N, N + i]);
+          const tri = api.triangulate(R);
+          if (b.roof) { const off = v.length / 3; b.roof.pts.forEach(p => v.push(...T(...p))); b.roof.tris.forEach(t => f.push(t.map(q => q + off))); }
+          else tri.forEach(t => f.push(t.map(q => N + q)));
+          tri.forEach(t => f.push([t[2], t[1], t[0]]));
+          const how = b.hSrc === 'lidar' ? `lidar ${site.lidar?.year || ''}`.trim() : b.heightKnown ? 'data height' : 'assumed height';
+          return { id: `${tag}-${n}`, name: `Existing building (${tag})`, v, f, comment: `Contours to Revit — ${src}, ${how}`,
+            meta: JSON.stringify({ src: tag, h: r4((b.top - b.base) * k), how }) };
+        }) };
+      }
     }
     const drape = o.drape && host?.features?.includes('drape');
     let aerialFid = null, aerialImg = null;
@@ -721,7 +749,7 @@ function mockHost() {
     addEventListener: (t, f) => { if (t === 'message') listeners.push(f); },
     postMessage(m) {
       const { id, type } = m;
-      if (type === 'hello') return reply(id, true, { host: 'mock', version: '0.0.1', revit: '2026 (mock)', features: ['drape'], compatibleRendering: false, update: { current: '0.0.1', state: 'idle', auto: true } });
+      if (type === 'hello') return reply(id, true, { host: 'mock', version: '0.0.1', revit: '2026 (mock)', features: ['drape', 'masses'], compatibleRendering: false, update: { current: '0.0.1', state: 'idle', auto: true } });
       if (type === 'checkUpdate') return reply(id, true, { current: '0.0.1', latest: '0.3.0', available: !window.c2rMock.installed, pending: window.c2rMock.installed || null, state: 'idle' });
       if (type === 'installUpdate') { window.c2rMock.installed = '0.3.0'; return reply(id, true, { current: '0.0.1', latest: '0.3.0', available: false, pending: '0.3.0', state: 'installed' }); }
       if (type === 'setRendering') return reply(id, true, { compatibleRendering: m.compatible, restart: true });
@@ -742,6 +770,7 @@ function mockHost() {
         };
         for (const t of m.toposolids) put(t.role, t.meta, { points: t.points.length / 3, profile: !!t.profile });
         if (m.image) put('aerial', m.image.meta, { view: 'Level 1', reloaded: false });
+        if (m.masses) results.push({ role: 'masses', ok: true, made: m.masses.buildings.length, failed: 0, removed: 0 });
         if (m.drape) results.push({ role: 'drape', ok: true, material: m.drape.name, painted: elements.filter(e => m.drape.roles.includes(e.role)).length, faces: 1 });
         for (const d of m.dxfs) put(d.role, d.meta, { reloaded: false });
         if (m.state) { stored.placement = m.state.placement; stored.snapshot = m.state.snapshot; stored.folder = m.folder; results.push({ role: 'state', ok: true }); }

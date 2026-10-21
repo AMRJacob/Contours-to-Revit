@@ -1,18 +1,18 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.30.1';
-import { fetchElevation, sample } from './dem.js?v=0.30.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.30.1';
-import { Dxf } from './dxf.js?v=0.30.1';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.30.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.30.1';
-import { Flow } from './flow.js?v=0.30.1';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.30.1';
-import { loadLidar, applyLidar } from './lidar.js?v=0.30.1';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.30.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.30.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.31.0';
+import { fetchElevation, sample } from './dem.js?v=0.31.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.31.0';
+import { Dxf } from './dxf.js?v=0.31.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.31.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.31.0';
+import { Flow } from './flow.js?v=0.31.0';
+import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.31.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.31.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.31.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.31.0';
 
-const VERSION = '0.30.1';
+const VERSION = '0.31.0';
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
@@ -4430,6 +4430,10 @@ initRevit({
     const cx = (site.box.xmin + site.box.xmax) / 2, cy = (site.box.ymin + site.box.ymax) / 2;
     return Math.hypot(x - cx, y - cy) / (zoneUnitsPerMeter(site.zone) * 0.3048);
   },
+  /** Buildings of the layers shown on the map: [{ b, src, tag }]. */
+  buildings: site => BUILDING_SOURCES.filter(src => visibility[src.key]).flatMap(src =>
+    ((src.key === 'buildings' ? site?.context?.buildings : site?.context?.[src.key]) || []).map(b => ({ b, src: src.short, tag: src.tag }))),
+  triangulate,
   revealPlace: () => { const d = $('step-place'); d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); },
 }).catch(err => console.error('Revit bridge:', err));
 

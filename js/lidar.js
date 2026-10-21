@@ -262,7 +262,7 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM }) {
         const v = sm[cy * nx + cx];
         const lapX = Math.abs(at(cx - 1, cy) + at(cx + 1, cy) - 2 * v), lapY = Math.abs(at(cx, cy - 1) + at(cx, cy + 1) - 2 * v);
         const lapD = Math.abs(at(cx - 1, cy - 1) + at(cx + 1, cy + 1) - 2 * v), lapE = Math.abs(at(cx - 1, cy + 1) + at(cx + 1, cy - 1) - 2 * v);
-        if (Math.max(lapX, lapY, lapD, lapE) > 0.5 || (cx % 6 === 0 && cy % 6 === 0)) mesh.push([x, y, zOf(v)]);
+        if (Math.max(lapX, lapY, lapD, lapE) > 0.8 || (cx % 8 === 0 && cy % 8 === 0)) mesh.push([x, y, zOf(v)]);
       }
     }
     const del = D.from(mesh.map(p => [p[0], p[1]]));
