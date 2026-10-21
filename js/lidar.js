@@ -181,7 +181,6 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
   const m = nativePerM;                       // native units per metre
   const idx = lid._idx ??= bucket(lid, 10 * m);
   const cellM = Math.max(0.25, cellFt * 0.3048), cell = cellM * m;
-  const lattice = Math.max(2, Math.round(3.6 / cellM));   // keep a sparse lattice of roof points (~12 ft)
   const fine = cellM < 1.2;                                // finer than the lidar's point spacing: interpolate
   let used = 0, flat = 0, shaped = 0, skipped = 0;
   for (const b of list) {
@@ -277,25 +276,71 @@ export async function applyLidar(list, lid, { zAt, zPerM, nativePerM, cellFt = 5
     const inward = ([x, y]) => { const dx = cxm - x, dy = cym - y, d = Math.hypot(dx, dy) || 1, s = Math.min(0.75 * m, d * 0.3); return [x + dx / d * s, y + dy / d * s]; };
     const ringTop = R.map(p => zOf(isFlat ? flatH : hAt(...inward(p))));
     const mesh = R.map((p, i) => [p[0], p[1], ringTop[i]]);
-    if (!isFlat) {
-      // Keep only cells where the roof bends (ridges, valleys, steps, edges of levels); planar stretches in
-      // between are rebuilt exactly by the triangles, so flat decks and straight roof slopes cost almost nothing.
-      const at = (a, c) => sm[Math.max(0, Math.min(ny - 1, c)) * nx + Math.max(0, Math.min(nx - 1, a))];
-      for (let cy = 0; cy < ny; cy++) for (let cx = 0; cx < nx; cx++) {
-        const x = x0 + (cx + 0.5) * cell, y = y0 + (cy + 0.5) * cell;
-        if (!inRing(R, x, y)) continue;
-        const v = sm[cy * nx + cx];
-        const lapX = Math.abs(at(cx - 1, cy) + at(cx + 1, cy) - 2 * v), lapY = Math.abs(at(cx, cy - 1) + at(cx, cy + 1) - 2 * v);
-        const lapD = Math.abs(at(cx - 1, cy - 1) + at(cx + 1, cy + 1) - 2 * v), lapE = Math.abs(at(cx - 1, cy + 1) + at(cx + 1, cy - 1) - 2 * v);
-        if (Math.max(lapX, lapY, lapD, lapE) > 0.8 || (cx % lattice === 0 && cy % lattice === 0)) mesh.push([x, y, zOf(v)]);
-      }
+    // Roof mesh by greedy refinement: start from the footprint corners and keep adding the roof cell the current
+    // triangles miss by the most, until every cell is within TOL. Flat decks and plane roof slopes need only a few
+    // points; ridges, valleys and steps get them where needed. Capped per building.
+    const inside = [];
+    for (let cy = 0; cy < ny; cy++) for (let cx = 0; cx < nx; cx++) {
+      if (inRing(R, x0 + (cx + 0.5) * cell, y0 + (cy + 0.5) * cell)) inside.push(cy * nx + cx);
     }
-    const del = D.from(mesh.map(p => [p[0], p[1]]));
-    const tris = [];
-    for (let t = 0; t < del.triangles.length; t += 3) {
-      const a = del.triangles[t], c = del.triangles[t + 1], d = del.triangles[t + 2];
-      const mx = (mesh[a][0] + mesh[c][0] + mesh[d][0]) / 3, my = (mesh[a][1] + mesh[c][1] + mesh[d][1]) / 3;
-      if (inRing(R, mx, my)) tris.push([a, c, d]);
+    const TOL = 0.3, CAP = 2500;                       // metres; points per roof
+    const cellXY = q => [x0 + ((q % nx) + 0.5) * cell, y0 + (((q / nx) | 0) + 0.5) * cell];
+    const triangulateMesh = () => {
+      const del = D.from(mesh.map(p => [p[0], p[1]]));
+      const out = [];
+      for (let t = 0; t < del.triangles.length; t += 3) {
+        const a = del.triangles[t], c = del.triangles[t + 1], d = del.triangles[t + 2];
+        const mx = (mesh[a][0] + mesh[c][0] + mesh[d][0]) / 3, my = (mesh[a][1] + mesh[c][1] + mesh[d][1]) / 3;
+        if (inRing(R, mx, my)) out.push([a, c, d]);
+      }
+      return out;
+    };
+    let tris = triangulateMesh();
+    if (!isFlat) {
+      const approx = new Float32Array(nx * ny);
+      const used2 = new Uint8Array(nx * ny);
+      for (let iter = 0; iter < 30 && mesh.length < CAP; iter++) {
+        approx.fill(NaN);
+        // Rasterize the current roof triangles (metres above ground) onto the cell centres.
+        for (const [a, c, d] of tris) {
+          const A = mesh[a], B2 = mesh[c], C = mesh[d];
+          const det = (B2[1] - C[1]) * (A[0] - C[0]) + (C[0] - B2[0]) * (A[1] - C[1]);
+          if (Math.abs(det) < 1e-12) continue;
+          const i0 = Math.max(0, Math.floor((Math.min(A[0], B2[0], C[0]) - x0) / cell - 0.5)), i1 = Math.min(nx - 1, Math.ceil((Math.max(A[0], B2[0], C[0]) - x0) / cell - 0.5));
+          const j0 = Math.max(0, Math.floor((Math.min(A[1], B2[1], C[1]) - y0) / cell - 0.5)), j1 = Math.min(ny - 1, Math.ceil((Math.max(A[1], B2[1], C[1]) - y0) / cell - 0.5));
+          for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+            const x = x0 + (i + 0.5) * cell, y = y0 + (j + 0.5) * cell;
+            const l1 = ((B2[1] - C[1]) * (x - C[0]) + (C[0] - B2[0]) * (y - C[1])) / det, l2 = ((C[1] - A[1]) * (x - C[0]) + (A[0] - C[0]) * (y - C[1])) / det, l3 = 1 - l1 - l2;
+            if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) continue;
+            approx[j * nx + i] = ((l1 * A[2] + l2 * B2[2] + l3 * C[2]) - gDem) / zPerM;
+          }
+        }
+        const bad = [];
+        for (const q of inside) {
+          if (used2[q]) continue;
+          const e = Number.isFinite(approx[q]) ? Math.abs(approx[q] - sm[q]) : 1e6;
+          if (e > TOL) bad.push([e, q]);
+        }
+        if (!bad.length) break;
+        bad.sort((u, v) => v[0] - u[0]);
+        // Add the worst cells, a few cells apart so one pass doesn't spend its budget on a single edge.
+        const room = Math.min(CAP - mesh.length, Math.max(16, Math.round(mesh.length * 0.6)));
+        const block = new Set();
+        const gap = Math.max(1, Math.round(1.5 / cellM));
+        let added = 0;
+        for (const [, q] of bad) {
+          if (added >= room) break;
+          const cx = q % nx, cy = (q / nx) | 0, key = `${Math.floor(cx / (gap + 1))}:${Math.floor(cy / (gap + 1))}`;
+          if (block.has(key)) continue;
+          block.add(key);
+          const [x, y] = cellXY(q);
+          mesh.push([x, y, zOf(sm[q])]);
+          used2[q] = 1;
+          added++;
+        }
+        if (!added) break;
+        tris = triangulateMesh();
+      }
     }
     if (!tris.length) { skipped++; continue; }
     b.roof = { pts: mesh, tris };
