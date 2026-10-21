@@ -3,7 +3,7 @@
 // the browser with laz-perf (WASM), and turned into a roof surface per footprint. Heights are measured against the
 // lidar's own ground points next to each building, so the lidar's vertical datum never matters.
 
-import { orthogonalize, dominantAngle, prismMass, mergeMass, clipHalf, polyArea } from './massing.js?v=0.37.0';
+import { orthogonalize, dominantAngle, prismMass, mergeMass, clipHalf, polyArea } from './massing.js?v=0.37.1';
 
 const RESOURCES = 'https://raw.githubusercontent.com/hobuinc/usgs-lidar/master/boundaries/resources.geojson';
 const R_EARTH = 6378137;
@@ -702,6 +702,7 @@ function cleanBuilding(b, idx, lid, g, gDem, zPerM, m, tris) {
   const pitched = models.filter(md => md.s > Math.tan(8 * Math.PI / 180) && md.s < Math.tan(55 * Math.PI / 180) && md.e > 2)
     .sort((a2, b2) => a2.rms - b2.rms)[0];
   let mass, roofAt, kind;
+  b.roofFitInfo = { flatRms: +flatRms.toFixed(2), area: Math.round(areaM2), p10: +p10.toFixed(1), p90: +p90.toFixed(1), models: models.map(md => ({ k: md.kind + (md.axis || ''), rms: +md.rms.toFixed(2), deg: +(Math.atan(md.s) * 180 / Math.PI).toFixed(0), e: +md.e.toFixed(1) })) };
   if (pitched && pitched.rms < 0.7 * flatRms && pitched.rms < 1.2) {
     kind = pitched.kind;
     const e = pitched.e, sl = pitched.s;
