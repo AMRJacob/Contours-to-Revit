@@ -494,3 +494,8 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
   #step-revit .rv-banner { background: #15283b; color: #cfe3f7; }
   #step-revit .rv-banner-warn { background: #3a2a14; color: #f3d3a3; }
 }
+#step-revit .rv-upd { margin: 10px 0 0; padding: 6px 8px; border-radius: 6px; background: var(--accent-soft); color: var(--ink); }
+#rv-settings { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+#rv-settings .rv-ver { margin: 4px 0 8px; font-size: 13px; }
+#rv-settings .btn-block + .hint { margin-top: 6px; }
+#rv-settings .btn-block { margin-top: 6px; }

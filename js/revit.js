@@ -204,6 +204,12 @@ function surfaces(site, tol) {
 
 // ---------------------------------------------------------------- UI
 function ensurePanel() {
+  if (!$('rv-settings')) {
+    const box = document.createElement('div');
+    box.id = 'rv-settings';
+    const body = $('step-settings')?.querySelector('.step-body');
+    if (body) { body.prepend(box); box.addEventListener('click', onClick); }
+  }
   if ($('step-revit')) return;
   const sec = document.createElement('details');
   sec.className = 'step';
@@ -217,7 +223,21 @@ function ensurePanel() {
   sec.addEventListener('change', onChange);
 }
 
+function renderSettings() {
+  const box = $('rv-settings');
+  if (!box) return;
+  const u = host?.update, pend = u?.pending, busyU = /checking|downloading|installing/.test(u?.state || '');
+  const cr = !!host?.compatibleRendering;
+  box.innerHTML = `<h4 class="set-h">Revit plugin</h4>
+    <p class="rv-ver">Running <strong>${esc(host?.version || '?')}</strong>${pend ? ` · <strong>${esc(pend)}</strong> installed — restart Revit to use it` : ''}</p>
+    <button type="button" class="btn btn-primary btn-block" data-rv="check-update" ${busyU ? 'disabled' : ''}>${busyU ? 'Updating…' : 'Check for updates and install'}</button>
+    ${updNote ? `<p class="hint rv-upd">${esc(updNote)}</p>` : ''}
+    <p class="hint">Updates also install by themselves when Revit starts. Revit can stay open; a new version loads the next time Revit starts.</p>
+    <button type="button" class="btn btn-block" data-rv="rendering">${cr ? 'Compatible rendering is on — turn off' : 'Map looks scrambled? Use compatible rendering'}</button>`;
+}
+
 function render() {
+  renderSettings();
   const body = $('rv-body');
   if (!body) return;
   const site = api.site();
@@ -245,9 +265,9 @@ function render() {
 
 function footer() {
   const cr = !!host?.compatibleRendering;
-  return `<p class="hint rv-foot">Plugin ${esc(host?.version || '?')} · Revit ${esc(host?.revit || '?')}
-    · <a href="#" data-rv="check-update">Check for updates</a>
-    · <a href="#" data-rv="rendering" title="Draw without the graphics card, in case the map or 3D view looks scrambled. Takes effect when Revit restarts.">${cr ? 'Compatible rendering: on' : 'Map looks scrambled?'}</a></p>`;
+  const pend = host?.update?.pending;
+  return `<p class="hint rv-foot">Plugin ${esc(host?.version || '?')}${pend ? ` <strong>(${esc(pend)} installed — restart Revit)</strong>` : ''} · Revit ${esc(host?.revit || '?')}
+    · <a href="#" data-rv="settings">Plugin settings &amp; updates</a></p>`;
 }
 
 function updateBanner() {
@@ -262,6 +282,7 @@ function updateBanner() {
   return `<div class="rv-banner">Plugin update ${esc(v)} is available. <button type="button" class="btn btn-xs" data-rv="update">Install now</button><span class="hint"> Revit stays open; the update loads when Revit restarts.</span></div>`;
 }
 let renderNote = '';
+let updNote = '';
 
 function fmtPlacement(p, site) {
   const u = p.units || site.units;
@@ -437,12 +458,22 @@ async function onClick(e) {
   const site = api.site();
   try {
     if (a === 'refresh') await refresh();
+    else if (a === 'settings') { const d = $('step-settings'); d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
     else if (a === 'download') call('openUrl', { url: latest?.url || PLUGIN_DOWNLOAD });
     else if (a === 'update' || a === 'check-update') {
       if (!host?.update) { await checkUpdates(); render(); return; }       // plugin 0.1.0: no built-in updater
-      host.update = { ...host.update, state: a === 'update' ? 'downloading' : 'checking' }; render();
-      host.update = await call(a === 'update' ? 'installUpdate' : 'checkUpdate', {}, 10 * 60 * 1000);
-      if (a === 'check-update' && !host.update.available && !host.update.pending && host.update.state !== 'error') api.setStatus(`The plugin is up to date (${host.version}).`);
+      // One click does it all: check, and install when there is something newer.
+      host.update = { ...host.update, state: 'checking' }; updNote = 'Checking for a plugin update…'; render();
+      let u = await call('checkUpdate', {}, 120000);
+      if (u.available) {
+        host.update = { ...u, state: 'downloading' }; updNote = `Downloading and installing plugin ${u.latest}…`; render();
+        u = await call('installUpdate', {}, 10 * 60 * 1000);
+      }
+      host.update = u;
+      updNote = u.state === 'error' ? `Update failed: ${u.error || 'unknown error'}`
+        : u.pending ? `Plugin ${u.pending} is installed. Restart Revit to use it (this window shows ${host.version} until then).`
+        : `The plugin is up to date (${host.version}).`;
+      api.setStatus(updNote, u.state === 'error');
       render();
     } else if (a === 'rendering') {
       if (host?.compatibleRendering === undefined) { api.setStatus('Update the plugin first — this option arrived in plugin 0.2.0.', true); return; }
@@ -684,7 +715,10 @@ function mockHost() {
     addEventListener: (t, f) => { if (t === 'message') listeners.push(f); },
     postMessage(m) {
       const { id, type } = m;
-      if (type === 'hello') return reply(id, true, { host: 'mock', version: '0.0.1', revit: '2026 (mock)', features: ['drape'] });
+      if (type === 'hello') return reply(id, true, { host: 'mock', version: '0.0.1', revit: '2026 (mock)', features: ['drape'], compatibleRendering: false, update: { current: '0.0.1', state: 'idle', auto: true } });
+      if (type === 'checkUpdate') return reply(id, true, { current: '0.0.1', latest: '0.3.0', available: !window.c2rMock.installed, pending: window.c2rMock.installed || null, state: 'idle' });
+      if (type === 'installUpdate') { window.c2rMock.installed = '0.3.0'; return reply(id, true, { current: '0.0.1', latest: '0.3.0', available: false, pending: '0.3.0', state: 'installed' }); }
+      if (type === 'setRendering') return reply(id, true, { compatibleRendering: m.compatible, restart: true });
       if (type === 'getModel') return reply(id, true, model());
       if (type === 'chunk') return reply(id, true, { fid: m.fid, bytes: m.b64.length * 0.75 });
       if (type === 'pickFolder') return reply(id, true, 'D:\\Shared\\Mock site');
