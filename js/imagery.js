@@ -457,6 +457,28 @@ function limiter(n) {
 }
 
 /**
+ * Wait for every task, but stop waiting for stragglers once at least one has finished, `minMs` have passed and
+ * nothing has finished for `quietMs`. Rows still running are marked too slow (their late answers are ignored).
+ */
+async function settle(tasks, rows, { minMs = 6000, quietMs = 4000 } = {}) {
+  const t0 = performance.now();
+  let last = t0, finished = 0;
+  const all = tasks.map((t, i) => t.finally(() => { rows[i].done = true; finished++; last = performance.now(); }));
+  await Promise.race([
+    Promise.allSettled(all),
+    new Promise(res => {
+      const tick = setInterval(() => {
+        const now = performance.now();
+        if (finished && now - t0 > minMs && now - last > quietMs) { clearInterval(tick); res(); }
+      }, 250);
+      Promise.allSettled(all).then(() => { clearInterval(tick); res(); });
+    }),
+  ]);
+  for (const r of rows) if (!r.done) { r.status = 'error'; r.why = 'too slow to answer'; r.late = true; }
+  for (const r of rows) delete r.done;
+}
+
+/**
  * Check every candidate at the site. Returns { results, order, sampleIn, window }.
  * results: [{ key, src, how, status: 'ok'|'gaps'|'none'|'error', why, measuredIn, nativeIn, effIn, year, ms }]
  * order:   usable [src, how] pairs, best first (see rank()).
@@ -478,22 +500,23 @@ export async function probe(zone, box, cands, { prefer = 'sharp', onProgress } =
     measuredIn: null, nativeIn: src.nativeIn || null, effIn: null, year: src.year ?? null, ms: 0 }));
 
   // 1. Coverage: centre first (a source that fails there is dropped right away), then the corners.
-  await Promise.all(results.map(async r => {
+  await settle(results.map(async r => {
     const t0 = performance.now();
-    for (let i = 0; i < centres.length && r.status === 'ok'; i++) {
+    for (let i = 0; i < centres.length && r.status === 'ok' && !r.late; i++) {
       try {
         const cv = await run(() => deadline(fetchBox(r.src, r.how, zone, winBox(centres[i], side), 160, 160, { quick: true }), 20000));
+        if (r.late) return;
         r.empty[i] = emptyFraction(cv);
         r.tex[i] = texture(cv);
         cv.width = cv.height = 0;
         if (r.empty[i] > 0.5) { r.status = i ? 'gaps' : 'none'; r.why = i ? 'no photos over part of the site' : 'no photos here (blank image)'; }
       } catch (e) {
-        r.status = 'error'; r.why = e.message || 'failed';
+        if (!r.late) { r.status = 'error'; r.why = e.message || 'failed'; }
       }
     }
     r.ms = Math.round(performance.now() - t0);
     onProgress?.(++done, total, 'coverage');
-  }));
+  }), results);
   // A spot that is clearly emptier than the same spot from another source is a gap in this source (white roofs
   // and bright pavement look the same from every source, so they don't count against anyone).
   for (let i = 0; i < centres.length; i++) {
@@ -516,17 +539,18 @@ export async function probe(zone, box, cands, { prefer = 'sharp', onProgress } =
   dy = Math.min(Math.max(dy, box.ymin + dSide / 2), box.ymax - dSide / 2);
   const DN = 768, sampleIn = dSide / perFt * 12 / DN;
   done = 0;
-  await Promise.all(ok.map(async r => {
+  await settle(ok.map(async r => {
     try {
       const cv = await run(() => deadline(fetchBox(r.src, r.how, zone, winBox([dx, dy], dSide), DN, DN, { quick: true }), 15000));
+      if (r.late) return;
       if (emptyFraction(cv) > 0.3) { r.status = 'gaps'; r.why = 'gaps in its coverage here'; }
       else { const k = detailPx(cv); r.measuredIn = k == null ? null : k * sampleIn; }
       cv.width = cv.height = 0;
-    } catch (e) { r.status = 'error'; r.why = e.message || 'failed'; }
+    } catch (e) { if (!r.late) { r.status = 'error'; r.why = e.message || 'failed'; } }
     onProgress?.(++done, ok.length, 'detail');
-  }));
+  }), ok, { minMs: 4000 });
   for (const r of results) r.effIn = r.measuredIn == null ? r.nativeIn : Math.max(r.measuredIn, r.nativeIn || 0);
-  for (const r of results) { delete r.empty; delete r.tex; }
+  for (const r of results) { delete r.empty; delete r.tex; delete r.late; }
   // A map service tried through a tile cache it doesn't have isn't worth listing.
   for (let i = results.length - 1; i >= 0; i--) if (results[i].status === 'error' && /no tile cache|isn't this site's zone/.test(results[i].why) && results[i].src.kind !== 'tiles') results.splice(i, 1);
   return { results, order: rank(results, prefer), sampleIn, window: { x: dx, y: dy, side: dSide } };
