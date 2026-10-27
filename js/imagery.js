@@ -113,7 +113,11 @@ export async function candidates(zone, box, { states = ['AR'], custom = null, in
       if (s.flights) {
         try { for (const f of await flightsAt(s, ll)) out.push([f, 'export']); }
         catch (e) { notes.push(`${s.label}: ${e.message || 'catalog not available'}`); }
-      } else out.push([s, s.kind === 'tiles' ? 'tiles' : 'export']);
+      } else {
+        out.push([s, s.kind === 'tiles' ? 'tiles' : 'export']);
+        // A map service's dynamic export can be blank at site scale (scale limits) while its tile cache is fine.
+        if (s.kind === 'map' && s.cache !== false) out.push([s, 'tiles']);
+      }
     }
   }
   for (const s of NATIONAL) {
@@ -218,8 +222,10 @@ const toWgs84 = ll => proj4(NAD83_ITRF, 'EPSG:4326', ll);
 
 async function tileBitmap(url, signal) {
   const r = await hfetch(url, { signal });
-  if (!r.ok || !(r.headers.get('content-type') || '').startsWith('image/')) return null;
-  return createImageBitmap(await r.blob());
+  const ct = r.headers.get('content-type') || '';
+  // Some hosted caches send images as application/octet-stream; anything that decodes is an image.
+  if (!r.ok || /json|html|text/.test(ct)) return null;
+  return createImageBitmap(await r.blob()).catch(() => null);
 }
 /**
  * Missing levels come back as placeholder tiles: flat, empty/transparent, or Esri's light grey "Map data not yet
@@ -493,7 +499,7 @@ export async function probe(zone, box, cands, { prefer = 'sharp', onProgress } =
   for (let i = 0; i < centres.length; i++) {
     const vals = results.filter(r => r.status === 'ok' && r.empty[i] != null).map(r => r.empty[i]);
     const best = vals.length ? Math.min(...vals) : 0;
-    for (const r of results) if (r.status === 'ok' && r.empty[i] > 0.12 && r.empty[i] - best > 0.12) { r.status = 'gaps'; r.why = 'gaps in its coverage here'; }
+    for (const r of results) if (r.status === 'ok' && r.empty[i] > 0.25 && r.empty[i] - best > 0.2) { r.status = 'gaps'; r.why = 'gaps in its coverage here'; }
   }
 
   // 2. Detail, at the corner/centre spot with the most texture.
@@ -521,6 +527,8 @@ export async function probe(zone, box, cands, { prefer = 'sharp', onProgress } =
   }));
   for (const r of results) r.effIn = r.measuredIn == null ? r.nativeIn : Math.max(r.measuredIn, r.nativeIn || 0);
   for (const r of results) { delete r.empty; delete r.tex; }
+  // A map service tried through a tile cache it doesn't have isn't worth listing.
+  for (let i = results.length - 1; i >= 0; i--) if (results[i].status === 'error' && /no tile cache|isn't this site's zone/.test(results[i].why) && results[i].src.kind !== 'tiles') results.splice(i, 1);
   return { results, order: rank(results, prefer), sampleIn, window: { x: dx, y: dy, side: dSide } };
 }
 
