@@ -516,7 +516,7 @@ export async function probe(zone, box, cands, { prefer = 'sharp', onProgress } =
     }
     r.ms = Math.round(performance.now() - t0);
     onProgress?.(++done, total, 'coverage');
-  }), results);
+  }), results, { minMs: 10000 });
   // A spot that is clearly emptier than the same spot from another source is a gap in this source (white roofs
   // and bright pavement look the same from every source, so they don't count against anyone).
   for (let i = 0; i < centres.length; i++) {
