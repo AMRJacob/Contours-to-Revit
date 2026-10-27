@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.37.4">
+  <link rel="stylesheet" href="css/app.css?v=0.38.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -456,9 +456,19 @@
             <input type="url" id="img-custom" placeholder="https://…/arcgis/rest/services/…/MapServer" spellcheck="false">
             <p class="hint" id="img-custom-msg"></p>
           </div>
+          <div class="set-row img-prefer" role="radiogroup" aria-label="Automatic picks">
+            <label class="check"><input type="radio" name="img-prefer" value="sharp" checked> Sharpest photos</label>
+            <label class="check"><input type="radio" name="img-prefer" value="new"> Newer, if nearly as sharp</label>
+          </div>
           <p class="hint" id="img-used"></p>
-          <p class="hint" id="img-local"></p>
-          <p class="hint">Automatic tries the newest local photos first (PAgis 2024 in Pulaski County), then Esri, then Arkansas's statewide 2023 9-inch photos, then USGS. Used for the map preview, 3D view, PNG and the Aerial download.</p>
+          <table class="img-table" id="img-table" hidden></table>
+          <p class="hint"><span id="img-checked"></span> <button type="button" class="img-link" id="img-recheck" hidden>Check sources again</button></p>
+          <details class="sub-details">
+            <summary>Local imagery catalogs</summary>
+            <div id="img-states" class="img-states"></div>
+            <p class="hint">City, county and state photo services checked in addition to Esri and USGS. More states can be added to the catalog later.</p>
+          </details>
+          <p class="hint">Automatic checks every service that might cover the site: blank or patchy ones are skipped, the real detail in each is measured from sample pixels, and the sharpest is used (sources within 10 % of each other count as equal and the newer one wins). Used for the map preview, 3D view, PNG and the Aerial download.</p>
           <h4 class="set-h">3D view</h4>
           <div class="set-row"><label for="v3-ex">Vertical exaggeration</label><input type="range" id="v3-ex" min="1" max="5" step="0.5" value="2"><output id="v3-ex-v">2×</output></div>
           <div class="set-row"><label for="v3-speed">Orbit / pan / zoom speed</label><input type="range" id="v3-speed" min="0.2" max="2" step="0.1" value="1"><output id="v3-speed-v">1×</output></div>
@@ -540,6 +550,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.37.4"></script>
+  <script type="module" src="js/app.js?v=0.38.0"></script>
 </body>
 </html>

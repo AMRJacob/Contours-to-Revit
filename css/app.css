@@ -501,3 +501,16 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 #rv-settings .btn-block { margin-top: 6px; }
 .app-ver { font: 500 11px/1 var(--mono); color: var(--ink-3); vertical-align: middle; margin-left: 4px; letter-spacing: 0; }
 .layers-panel.lp-3d { position: absolute; top: 56px; right: 12px; z-index: 5; max-height: calc(100% - 70px); overflow: auto; }
+
+/* Aerial imagery sources (Settings) */
+.img-prefer { display: flex; gap: 14px; flex-wrap: wrap; }
+.img-prefer .check { margin-top: 0; }
+.img-states .check { margin-top: 4px; }
+.img-muted { color: var(--ink-3); }
+.img-link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; text-decoration: underline; }
+.img-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
+.img-table th { text-align: left; font-weight: 600; color: var(--ink-3); border-bottom: 1px solid var(--line); padding: 3px 4px; }
+.img-table td { padding: 3px 4px; border-bottom: 1px solid var(--line); vertical-align: top; color: var(--ink-2); }
+.img-table td:nth-child(2), .img-table td:nth-child(3) { white-space: nowrap; }
+.img-table tr.used td { color: var(--ink); font-weight: 600; }
+.img-table tr.bad td:first-child { color: var(--ink-3); }

@@ -1,19 +1,19 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.37.4';
-import { fetchElevation, sample } from './dem.js?v=0.37.4';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.37.4';
-import { Dxf } from './dxf.js?v=0.37.4';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.37.4';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.37.4';
-import { Flow } from './flow.js?v=0.37.4';
-import { IMAGERY_SOURCES, sourceById, customSource, covers, plan as imgPlan, fetchBox } from './imagery.js?v=0.37.4';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.37.4';
-import { loadLidar, applyLidar } from './lidar.js?v=0.37.4';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.37.4';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.37.4';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.38.0';
+import { fetchElevation, sample } from './dem.js?v=0.38.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.38.0';
+import { Dxf } from './dxf.js?v=0.38.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.38.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.38.0';
+import { Flow } from './flow.js?v=0.38.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.38.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.38.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.38.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.38.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.38.0';
 
-const VERSION = '0.37.4';
+const VERSION = '0.38.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -637,7 +637,7 @@ async function generate() {
   }
 
   setStatus('Fetching aerial imagery…');
-  const { bitmap: imagery, credit: imageryCredit, src: imagerySrc, how: imageryHow, notes: imageryNotes } = await fetchImagery(zone, box);
+  const { bitmap: imagery, credit: imageryCredit, src: imagerySrc, how: imageryHow, notes: imageryNotes, probe: imageryProbe } = await fetchImagery(zone, box);
 
   const conv = convergence(zone, c.lng, c.lat);
   const shade = hillshade(cgrid, 1 / toOut); // z (output units) -> native XY units
@@ -645,7 +645,7 @@ async function generate() {
   const now = new Date();
   const site = {
     zone, units: u, toOut, zPerM, spacingOut, interval, box, pts, pStats, grid: cgrid, stats: cStats, shade,
-    contours, context, contextNotes, roadsSource, lidar: lidarInfo, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, floodFailed, parcelsFailed, bldgFailed, widthsFailed, areasFailed, imagery, imageryCredit, imagerySrc, imageryHow, imageryNotes, bldgSurface, mask, maskedPts, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
+    contours, context, contextNotes, roadsSource, lidar: lidarInfo, ctxInclude: { b: wantB, r: wantR, p: wantP, f: wantF }, floodFailed, parcelsFailed, bldgFailed, widthsFailed, areasFailed, imagery, imageryCredit, imagerySrc, imageryHow, imageryNotes, imageryProbe, bldgSurface, mask, maskedPts, convergence: conv, outUnit: u, dem, base, center: c, generated: now, bbox,
     tinted: false,
   };
   site.meta = buildMeta(site);
@@ -670,10 +670,94 @@ async function generate() {
 
 const tick = () => new Promise(r => setTimeout(r, 0));
 
-/** Current imagery choice: 'auto', a catalog id, or 'custom' (with a pasted service URL). */
-const imgChoice = { id: 'auto', custom: '' };
-try { imgChoice.id = localStorage.getItem('c2r-imgsrc') || 'auto'; imgChoice.custom = localStorage.getItem('c2r-imgcustom') || ''; } catch { /* ignore */ }
-if (imgChoice.id !== 'auto' && imgChoice.id !== 'custom' && !sourceById(imgChoice.id)) imgChoice.id = 'auto';
+/**
+ * Imagery choice: id = 'auto', a source id (catalog or a flight found at a site), or 'custom' (pasted URL);
+ * prefer = 'sharp' (most detail) or 'new' (newest source at most 1.5× coarser than the sharpest);
+ * states = local catalogs to check (state codes).
+ */
+const imgChoice = { id: 'auto', custom: '', prefer: 'sharp', states: STATE_LIST.map(s => s.code) };
+try {
+  imgChoice.id = localStorage.getItem('c2r-imgsrc') || 'auto';
+  imgChoice.custom = localStorage.getItem('c2r-imgcustom') || '';
+  imgChoice.prefer = localStorage.getItem('c2r-imgprefer') === 'new' ? 'new' : 'sharp';
+  const st = JSON.parse(localStorage.getItem('c2r-imgstates') || 'null');
+  if (Array.isArray(st)) imgChoice.states = st.filter(c => STATE_LIST.some(s => s.code === c));
+} catch { /* ignore */ }
+
+// Probe results per site (sources checked, coverage, measured detail). Kept for the session and, without the
+// pixels, in localStorage for a week so reopening a project doesn't re-check every service.
+const PROBE_TTL = 7 * 864e5;
+const probeMem = new Map();
+const probeKey = (zone, box) => `${zone.code}|${[box.xmin, box.ymin, box.xmax, box.ymax].map(v => Math.round(v)).join(',')}|${imgChoice.states.join('+')}|${imgChoice.custom}`;
+function probeLoad(key) {
+  if (probeMem.has(key)) return probeMem.get(key);
+  try {
+    const all = JSON.parse(localStorage.getItem('c2r-imgprobe') || '{}');
+    const e = all[key];
+    if (e && Date.now() - e.t < PROBE_TTL) {
+      for (const r of e.p.results) r.src = registerSource(r.src);
+      probeMem.set(key, e.p);
+      return e.p;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+function probeSave(key, p) {
+  probeMem.set(key, p);
+  try {
+    const all = JSON.parse(localStorage.getItem('c2r-imgprobe') || '{}');
+    for (const k of Object.keys(all)) if (Date.now() - all[k].t > PROBE_TTL) delete all[k];
+    all[key] = { t: Date.now(), p: { ...p, order: undefined } };
+    const keys = Object.keys(all).sort((a, b) => all[b].t - all[a].t);
+    for (const k of keys.slice(20)) delete all[k];
+    localStorage.setItem('c2r-imgprobe', JSON.stringify(all));
+  } catch { /* ignore */ }
+}
+function probeForget(zone, box) {
+  const key = probeKey(zone, box);
+  probeMem.delete(key);
+  try { const all = JSON.parse(localStorage.getItem('c2r-imgprobe') || '{}'); delete all[key]; localStorage.setItem('c2r-imgprobe', JSON.stringify(all)); } catch { /* ignore */ }
+}
+
+/** Check the imagery sources at this site (cached), then return the order to try them in. */
+async function imgPlanFor(zone, box) {
+  const key = probeKey(zone, box);
+  let p = probeLoad(key);
+  if (!p) {
+    setStatus('Checking aerial imagery sources…');
+    const c = await imgCandidates(zone, box, { states: imgChoice.states, custom: customSource(imgChoice.custom) });
+    p = await imgProbe(zone, box, c.list, {
+      onProgress: (d, n, stage) => setStatus(stage === 'coverage'
+        ? `Checking which imagery sources cover the site (${d} of ${n})…` : `Measuring detail in each source (${d} of ${n})…`),
+    });
+    p.notes = c.notes;
+    p.checked = new Date().toISOString();
+    probeSave(key, p);
+  }
+  const steps = imgRank(p.results, imgChoice.prefer);
+  // Sources that failed only with an error may answer on a second try; they go last. Blank ones never.
+  for (const r of p.results) if (r.status === 'error') steps.push([r.src, r.how]);
+  const first = [];
+  if (imgChoice.id === 'custom') {
+    const cs = p.results.filter(r => r.src.id === 'custom').map(r => [r.src, r.how]);
+    first.push(...(cs.length ? cs : customSource(imgChoice.custom) ? [[customSource(imgChoice.custom), 'export']] : []));
+  } else if (imgChoice.id !== 'auto') {
+    const mine = p.results.filter(r => r.src.id === imgChoice.id).sort((a, b) => (a.status === 'ok' ? 0 : 1) - (b.status === 'ok' ? 0 : 1)).map(r => [r.src, r.how]);
+    const s0 = sourceById(imgChoice.id);
+    if (mine.length) first.push(...mine);
+    else if (s0) first.push([s0, s0.kind === 'tiles' ? 'tiles' : 'export']);
+  }
+  const seen = new Set();
+  const order = [...first, ...steps].filter(([q, h]) => { const k = `${q.id}:${h}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  return { order, probe: p };
+}
+
+/** A fetched image that is mostly blank (no photos there after all) is thrown away. */
+function blankCheck(canvas) {
+  const f = emptyFraction(canvas);
+  if (f > 0.15) { canvas.width = canvas.height = 0; throw new Error(`came back ${Math.round(f * 100)} % blank`); }
+  return canvas;
+}
 
 /** Site imagery for the map preview, PNG and 3D view: about 0.5 ft/px, at most 4096 px on the long side. */
 async function fetchImagery(zone, box) {
@@ -682,17 +766,22 @@ async function fetchImagery(zone, box) {
   const ftPerPx = Math.max(0.5, Math.max(wFt, hFt) / 4096);
   const W = Math.max(1, Math.round(wFt / ftPerPx)), H = Math.max(1, Math.round(hFt / ftPerPx));
   const notes = [];
-  for (const [src, how] of imgPlan(imgChoice.id, zone, box, customSource(imgChoice.custom))) {
+  let plan;
+  try { plan = await imgPlanFor(zone, box); }
+  catch (e) { notes.push(`Checking sources failed: ${e.message || e}`); plan = { order: [], probe: null }; }
+  for (const [src, how] of plan.order) {
     try {
       setStatus(`Fetching aerial imagery — ${src.label}…`);
-      const canvas = await fetchBox(src, how, zone, box, W, H, {
+      const canvas = blankCheck(await fetchBox(src, how, zone, box, W, H, {
         onTile: (d, n) => { if (n > 1) setStatus(`Fetching aerial imagery — ${src.label} (${d} of ${n})…`); },
-      });
-      return { bitmap: canvas, credit: src.credit, src, how, notes };
-    } catch (e) { notes.push(`${src.label}${how === 'tiles' ? ' (tiles)' : ''}: ${e.message || 'failed'}`); }
+      }));
+      return { bitmap: canvas, credit: src.credit, src, how, notes, probe: plan.probe };
+    } catch (e) { notes.push(`${src.label}${how === 'tiles' && src.kind !== 'tiles' ? ' (tiles)' : ''}: ${e.message || 'failed'}`); }
   }
-  return { bitmap: null, credit: '', src: null, how: null, notes };
+  return { bitmap: null, credit: '', src: null, how: null, notes, probe: plan.probe };
 }
+/** The probe row for the source a site ended up using. */
+const imgRow = site => site?.imageryProbe?.results.find(r => site.imagerySrc && r.src.id === site.imagerySrc.id && r.how === site.imageryHow) || null;
 const AERIAL_RES = [
   { v: 0, label: 'Maximum detail (about 0.25 ft/px)' },
   { v: 0.5, label: '0.5 ft/px' },
@@ -720,12 +809,12 @@ async function fetchAerialExport(site) {
   const W = Math.max(1, Math.round(wFt / ftPerPx)), H = Math.max(1, Math.round(hFt / ftPerPx));
   const fails = [];
   // The source that served the map imagery first, then the usual order.
-  const steps = imgPlan(imgChoice.id, zone, box, customSource(imgChoice.custom));
-  if (site.imagerySrc) { const i = steps.findIndex(([q, h]) => q === site.imagerySrc && h === site.imageryHow); if (i > 0) steps.unshift(...steps.splice(i, 1)); }
+  const steps = (await imgPlanFor(zone, box)).order;
+  if (site.imagerySrc) { const i = steps.findIndex(([q, h]) => q.id === site.imagerySrc.id && h === site.imageryHow); if (i > 0) steps.unshift(...steps.splice(i, 1)); }
   for (const [src, how] of steps) {
     let canvas;
     try {
-      canvas = await fetchBox(src, how, zone, box, W, H, { tile: AERIAL_TILE, onTile: (d, n) => setStatus(`Downloading aerial (${src.label}) — ${d} of ${n}…`) });
+      canvas = blankCheck(await fetchBox(src, how, zone, box, W, H, { tile: AERIAL_TILE, onTile: (d, n) => setStatus(`Downloading aerial (${src.label}) — ${d} of ${n}…`) }));
     } catch (e) { fails.push(src.label); continue; }
     let out = canvas, OW = W, OH = H;
     if (site.rot) {
@@ -876,7 +965,7 @@ function buildMeta(site) {
       `Contour interval: ${site.interval}${OPTIONS[u].tick} (index every ${site.interval * 5}${OPTIONS[u].tick})`,
       `Elevation range: ${fmt(site.pStats.min, 1)} – ${fmt(site.pStats.max, 1)} ${u}`,
       `North arrow: grid north; true north is ${fmt(Math.abs(site.convergence), 2)}° ${site.convergence >= 0 ? 'east' : 'west'} of grid north`,
-      `Imagery: ${site.imagery ? site.imageryCredit : 'not available — hillshade shown'}`,
+      `Imagery: ${site.imagery ? site.imageryCredit + imgDetailNote(site) : 'not available — hillshade shown'}`,
       `Generated ${site.generated.toISOString().slice(0, 10)} by Contours to Revit ${VERSION}`,
       ...(site.context ? [[BUILDING_SOURCES.filter(b => (site.vis || { buildings: true })[b.key]).map(b => `Buildings: ${b.short} (${(site.context[b.key] || []).length})`).join('; '), (site.vis || {}).roads !== false && site.ctxInclude.r ? `Roads: ${site.roadsSource === 'tiger' ? 'US Census TIGER' : '© OpenStreetMap contributors'}` : '', (site.vis || {}).parcels !== false && site.ctxInclude.p ? 'Parcels: Arkansas GIS Office' : '', (site.vis || {}).flood !== false ? 'Flood: FEMA NFHL' : ''].filter(Boolean).join('; ')] : []),
     ],
@@ -1549,7 +1638,8 @@ function makeReadme(site, v = vis()) {
       ];
     })(),
     '',
-    `Map imagery: ${site.imagery ? site.imageryCredit : 'none (hillshade shown)'}.`,
+    `Map imagery: ${site.imagery ? site.imageryCredit + imgDetailNote(site) : 'none (hillshade shown)'}.`,
+    ...imgReadmeLines(site),
     '');
   if (site.context && (BUILDING_SOURCES.some(b => v[b.key]) || v.roads || v.parking || v.streetAreas || v.sidewalks || v.roadWidths || v.roadEdges || v.parcels || v.flood)) {
     const bs = site.context.buildings;
@@ -4076,30 +4166,77 @@ updateTopoSummary();
 applyOrigin();
 updateZoneHint();
 // ---------- Aerial imagery source (Settings) ----------
+function imgDetailNote(site) {
+  const r = imgRow(site);
+  return r?.effIn ? ` — about ${fmtIn(r.effIn)} per pixel of real detail${r.year ? `, flown ${r.year}` : ''}` : '';
+}
+/** README: which sources were checked at this site and why the one used was picked. */
+function imgReadmeLines(site) {
+  const p = site.imageryProbe;
+  if (!p?.results?.length) return [];
+  const lab = r => `${r.src.label}${r.how === 'tiles' && r.src.kind !== 'tiles' ? ' (tiles)' : ''}`;
+  const lines = ['Imagery sources checked at this site (detail measured from sample pixels; blank or patchy sources are not used):'];
+  for (const r of p.results) {
+    const used = site.imagerySrc && r.src.id === site.imagerySrc.id && r.how === site.imageryHow;
+    lines.push(`  ${used ? '*' : '-'} ${lab(r)}${r.year ? ` (${r.year})` : ''}: ${r.status === 'ok' ? `about ${fmtIn(r.effIn)} per pixel` : r.why}${used ? '  <- used' : ''}`);
+  }
+  lines.push(`  Rule: ${imgChoice.prefer === 'new' ? 'newest source that is at most 1.5x coarser than the sharpest' : 'sharpest source (within 10 %, the newer one)'}${imgChoice.id !== 'auto' ? '; a source was chosen by hand in Settings' : ''}.`);
+  return lines;
+}
 function imgUsedText(site) {
-  if (!site) return 'Generate a site to see which source is used.';
-  if (!site.imagerySrc) return `None of the imagery services answered — hillshade shown.${site.imageryNotes?.length ? ` (${escapeHtml(site.imageryNotes.join('; '))})` : ''}`;
-  const s = site.imagerySrc;
+  if (!site) return 'Generate a site to see which sources cover it.';
+  if (!site.imagerySrc) return `No imagery service returned photos for this site — hillshade shown.${site.imageryNotes?.length ? ` (${escapeHtml(site.imageryNotes.join('; '))})` : ''}`;
+  const s = site.imagerySrc, r = imgRow(site);
   const asked = imgChoice.id === 'auto' ? '' : imgChoice.id === 'custom' ? (s.id === 'custom' ? '' : ' — the custom service failed, so the next best was used')
-    : s.id === imgChoice.id ? '' : ' — your chosen source failed or doesn\'t cover this site, so the next best was used';
-  return `${escapeHtml(s.label)}${site.imageryHow === 'tiles' ? ' (map tiles)' : ''}${asked}.`;
+    : s.id === imgChoice.id ? '' : ' — your chosen source failed or has no photos here, so the next best was used';
+  return `${escapeHtml(s.label)}${site.imageryHow === 'tiles' && s.kind !== 'tiles' ? ' (map tiles)' : ''}${r?.effIn ? ` · about ${fmtIn(r.effIn)}/px` : ''}${r?.year ? ` · ${r.year}` : ''}${asked}.`;
 }
 function imgUi() {
   const sel = $('img-src');
-  if (!sel.options.length) {
-    sel.innerHTML = '<option value="auto">Automatic — best available here</option>'
-      + IMAGERY_SOURCES.map(s => `<option value="${s.id}">${escapeHtml(s.label)}</option>`).join('')
-      + '<option value="custom">Custom ArcGIS service…</option>';
-  }
-  sel.value = imgChoice.id;
+  const site = state.result;
+  const flights = (site?.imageryProbe?.results || []).map(r => r.src).filter((s, i, a) => s.parent && a.findIndex(q => q.id === s.id) === i);
+  const opt = s => `<option value="${s.id}">${escapeHtml(s.label)}${s.auto === false ? ' — not picked automatically' : ''}</option>`;
+  const html = '<option value="auto">Automatic — best photos here</option>'
+    + (flights.length ? `<optgroup label="Found at this site">${flights.map(opt).join('')}</optgroup>` : '')
+    + STATE_LIST.map(st => `<optgroup label="${escapeHtml(st.name)}">${IMAGERY_SOURCES.filter(s => imgStateOf(s) === st.code && !s.flights).map(opt).join('')}</optgroup>`).join('')
+    + `<optgroup label="National">${IMAGERY_SOURCES.filter(s => !imgStateOf(s)).map(opt).join('')}</optgroup>`
+    + '<option value="custom">Custom ArcGIS service…</option>';
+  if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
+  sel.value = [...sel.options].some(o => o.value === imgChoice.id) ? imgChoice.id : 'auto';
   $('img-custom-row').hidden = imgChoice.id !== 'custom';
   if (document.activeElement !== $('img-custom')) $('img-custom').value = imgChoice.custom;
-  const site = state.result;
+  for (const r of document.querySelectorAll('input[name="img-prefer"]')) r.checked = r.value === imgChoice.prefer;
+  const box = $('img-states');
+  if (!box.childElementCount) {
+    box.innerHTML = STATE_LIST.map(st => `<label class="check"><input type="checkbox" value="${st.code}"> ${escapeHtml(st.name)} <span class="img-muted">(${st.count} services)</span></label>`).join('');
+  }
+  for (const c of box.querySelectorAll('input')) c.checked = imgChoice.states.includes(c.value);
   $('img-used').innerHTML = `This site: ${imgUsedText(site)}`;
-  const here = site ? IMAGERY_SOURCES.filter(s => s.bounds && covers(s, site.zone, site.box)).map(s => s.label) : [];
-  $('img-local').textContent = here.length ? `Local sources covering this site: ${here.join(', ')}.` : '';
+  // Every source checked at this site, best first.
+  const p = site?.imageryProbe, tb = $('img-table');
+  if (!p?.results?.length) { tb.hidden = true; $('img-recheck').hidden = !site; }
+  else {
+    const order = imgRank(p.results, imgChoice.prefer).map(([q, h]) => `${q.id}:${h}`);
+    const rows = p.results.slice().sort((a, b) => {
+      const ia = order.indexOf(`${a.src.id}:${a.how}`), ib = order.indexOf(`${b.src.id}:${b.how}`);
+      return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+    });
+    tb.innerHTML = '<thead><tr><th>Source</th><th>Year</th><th title="Real detail measured from sample pixels">Detail</th><th></th></tr></thead><tbody>'
+      + rows.map(r => {
+        const used = site.imagerySrc && r.src.id === site.imagerySrc.id && r.how === site.imageryHow;
+        const tl = r.how === 'tiles' && r.src.kind !== 'tiles' ? ' (tiles)' : '';
+        const st = r.status === 'ok' ? `${fmtIn(r.effIn)}${r.nativeIn && r.measuredIn && r.measuredIn > r.nativeIn * 1.15 ? `<span class="img-muted" title="Published pixel size ${fmtIn(r.nativeIn)}"> (pub. ${fmtIn(r.nativeIn)})</span>` : ''}`
+          : `<span class="img-muted">${escapeHtml(r.why)}</span>`;
+        return `<tr class="${used ? 'used' : ''} ${r.status === 'ok' ? '' : 'bad'}" title="${escapeHtml(r.src.publisher || '')}"><td>${used ? '✓ ' : ''}${escapeHtml(r.src.label + tl)}</td><td>${r.year || '—'}</td><td>${st}</td>`
+          + `<td>${r.status === 'ok' && !used ? `<button type="button" class="img-link" data-imguse="${escapeHtml(r.src.id)}">Use</button>` : ''}</td></tr>`;
+      }).join('') + '</tbody>';
+    tb.hidden = false;
+    $('img-recheck').hidden = false;
+  }
+  $('img-checked').textContent = p?.checked ? `Checked ${new Date(p.checked).toLocaleString()}${p.notes?.length ? ` · ${p.notes.join('; ')}` : ''}.` : '';
   const si = $('src-imagery'); if (si) si.innerHTML = imgUsedText(site);
 }
+const imgStateOf = s => s.state || null;
 let imgBusy = 0;
 async function refreshImagery() {
   imgUi();
@@ -4109,7 +4246,7 @@ async function refreshImagery() {
   $('img-used').textContent = 'This site: loading…';
   const r = await fetchImagery(site.zone, site.box);
   if (seq !== imgBusy || state.result !== site) return;
-  Object.assign(site, { imagery: r.bitmap, imageryCredit: r.credit, imagerySrc: r.src, imageryHow: r.how, imageryNotes: r.notes });
+  Object.assign(site, { imagery: r.bitmap, imageryCredit: r.credit, imagerySrc: r.src, imageryHow: r.how, imageryNotes: r.notes, imageryProbe: r.probe });
   site._aerial = null;
   site.meta = buildMeta(site);
   drawUnderlayThumb();
@@ -4118,13 +4255,33 @@ async function refreshImagery() {
   imgUi();
   siteImgDraw();
   updateLayerCounts(site);
-  setStatus(r.src ? `Aerial imagery: ${r.src.label}.` : 'No imagery service answered for this site.', !r.src);
+  setStatus(r.src ? `Aerial imagery: ${r.src.label}${imgDetailNote(site)}.` : 'No imagery service returned photos for this site.', !r.src);
 }
-$('img-src').addEventListener('change', e => {
-  imgChoice.id = e.target.value;
+function imgSetChoice(id) {
+  imgChoice.id = id;
   try { localStorage.setItem('c2r-imgsrc', imgChoice.id); } catch { /* ignore */ }
   imgUi();
   if (imgChoice.id !== 'custom' || customSource(imgChoice.custom)) refreshImagery();
+}
+$('img-src').addEventListener('change', e => imgSetChoice(e.target.value));
+$('img-table').addEventListener('click', e => { const b = e.target.closest('[data-imguse]'); if (b) imgSetChoice(b.dataset.imguse); });
+for (const r of document.querySelectorAll('input[name="img-prefer"]')) {
+  r.addEventListener('change', () => {
+    imgChoice.prefer = r.value === 'new' ? 'new' : 'sharp';
+    try { localStorage.setItem('c2r-imgprefer', imgChoice.prefer); } catch { /* ignore */ }
+    refreshImagery();
+  });
+}
+$('img-states').addEventListener('change', () => {
+  imgChoice.states = [...$('img-states').querySelectorAll('input:checked')].map(c => c.value);
+  try { localStorage.setItem('c2r-imgstates', JSON.stringify(imgChoice.states)); } catch { /* ignore */ }
+  refreshImagery();
+});
+$('img-recheck').addEventListener('click', () => {
+  const site = state.result;
+  if (!site) return;
+  probeForget(site.zone, site.box);
+  refreshImagery();
 });
 $('img-custom').addEventListener('change', e => {
   const v = e.target.value.trim();
