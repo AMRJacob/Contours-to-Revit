@@ -204,6 +204,21 @@ export async function sunHours(R, samples, day, site, { stepMin = 15, stride = 1
   const steps = [];
   for (let t = rise.getTime(); t <= set.getTime(); t += stepMin * 6e4) steps.push(new Date(t));
   const dt = stepMin / 60, off = R.s * 0.6;
+  // Walls: their triangles carry no inside / outside, so find the outside from the height raster (the building is
+  // the high side). A wall only gets sun on its outside face — trying both faces let the sun "shine through" from
+  // inside under low hip-roof edges (north walls got hours in December). Freestanding walls keep both faces.
+  const OUT = new Int8Array(nP);                       // 1 = stored normal points out, -1 = flip it, 0 = either side
+  if (samples) {
+    const Hn = (x, y) => { const i = Math.round((x - R.x0) / R.s), j = Math.round((y - R.y0) / R.s); return i < 0 || j < 0 || i >= R.nx || j >= R.ny ? -Infinity : R.H[j * R.nx + i]; };
+    const P = samples.P, N = samples.N;
+    for (let v = 0; v < nP; v++) {
+      if (N[v * 3 + 2] >= 0.2) { OUT[v] = 1; continue; }
+      const nx = N[v * 3], ny = N[v * 3 + 1], x = P[v * 3], y = P[v * 3 + 1];
+      let a = -Infinity, b = -Infinity;
+      for (const d of [0.9, 1.6]) { a = Math.max(a, Hn(x + nx * R.s * d, y + ny * R.s * d)); b = Math.max(b, Hn(x - nx * R.s * d, y - ny * R.s * d)); }
+      OUT[v] = Math.abs(a - b) < 0.3 ? 0 : a < b ? 1 : -1;
+    }
+  }
   let lastYield = performance.now();
   for (let si = 0; si < steps.length; si++) {
     if (isStale?.()) return null;
@@ -216,10 +231,11 @@ export async function sunHours(R, samples, day, site, { stepMin = 15, stride = 1
       const ca = Math.cos(pos.alt * RAD), sx = sv.dx * ca, sy = sv.dy * ca, sz = Math.sin(pos.alt * RAD);
       const P = samples?.P, N = samples?.N;
       for (let v = 0; v < nP; v++) {
-        let nx = N[v * 3], ny = N[v * 3 + 1];
+        const o = OUT[v] || 1;
+        let nx = N[v * 3] * o, ny = N[v * 3 + 1] * o;
         const nz = N[v * 3 + 2];
         let dot = nx * sx + ny * sy + nz * sz;
-        if (nz < 0.2 && dot < 0) { nx = -nx; ny = -ny; dot = nx * sx + ny * sy + nz * sz; }   // walls: the side toward the sun
+        if (!OUT[v] && dot < 0) { nx = -nx; ny = -ny; dot = nx * sx + ny * sy + nz * sz; }      // freestanding: either face
         if (dot <= 0.02) continue;
         // Start just off the surface on the sunny side, skip the cell it sits in, march toward the sun.
         if (litAt(R, sv, P[v * 3] + nx * off, P[v * 3 + 1] + ny * off, P[v * 3 + 2] + 0.2 + nz * 0.2, R.s * 0.9)) pts[v] += dt;
