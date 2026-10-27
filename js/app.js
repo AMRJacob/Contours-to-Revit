@@ -1,19 +1,21 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.38.3';
-import { fetchElevation, sample } from './dem.js?v=0.38.3';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.38.3';
-import { Dxf } from './dxf.js?v=0.38.3';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.38.3';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.38.3';
-import { Flow } from './flow.js?v=0.38.3';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.38.3';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.38.3';
-import { loadLidar, applyLidar } from './lidar.js?v=0.38.3';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.38.3';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.38.3';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.39.0';
+import { fetchElevation, sample } from './dem.js?v=0.39.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.39.0';
+import { Dxf } from './dxf.js?v=0.39.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.39.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.39.0';
+import { Flow } from './flow.js?v=0.39.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, sunHours, hoursColor, compass } from './sun.js?v=0.39.0';
+import { windRose, roseSummary, sectorName, WindField, SPEED_BINS, WIND_CREDIT } from './wind.js?v=0.39.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.39.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.39.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.39.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.39.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.39.0';
 
-const VERSION = '0.38.3';
+const VERSION = '0.39.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -1032,6 +1034,8 @@ function showResults(site) {
   document.querySelector('.tab[data-view="preview"]').disabled = false;
   document.querySelector('.tab[data-view="3d"]').disabled = false;
   $('flow-toggle').disabled = false;
+  $('sun-toggle').disabled = false;
+  $('wind-toggle').disabled = false;
 }
 
 // ---------- Layer visibility (map "Layers" panel drives the map, preview, PNG and DXF) ----------
@@ -4035,6 +4039,8 @@ function clearAll() {
   document.querySelector('.tab[data-view="preview"]').disabled = true;
   document.querySelector('.tab[data-view="3d"]').disabled = true;
   flowSet(false); $('flow-toggle').disabled = true;
+  sunSet(false); $('sun-toggle').disabled = true;
+  windSet(false); $('wind-toggle').disabled = true;
   updateLayerCounts(null);
   siteImgDraw();
   onSiteChanged(false);
@@ -4351,6 +4357,7 @@ function v3Build(resetView = false) {
   v3.site = site;
   v3.setFeatures(prop ? v3Features(des, site) : []);
   v3.setBuildings(v3Buildings(site));
+  sunApply3d();
 }
 
 /** Ground image for the 3D view: the aerial plus the map layers that are switched on (cached per site + layers). */
@@ -4368,8 +4375,8 @@ function v3Texture(site) {
 
 /** Massing of the building layers shown on the map, as triangles (lidar roofs where measured). Heights are kept at
  *  true scale on the exaggerated ground, so the vertical exaggeration doesn't stretch the buildings. */
-function v3Buildings(site) {
-  const ex = v3?.ex || 1;
+function v3Buildings(site, exOverride) {
+  const ex = exOverride || v3?.ex || 1;
   const out = [];
   for (const src of BUILDING_SOURCES) {
     if (!visibility[src.key]) continue;
@@ -4513,6 +4520,8 @@ function flowKick() {
     const f = flow.on && view === '3d' && state.result ? flowSync() : null;
     v3.setFlow(f, f ? flowSinks() : null);
   }
+  sunKick();
+  windKick();
 }
 function flowClear() { flowCanvas.getContext('2d').clearRect(0, 0, flowCanvas.width, flowCanvas.height); }
 
@@ -4568,6 +4577,302 @@ $('flow-speed').addEventListener('input', e => {
   if (flow.f) flow.f.speed = flowSpeed();
   try { localStorage.setItem('c2r-flowspeed', e.target.value); } catch { /* ignore */ }
 });
+
+
+// ---------- Sun (view only) ----------
+// Shadows at a chosen moment (3D: real cast shadows; map: shade drawn over the site) or hours of direct sun over the
+// chosen day (3D: ground and buildings coloured; map: heat over the site). Ground and building masses only.
+var sunS = { on: false, mode: 'time', R: null, Rkey: '', hours: null, hKey: '', busy: 0, play: 0, msg: '' };
+map.createPane('sunImg').style.zIndex = 255;
+const sunCanvas = L.DomUtil.create('canvas', 'sun-canvas', map.getPane('sunImg'));
+sunCanvas.style.pointerEvents = 'none';
+const pad2 = n => String(n).padStart(2, '0');
+const dateStr = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const fmtClock = d => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+$('sun-date').value = dateStr(new Date());
+function sunWhen() {
+  const [y, m, d] = ($('sun-date').value || dateStr(new Date())).split('-').map(Number), min = Number($('sun-time').value);
+  return new Date(y, m - 1, d, Math.floor(min / 60), min % 60);
+}
+function sunBuildings(site) {
+  const out = [];
+  for (const src of BUILDING_SOURCES) {
+    if (!visibility[src.key]) continue;
+    for (const b of (src.key === 'buildings' ? site.context?.buildings : site.context?.[src.key]) || []) out.push(b);
+  }
+  return out;
+}
+/** Height raster of ground + visible buildings for the current site (cached per site, layers and size). */
+function sunRaster(site, maxSide) {
+  const key = `${maxSide}|${BUILDING_SOURCES.map(b => (visibility[b.key] ? 1 : 0)).join('')}|${site.generated?.getTime()}`;
+  if (sunS.R && sunS.Rsite === site && sunS.Rkey === key) return sunS.R;
+  sunS.R = heightRaster(site, sunBuildings(site), maxSide); sunS.Rsite = site; sunS.Rkey = key;
+  return sunS.R;
+}
+function sunSet(on) {
+  sunS.on = on;
+  $('sun-toggle').setAttribute('aria-pressed', String(on));
+  $('sun-panel').hidden = !on;
+  if (!on) sunStop();
+  sunKick();
+}
+$('sun-toggle').addEventListener('click', () => { if (state.result) sunSet(!sunS.on); });
+function sunStop() { clearInterval(sunS.play); sunS.play = 0; $('sun-play').textContent = '▶'; }
+function sunReadout() {
+  const site = state.result;
+  if (!site) return;
+  const when = sunWhen(), { lat, lng } = site.center;
+  const p = sunPosition(when, lat, lng), t = sunTimes(when, lat, lng);
+  $('sun-time-v').textContent = fmtClock(when);
+  const rs = t.rise && t.set ? `sunrise ${fmtClock(t.rise)}, sunset ${fmtClock(t.set)}` : '';
+  $('sun-read').textContent = sunS.mode === 'hours' ? rs
+    : p.alt > 0 ? `${Math.round(p.alt)}° up, from the ${compass(p.az)} (${Math.round(p.az)}°) · ${rs}` : `below the horizon · ${rs}`;
+}
+/** Image of the raster for the map: shade (time) or sun-hour heat (hours). */
+function sunImage(R, vals, mode, max) {
+  const c = document.createElement('canvas'); c.width = R.nx; c.height = R.ny;
+  const g = c.getContext('2d'), img = g.createImageData(R.nx, R.ny), d = img.data;
+  for (let j = 0; j < R.ny; j++) for (let i = 0; i < R.nx; i++) {
+    const q = j * R.nx + i, o = ((R.ny - 1 - j) * R.nx + i) * 4;
+    if (mode === 'time') { if (!vals[q]) { d[o] = 12; d[o + 1] = 18; d[o + 2] = 38; d[o + 3] = 125; } }
+    else { const [r, gg, b] = hoursColor(vals[q] / (max || 1)); d[o] = r * 255; d[o + 1] = gg * 255; d[o + 2] = b * 255; d[o + 3] = 170; }
+  }
+  g.putImageData(img, 0, 0);
+  return c;
+}
+function sunMapDraw() {
+  const site = state.result, ctx = sunCanvas.getContext('2d');
+  const cont = map.getContainer(), dpr = window.devicePixelRatio || 1, W = cont.clientWidth, H = cont.clientHeight;
+  if (sunCanvas.width !== Math.round(W * dpr) || sunCanvas.height !== Math.round(H * dpr)) {
+    sunCanvas.width = Math.round(W * dpr); sunCanvas.height = Math.round(H * dpr);
+    sunCanvas.style.width = W + 'px'; sunCanvas.style.height = H + 'px';
+  }
+  L.DomUtil.setPosition(sunCanvas, map.containerPointToLayerPoint([0, 0]));
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, sunCanvas.width, sunCanvas.height);
+  const im = sunS.img;
+  if (!sunS.on || !site || !im || im.site !== site || curView() !== 'map') return;
+  const M = dzAffine(site), R = im.R, s2 = R.s;
+  ctx.save();
+  if (site.mask) { ctx.beginPath(); site.mask.forEach(([x, y], i) => { const [sx, sy] = toScreen(M, x, y); ctx[i ? 'lineTo' : 'moveTo'](sx * dpr, sy * dpr); }); ctx.closePath(); ctx.clip(); }
+  const x0 = R.x0 - s2 / 2, y1 = R.y0 + (R.ny - 1) * s2 + s2 / 2;
+  ctx.setTransform(dpr * M.a * s2, dpr * M.b * s2, -dpr * M.c * s2, -dpr * M.d * s2, dpr * (M.a * x0 + M.c * y1 + M.e), dpr * (M.b * x0 + M.d * y1 + M.f));
+  ctx.imageSmoothingEnabled = im.mode === 'hours';
+  ctx.drawImage(im.canvas, 0, 0);
+  ctx.restore();
+}
+map.on('moveend zoomend resize viewreset', () => { if (sunS.on) sunMapDraw(); });
+map.on('zoomstart', () => { sunCanvas.style.visibility = 'hidden'; });
+map.on('zoomend', () => { sunCanvas.style.visibility = ''; });
+
+/** Scene direction toward the sun (x east, y up, z −north, grid axes) for the 3D view. */
+function sunDir3d(site, p) {
+  const a = (p.az + (site.convergence || 0)) * Math.PI / 180, h = Math.max(0.5, p.alt) * Math.PI / 180;
+  return [Math.sin(a) * Math.cos(h), Math.sin(h), -Math.cos(a) * Math.cos(h)];
+}
+function sunApply3d() {
+  if (!v3) return;
+  const site = state.result;
+  if (!sunS.on || !site || curView() !== '3d') { if (v3.sunMode && v3.sunMode !== 'off') { const was = v3.sunMode; v3.setSun('off'); if (was === 'hours' && site) setTimeout(() => v3Build(), 0); } return; }
+  if (sunS.mode === 'time') {
+    const was = v3.sunMode;
+    const p = sunPosition(sunWhen(), site.center.lat, site.center.lng);
+    v3.setSun('time', { dir: sunDir3d(site, p), alt: p.alt });
+    if (was === 'hours') setTimeout(() => v3Build(), 0);            // put the aerial colours back on the ground and buildings
+  } else if (sunS.hours && sunS.hours.site === site && sunS.hours.key === sunHoursKey(site)) {
+    const H = sunS.hours, R = H.R, max = H.res.hoursMax || 1;
+    const colorAt = (x, y) => {
+      const i = Math.round((x - R.x0) / R.s), j = Math.round((y - R.y0) / R.s);
+      return hoursColor(i < 0 || j < 0 || i >= R.nx || j >= R.ny ? 0 : H.res.cells[j * R.nx + i] / max);
+    };
+    const tc = new Float32Array(H.res.tris.length * 3);
+    H.res.tris.forEach((h, t) => { const c = hoursColor(h / max); tc[t * 3] = c[0]; tc[t * 3 + 1] = c[1]; tc[t * 3 + 2] = c[2]; });
+    v3.setSun('hours', { colorAt, triColors: tc });
+  } else v3.setSun('off');
+}
+const sunHoursKey = site => `${$('sun-date').value}|${BUILDING_SOURCES.map(b => (visibility[b.key] ? 1 : 0)).join('')}|${site.generated?.getTime()}`;
+async function sunComputeHours(site) {
+  const key = sunHoursKey(site);
+  if (sunS.hours && sunS.hours.site === site && sunS.hours.key === key) return true;
+  const seq = ++sunS.busy;
+  const R = sunRaster(site, 220);
+  const tris = v3Buildings(site, 1);
+  const t0 = performance.now();
+  $('sun-msg').textContent = 'Working out the sun hours…';
+  const res = await sunHours(R, tris, sunWhen(), site, {
+    stepMin: 20, isStale: () => seq !== sunS.busy || !sunS.on || sunS.mode !== 'hours' || state.result !== site,
+    onProgress: f => { $('sun-msg').textContent = `Working out the sun hours… ${Math.round(f * 100)} %`; },
+  });
+  if (!res) return false;
+  sunS.hours = { site, key, R, res };
+  $('sun-msg').textContent = `${res.steps} sun positions, every 20 min from sunrise to sunset · ${((performance.now() - t0) / 1000).toFixed(1)} s.`;
+  return true;
+}
+async function sunKick() {
+  const site = state.result;
+  $('sun-time-row').hidden = sunS.mode === 'hours';
+  $('sun-legend').hidden = sunS.mode !== 'hours';
+  if (!sunS.on || !site) { sunS.img = null; sunMapDraw(); sunApply3d(); return; }
+  sunReadout();
+  const view = curView();
+  if (sunS.mode === 'time') {
+    $('sun-msg').textContent = '';
+    if (view === 'map') {
+      const p = sunPosition(sunWhen(), site.center.lat, site.center.lng);
+      const R = sunRaster(site, 300);
+      const lit = shadeRaster(R, sunVector(p, site.convergence || 0, site.toOut));
+      sunS.img = { site, R, mode: 'time', canvas: sunImage(R, lit, 'time') };
+      sunMapDraw();
+    } else sunMapDraw();
+    sunApply3d();
+  } else {
+    const seq = sunS.busy;
+    const ok = await sunComputeHours(site);
+    if (!ok || state.result !== site || !sunS.on || sunS.mode !== 'hours' || (seq !== sunS.busy && sunS.hours?.key !== sunHoursKey(site))) return;
+    const H = sunS.hours, max = H.res.hoursMax || 1;
+    $('sun-legend-max').textContent = `${max.toFixed(1)} h (sunrise to sunset)`;
+    sunS.img = { site, R: H.R, mode: 'hours', canvas: sunImage(H.R, H.res.cells, 'hours', max) };
+    sunMapDraw();
+    sunApply3d();
+  }
+}
+let sunT = 0;
+const sunLater = () => { clearTimeout(sunT); sunT = setTimeout(sunKick, 60); };
+$('sun-time').addEventListener('input', () => { sunReadout(); sunLater(); });
+$('sun-date').addEventListener('change', sunLater);
+document.querySelectorAll('[data-sd]').forEach(b => b.addEventListener('click', () => { $('sun-date').value = `${sunWhen().getFullYear()}-${b.dataset.sd}`; sunLater(); }));
+document.querySelectorAll('input[name="sun-mode"]').forEach(r => r.addEventListener('change', () => { sunS.mode = r.value; sunStop(); sunKick(); }));
+$('sun-play').addEventListener('click', () => {
+  if (sunS.play) { sunStop(); return; }
+  const site = state.result;
+  if (!site) return;
+  $('sun-play').textContent = '❚❚';
+  sunS.play = setInterval(() => {
+    const t = sunTimes(sunWhen(), site.center.lat, site.center.lng), el = $('sun-time');
+    const lo = t.rise ? t.rise.getHours() * 60 + t.rise.getMinutes() - 20 : 300, hi = t.set ? t.set.getHours() * 60 + t.set.getMinutes() + 20 : 1200;
+    let v = Number(el.value) + 10;
+    if (v > hi || v < lo) v = Math.max(Number(el.min), lo);
+    el.value = String(v);
+    sunReadout();
+    sunKick();
+  }, curView() === '3d' ? 120 : 220);
+});
+
+// ---------- Wind (view only) ----------
+// A wind rose from the nearest NOAA station's last five years of hourly observations, and streaks that drift
+// across the site with directions and speeds drawn from it.
+var windS = { on: false, rose: null, site: null, err: '', loading: false, field: null, raf: 0, M: null };
+var windCanvas = document.createElement('canvas');
+windCanvas.className = 'wind-canvas';
+windCanvas.hidden = true;
+map.getContainer().appendChild(windCanvas);
+const WIND_COLORS = ['#7dd3fc', '#34d399', '#facc15', '#fb923c', '#f43f5e'];
+function windSet(on) {
+  windS.on = on;
+  $('wind-toggle').setAttribute('aria-pressed', String(on));
+  $('wind-panel').hidden = !on;
+  windKick();
+}
+$('wind-toggle').addEventListener('click', () => { if (state.result) windSet(!windS.on); });
+$('wind-season').addEventListener('change', () => { windS.field = null; windPanel(); windKick(); });
+const windMph = site => (site?.outUnit || 'ft') !== 'm';
+const spd = (v, site) => windMph(site) ? `${Math.round(v * 2.23694)} mph` : `${v.toFixed(1)} m/s`;
+function windPanel() {
+  const site = state.result, r = windS.rose;
+  const cv = $('wind-rose'), dpr = window.devicePixelRatio || 1;
+  cv.width = 200 * dpr; cv.height = 200 * dpr;
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, 200, 200);
+  if (windS.loading || windS.err || !r) {
+    $('wind-read').textContent = windS.err ? `Wind data not available: ${windS.err}` : windS.msg || 'Loading…';
+    $('wind-src').textContent = ''; $('wind-key').innerHTML = '';
+    return;
+  }
+  const s = r.seasons[$('wind-season').value] || r.seasons.all, sum = roseSummary(s);
+  const cx = 100, cy = 102, R0 = 82, mx = Math.max(...sum.frac, 0.01);
+  const ring = mx > 0.16 ? 0.05 : mx > 0.08 ? 0.04 : 0.02;
+  g.strokeStyle = 'rgba(255,255,255,0.14)'; g.fillStyle = '#9aa3a9'; g.font = '9px sans-serif'; g.lineWidth = 1;
+  for (let f = ring; f <= mx + 1e-9; f += ring) { g.beginPath(); g.arc(cx, cy, R0 * f / mx, 0, Math.PI * 2); g.stroke(); g.fillText(`${Math.round(f * 100)}%`, cx + 2, cy - R0 * f / mx + 9); }
+  g.fillStyle = '#e7e4dd'; g.font = 'bold 11px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  [['N', 0], ['E', 90], ['S', 180], ['W', 270]].forEach(([t, a]) => { const q = a * Math.PI / 180; g.fillText(t, cx + Math.sin(q) * (R0 + 10), cy - Math.cos(q) * (R0 + 10)); });
+  const w = Math.PI * 2 / 16 * 0.42;
+  s.sec.forEach((bins, i) => {
+    const a = i * Math.PI / 8;
+    let acc = 0;
+    for (let b = bins.length - 1; b >= 0; b--) acc += bins[b];                    // outermost = total
+    let r1 = acc / (s.n || 1) / mx * R0;
+    for (let b = bins.length - 1; b >= 0; b--) {                                   // draw from the outside in, fastest outside
+      g.beginPath(); g.moveTo(cx, cy); g.arc(cx, cy, r1, a - Math.PI / 2 - w, a - Math.PI / 2 + w); g.closePath();
+      g.fillStyle = WIND_COLORS[Math.min(b, WIND_COLORS.length - 1)]; g.fill();
+      r1 -= bins[b] / (s.n || 1) / mx * R0;
+    }
+  });
+  const edges = SPEED_BINS.map(v => (windMph(site) ? Math.round(v * 2.23694) : v));
+  $('wind-key').innerHTML = edges.map((e, i) => `<span><b style="background:${WIND_COLORS[i]}"></b>${i < edges.length - 1 ? `${e}–${edges[i + 1]}` : `${e}+`}</span>`).join('') + `<span>${windMph(site) ? 'mph' : 'm/s'}</span>`;
+  $('wind-read').textContent = `Prevailing from the ${sectorName(sum.prevailing)} (${Math.round(sum.frac[sum.prevailing] * 100)} % of hours) · calm ${Math.round(sum.calm * 100)} % · average ${spd(sum.mean, site)}. Petals point where the wind comes from; N is true north.`;
+  const st = r.station;
+  $('wind-src').textContent = `${st.name}${st.icao ? ` (${st.icao})` : ''}, ${st.km.toFixed(0)} km away · ${r.years[0]}–${r.years[1]}, ${r.n.toLocaleString()} hourly reports · ${WIND_CREDIT}. Station winds, ~10 m above open ground — buildings and trees change them locally.`;
+}
+async function windLoad(site) {
+  windS.loading = true; windS.err = ''; windS.msg = 'Finding the nearest weather station…'; windPanel();
+  try {
+    const rose = await windRose(site.center.lat, site.center.lng, { onStatus: m => { windS.msg = m; windPanel(); } });
+    if (state.result !== site) return;
+    windS.rose = rose; windS.site = site; windS.field = null;
+  } catch (e) { windS.err = e.message || String(e); windS.site = site; }
+  windS.loading = false;
+  windPanel();
+  windKick();
+}
+function windKick() {
+  const site = state.result, view = curView();
+  const on = windS.on && !!site;
+  if (on && windS.site !== site && !windS.loading) { windS.rose = null; windS.field = null; windLoad(site); }
+  const ready = on && windS.rose && windS.site === site;
+  if (ready && !windS.field) windS.field = new WindField(site.box, windS.rose.seasons[$('wind-season').value] || windS.rose.seasons.all, site.convergence || 0);
+  const map2d = ready && view === 'map';
+  windCanvas.hidden = !map2d;
+  if (!map2d) { cancelAnimationFrame(windS.raf); windS.raf = 0; windCanvas.getContext('2d').clearRect(0, 0, windCanvas.width, windCanvas.height); }
+  else if (!windS.raf) { windS.M = null; windS.raf = requestAnimationFrame(windFrame); }
+  if (v3) {
+    if (ready && view === '3d') {
+      const g2 = site.grid, z = g2.z;
+      const zAt = (x, y) => { const i = Math.round((x - g2.x0) / g2.s), j = Math.round((y - g2.y0) / g2.s); return i < 0 || j < 0 || i >= g2.nx || j >= g2.ny ? NaN : z[j * g2.nx + i]; };
+      if (v3._windField !== windS.field) { v3.setWind(windS.field, zAt); v3._windField = windS.field; }
+    } else if (v3._windField) { v3.setWind(null); v3._windField = null; }
+  }
+  if (on) windPanel();
+}
+function windFrame() {
+  windS.raf = 0;
+  const site = state.result, f = windS.field;
+  if (!windS.on || !site || !f || curView() !== 'map') return;
+  const cont = map.getContainer(), dpr = window.devicePixelRatio || 1;
+  const W = Math.round(cont.clientWidth * dpr), H = Math.round(cont.clientHeight * dpr);
+  if (windCanvas.width !== W || windCanvas.height !== H) {
+    windCanvas.width = W; windCanvas.height = H;
+    windCanvas.style.width = cont.clientWidth + 'px'; windCanvas.style.height = cont.clientHeight + 'px';
+  }
+  if (!windS.M) windS.M = dzAffine(site);
+  const M = windS.M, ctx = windCanvas.getContext('2d');
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.fillStyle = 'rgba(0,0,0,0.08)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalCompositeOperation = 'source-over';
+  f.step();
+  ctx.strokeStyle = 'rgba(241,245,249,0.85)';
+  ctx.lineWidth = 1.3 * dpr; ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (let p = 0; p < f.n; p++) {
+    if (f.age[p] < 2 || !f.inBox(p)) continue;
+    const [ax, ay] = toScreen(M, f.ox[p], f.oy[p]), [bx, by] = toScreen(M, f.px[p], f.py[p]);
+    ctx.moveTo(ax * dpr, ay * dpr); ctx.lineTo(bx * dpr, by * dpr);
+  }
+  ctx.stroke();
+  windS.raf = requestAnimationFrame(windFrame);
+}
+map.on('move zoom resize viewreset', () => { if (windS.on) { windS.M = null; windCanvas.getContext('2d').clearRect(0, 0, windCanvas.width, windCanvas.height); } });
 
 // ---------- Revit plugin bridge (js/revit.js): only what it needs from here ----------
 /** A site/design snapshot from a Revit model opened as a local project (one mirror project per model). */

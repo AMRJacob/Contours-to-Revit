@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.38.3">
+  <link rel="stylesheet" href="css/app.css?v=0.39.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -518,6 +518,38 @@
         <button role="tab" class="tab" data-view="3d" aria-selected="false" disabled title="Orbit the site in 3D">3D</button>
         <span class="tab-sep" aria-hidden="true"></span>
         <button type="button" class="tab tab-toggle" id="flow-toggle" aria-pressed="false" disabled title="Animate where rain would run off, and mark low spots where it would pond">Water flow</button>
+        <button type="button" class="tab tab-toggle tab-sun" id="sun-toggle" aria-pressed="false" disabled title="Sun position, cast shadows and hours of direct sun on the ground and buildings">Sun</button>
+        <button type="button" class="tab tab-toggle tab-wind" id="wind-toggle" aria-pressed="false" disabled title="Prevailing wind from the nearest NOAA weather station">Wind</button>
+      </div>
+      <div class="env-panels" id="env-panels">
+        <section class="env-panel" id="sun-panel" hidden aria-label="Sun">
+          <div class="env-h"><span>Sun</span><small id="sun-read"></small></div>
+          <div class="env-row">
+            <input type="date" id="sun-date" aria-label="Date">
+            <span class="env-chips"><button type="button" data-sd="03-20">Mar 20</button><button type="button" data-sd="06-21">Jun 21</button><button type="button" data-sd="09-22">Sep 22</button><button type="button" data-sd="12-21">Dec 21</button></span>
+          </div>
+          <div class="env-row seg seg-dark" role="radiogroup" aria-label="Show">
+            <label><input type="radio" name="sun-mode" value="time" checked><span>Shadows at a time</span></label>
+            <label><input type="radio" name="sun-mode" value="hours"><span>Sun hours over the day</span></label>
+          </div>
+          <div class="env-row" id="sun-time-row">
+            <button type="button" class="env-play" id="sun-play" aria-label="Play through the day" title="Play through the day">▶</button>
+            <input type="range" id="sun-time" min="240" max="1260" step="5" value="720" aria-label="Time of day">
+            <output id="sun-time-v">12:00 pm</output>
+          </div>
+          <div class="env-legend" id="sun-legend" hidden><span>0 h</span><i></i><span id="sun-legend-max"></span></div>
+          <p class="env-note" id="sun-msg"></p>
+          <p class="env-note">Ground and building masses only — trees aren't modelled. Times are this computer's time zone.</p>
+        </section>
+        <section class="env-panel" id="wind-panel" hidden aria-label="Prevailing wind">
+          <div class="env-h"><span>Prevailing wind</span>
+            <select id="wind-season" aria-label="Season"><option value="all">All year</option><option value="winter">Winter (Dec–Feb)</option><option value="spring">Spring (Mar–May)</option><option value="summer">Summer (Jun–Aug)</option><option value="fall">Fall (Sep–Nov)</option></select>
+          </div>
+          <canvas id="wind-rose" width="200" height="200" aria-label="Wind rose"></canvas>
+          <div class="env-legend wind-key" id="wind-key"></div>
+          <p class="env-note" id="wind-read"></p>
+          <p class="env-note" id="wind-src"></p>
+        </section>
       </div>
       <div class="flow-legend" id="flow-legend" hidden><i></i>Runoff direction <b></b>Ponding <small id="flow-note"></small></div>
       <div id="map"></div>
@@ -550,6 +582,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.38.3"></script>
+  <script type="module" src="js/app.js?v=0.39.0"></script>
 </body>
 </html>

@@ -31,6 +31,7 @@ export class SiteView3D {
     this.ex = 2;           // vertical exaggeration
     this.visible = false;
     this.flowPts = null;
+    this.frames = {};      // per-frame callbacks (water flow, wind)
     this._loop = this._loop.bind(this);
     this._ro = new ResizeObserver(() => this.resize());
     this._ro.observe(container);
@@ -55,7 +56,7 @@ export class SiteView3D {
     this._raf = 0;
     if (!this.visible) return;
     this.controls.update();
-    if (this.onFrame) this.onFrame();
+    for (const f of Object.values(this.frames)) f();
     this.renderer.render(this.scene, this.camera);
     this._raf = requestAnimationFrame(this._loop);
   }
@@ -202,7 +203,7 @@ export class SiteView3D {
     this.flow = flow;
     if (this.flowPts) { this.scene.remove(this.flowPts); this.flowPts.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); this.flowPts = null; }
     if (this.pond) { this.scene.remove(this.pond); this.pond.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); this.pond = null; }
-    if (!flow) { this.onFrame = null; return; }
+    if (!flow) { delete this.frames.flow; return; }
     if (sinks?.length) {
       // Ponding spots: translucent blue discs at the water level a low spot would fill to.
       this.pond = new THREE.Group();
@@ -237,7 +238,7 @@ export class SiteView3D {
     this.scene.add(this.flowPts);
     const hist = new Float32Array(n * T * 3); // newest first
     let filled = false;
-    this.onFrame = () => {
+    this.frames.flow = () => {
       flow.step();
       const a = geo.attributes.position.array;
       for (let p = 0; p < n; p++) {
@@ -255,6 +256,110 @@ export class SiteView3D {
       }
       filled = true;
       geo.attributes.position.needsUpdate = true;
+      tgeo.attributes.position.needsUpdate = true;
+    };
+  }
+
+  /**
+   * Sun. mode 'off' (default lighting), 'time' (light from the sun's position with cast shadows) or 'hours'
+   * (terrain and buildings coloured by hours of direct sun). opts:
+   *   time:  { dir: [x, y, z] toward the sun in scene axes, alt (degrees) }
+   *   hours: { colorAt(x, y) -> [r, g, b] for native XY on the ground, triColors: Float32Array (r, g, b per building triangle) }
+   */
+  setSun(mode, opts = {}) {
+    const R = this.renderer, sun = this.sun, hemi = this.scene.children.find(o => o.isHemisphereLight);
+    const size = this.g ? Math.max((this.g.nx - 1) * this.g.s, (this.g.ny - 1) * this.g.s) * this.k : 1000;
+    const mid = this.g ? ((this.zmin + this.zmax) / 2 - this.z0) * this.ex : 0;
+    // Restore the defaults first.
+    R.shadowMap.enabled = false;
+    sun.castShadow = false;
+    sun.position.set(-0.6, 1, 0.45); sun.intensity = 1.35;
+    if (sun.target.parent) { sun.target.position.set(0, 0, 0); }
+    if (hemi) hemi.intensity = 0.85;
+    if (this.mesh) { this.mesh.castShadow = this.mesh.receiveShadow = false; }
+    if (this.bldg) { this.bldg.castShadow = this.bldg.receiveShadow = false; }
+    if (this.mat && this._sunMap !== undefined) { this.mat.map = this._sunMap; this.mat.needsUpdate = true; this._sunMap = undefined; this._sunColorsDirty = true; }
+    if (this.mat) this.mat.needsUpdate = true;
+    if (this.bldg) this.bldg.material.needsUpdate = true;
+    this.sunMode = mode;
+    if (mode === 'time') {
+      if (!sun.target.parent) this.scene.add(sun.target);
+      sun.target.position.set(0, mid, 0);
+      const [dx, dy, dz] = opts.dir;
+      sun.position.set(dx * size * 2, mid + dy * size * 2, dz * size * 2);
+      const up = Math.max(0, Math.min(1, opts.alt / 12));            // fades in over the first 12° above the horizon
+      sun.intensity = opts.alt > 0 ? 0.25 + 1.55 * up : 0;
+      if (hemi) hemi.intensity = opts.alt > 0 ? 0.45 + 0.15 * up : 0.3;
+      R.shadowMap.enabled = opts.alt > 0;
+      R.shadowMap.type = THREE.PCFSoftShadowMap;
+      sun.castShadow = opts.alt > 0;
+      const cam = sun.shadow.camera, half = size * 0.75;
+      cam.left = -half; cam.right = half; cam.top = half; cam.bottom = -half;
+      cam.near = size * 0.5; cam.far = size * 5;
+      cam.updateProjectionMatrix();
+      sun.shadow.mapSize.set(4096, 4096);
+      sun.shadow.bias = -0.0004; sun.shadow.normalBias = size * 0.0006;
+      sun.shadow.map?.dispose(); sun.shadow.map = null;
+      if (this.mesh) { this.mesh.castShadow = true; this.mesh.receiveShadow = true; }
+      if (this.bldg) { this.bldg.castShadow = true; this.bldg.receiveShadow = true; }
+      R.shadowMap.needsUpdate = true;
+      if (this.mat) this.mat.needsUpdate = true;          // shaders recompile with shadows on
+      if (this.bldg) this.bldg.material.needsUpdate = true;
+    } else if (mode === 'hours') {
+      if (this.mesh && opts.colorAt) {
+        const geo = this.mesh.geometry, pos = geo.attributes.position.array, col = geo.attributes.color.array;
+        for (let q = 0; q < pos.length / 3; q++) {
+          const x = pos[q * 3] / this.k + this.cx, y = -pos[q * 3 + 2] / this.k + this.cy;
+          const c = opts.colorAt(x, y);
+          col[q * 3] = c[0]; col[q * 3 + 1] = c[1]; col[q * 3 + 2] = c[2];
+        }
+        geo.attributes.color.needsUpdate = true;
+        this._sunMap = this.mat.map; this.mat.map = null; this.mat.needsUpdate = true;
+      }
+      if (this.bldg && opts.triColors) {
+        const n = this.bldg.geometry.attributes.position.count, c = new Float32Array(n * 3);
+        for (let v = 0; v < n; v++) { const t = Math.floor(v / 3); c[v * 3] = opts.triColors[t * 3]; c[v * 3 + 1] = opts.triColors[t * 3 + 1]; c[v * 3 + 2] = opts.triColors[t * 3 + 2]; }
+        this.bldg.geometry.setAttribute('color', new THREE.BufferAttribute(c, 3));
+        this.bldg.material.vertexColors = true; this.bldg.material.color.set(0xffffff); this.bldg.material.needsUpdate = true;
+      }
+    }
+  }
+
+  /** Wind streaks: a WindField (native XY), drawn a little above the ground, updated every frame while shown. */
+  setWind(field, zAt) {
+    if (this.windPts) { this.scene.remove(this.windPts); this.windPts.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); this.windPts = null; }
+    delete this.frames.wind;
+    if (!field) return;
+    const T = 12, n = field.n;
+    const tp = new Float32Array(n * (T - 1) * 6), tc = new Float32Array(n * (T - 1) * 6);
+    for (let p = 0; p < n; p++) for (let t = 0; t < T - 1; t++) for (let e = 0; e < 2; e++) {
+      const f = 1 - (t + e) / (T - 1), o = ((p * (T - 1) + t) * 2 + e) * 3;
+      tc[o] = 0.11 + 0.85 * f; tc[o + 1] = 0.13 + 0.83 * f; tc[o + 2] = 0.15 + 0.8 * f;
+    }
+    const tgeo = new THREE.BufferGeometry();
+    tgeo.setAttribute('position', new THREE.BufferAttribute(tp, 3));
+    tgeo.setAttribute('color', new THREE.BufferAttribute(tc, 3));
+    this.windPts = new THREE.LineSegments(tgeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85 }));
+    this.windPts.frustumCulled = false;
+    this.scene.add(this.windPts);
+    const hist = new Float32Array(n * T * 3);
+    const lift = (this.g ? this.g.s : 3) * 6 * this.k;                  // streaks float a little above the ground
+    let filled = false;
+    this.frames.wind = () => {
+      field.step();
+      for (let p = 0; p < n; p++) {
+        const inside = field.inBox(p), zz = inside ? zAt(field.px[p], field.py[p]) : NaN;
+        const x = (field.px[p] - this.cx) * this.k, y = Number.isFinite(zz) ? (zz - this.z0) * this.ex + lift : -1e5, z = -(field.py[p] - this.cy) * this.k;
+        const h = p * T * 3;
+        if (!filled || field.age[p] <= 1 || y < -1e4) { for (let t = 0; t < T; t++) { hist[h + t * 3] = x; hist[h + t * 3 + 1] = y; hist[h + t * 3 + 2] = z; } }
+        else { hist.copyWithin(h + 3, h, h + (T - 1) * 3); hist[h] = x; hist[h + 1] = y; hist[h + 2] = z; }
+        for (let t = 0; t < T - 1; t++) {
+          const o = (p * (T - 1) + t) * 6;
+          tp[o] = hist[h + t * 3]; tp[o + 1] = hist[h + t * 3 + 1]; tp[o + 2] = hist[h + t * 3 + 2];
+          tp[o + 3] = hist[h + t * 3 + 3]; tp[o + 4] = hist[h + t * 3 + 4]; tp[o + 5] = hist[h + t * 3 + 5];
+        }
+      }
+      filled = true;
       tgeo.attributes.position.needsUpdate = true;
     };
   }

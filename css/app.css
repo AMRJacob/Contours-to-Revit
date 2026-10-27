@@ -517,3 +517,28 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .img-table td:nth-child(2), .img-table td:nth-child(3) { white-space: nowrap; }
 .img-table tr.used td { color: var(--ink); font-weight: 600; }
 .img-table tr.bad td:first-child { color: var(--ink-3); }
+
+/* Sun and wind (view only) */
+.tab-sun[aria-pressed="true"] { background: #fbbf24; color: #241a05; }
+.tab-wind[aria-pressed="true"] { background: #e5e7eb; color: #111827; }
+.env-panels { position: absolute; z-index: 1001; left: 12px; bottom: 28px; display: flex; flex-direction: column; gap: 8px; max-width: min(340px, calc(100% - 24px)); pointer-events: none; }
+.env-panel { pointer-events: auto; background: rgba(28,34,38,0.9); color: #e7e4dd; border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
+.env-h { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-weight: 600; font-size: 12.5px; margin-bottom: 6px; }
+.env-h small { font-weight: 400; color: #c8cdd1; text-align: right; }
+.env-h select { background: #2b3338; color: #e7e4dd; border: 1px solid #3c464c; border-radius: 4px; font-size: 12px; padding: 1px 4px; }
+.env-row { display: flex; align-items: center; gap: 6px; margin: 5px 0; flex-wrap: wrap; }
+.env-row input[type="date"] { background: #2b3338; color: #e7e4dd; border: 1px solid #3c464c; border-radius: 4px; font: inherit; padding: 2px 4px; color-scheme: dark; }
+.env-row input[type="range"] { flex: 1; min-width: 120px; accent-color: #fbbf24; }
+.env-row output { font-family: var(--mono); font-size: 11.5px; min-width: 62px; text-align: right; }
+.env-chips { display: flex; gap: 3px; }
+.env-chips button, .env-play { background: #2b3338; color: #e7e4dd; border: 1px solid #3c464c; border-radius: 4px; font-size: 11px; padding: 2px 5px; cursor: pointer; }
+.env-play { width: 26px; padding: 2px 0; }
+.env-panel .seg { margin: 6px 0; }
+.env-note { color: #aab3b9; font-size: 11px; margin: 4px 0 0; line-height: 1.35; }
+.env-legend { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #c8cdd1; margin-top: 4px; }
+.env-legend i { flex: 1; height: 8px; border-radius: 3px; background: linear-gradient(90deg, rgb(46,41,107), rgb(69,89,191), rgb(51,173,158), rgb(242,184,64), rgb(255,242,140)); }
+#wind-rose { display: block; width: 200px; height: 200px; margin: 0 auto; }
+.wind-key { flex-wrap: wrap; justify-content: center; gap: 4px 8px; }
+.wind-key b { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 3px; vertical-align: -1px; }
+.sun-canvas, .wind-canvas { position: absolute; inset: 0; pointer-events: none; }
+.wind-canvas { z-index: 461; }
