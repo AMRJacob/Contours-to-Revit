@@ -1,22 +1,22 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.43.0';
-import { fetchElevation, sample } from './dem.js?v=0.43.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.43.0';
-import { Dxf } from './dxf.js?v=0.43.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.43.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.43.0';
-import { Flow } from './flow.js?v=0.43.0';
-import { createSketch } from './sketch.js?v=0.43.0';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.43.0';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.43.0';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.43.0';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.43.0';
-import { loadLidar, applyLidar } from './lidar.js?v=0.43.0';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.43.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.43.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.44.0';
+import { fetchElevation, sample } from './dem.js?v=0.44.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.44.0';
+import { Dxf } from './dxf.js?v=0.44.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.44.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.44.0';
+import { Flow } from './flow.js?v=0.44.0';
+import { createSketch } from './sketch.js?v=0.44.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.44.0';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.44.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.44.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.44.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.44.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.44.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.44.0';
 
-const VERSION = '0.43.0';
+const VERSION = '0.44.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -2354,10 +2354,59 @@ const sketch = createSketch({
   mode: () => dz.mode,
   onChange: () => { projTouch(); v3Dirty(); if (sunS?.on) sunLater(); },
   // While dragging in 3D: just the sketch geometry (the full rebuild waits for the drag to pause).
-  onLive: () => { if (v3 && curView() === '3d' && state.result) v3.setSketch(sketch.tris(v3.ex || 1), sketch.parking3d()); },
+  onLive: () => { if (v3 && curView() === '3d' && state.result) { v3.setSketch(sketch.tris(v3.ex || 1), sketch.parking3d()); v3.setNotes(sketch.notes3d()); } },
   ex3d: () => v3?.ex || 1,
 });
 sketch.wirePanel();
+
+// ----- Diagram tab: the same sketch with annotation tools, a faded / white ground and image export -----
+const dg = { fade: 0.75 };
+try { const v = Number(localStorage.getItem('c2r-dgfade')); if (v >= 0 && v <= 1 && localStorage.getItem('c2r-dgfade') !== null) dg.fade = v; } catch { /* ignore */ }
+function dgFade() {
+  map.getContainer().style.setProperty('--dg-fade', String(1 - dg.fade));
+  if ($('dg-fade')) { $('dg-fade').value = String(Math.round(dg.fade * 100)); $('dg-fade-v').textContent = `${Math.round(dg.fade * 100)}%`; }
+}
+$('dg-fade').addEventListener('input', e => {
+  dg.fade = Number(e.target.value) / 100; dgFade();
+  try { localStorage.setItem('c2r-dgfade', String(dg.fade)); } catch { /* ignore */ }
+  v3Dirty();
+});
+$('dg-labels').addEventListener('change', e => { sketch.setShowLabels(e.target.checked); });
+$('dg-export').addEventListener('click', dgExport);
+/** Save the current diagram view (map plan or 3D) as a PNG. */
+async function dgExport() {
+  const site = state.result; if (!site) return;
+  const view = curView();
+  let W, H, out;
+  if (view === '3d' && v3) {
+    const gl = v3.snapshot(); W = gl.width; H = gl.height;
+    out = document.createElement('canvas'); out.width = W; out.height = H;
+    const g = out.getContext('2d'); g.drawImage(gl, 0, 0);
+    g.drawImage(sketch.overlay(), 0, 0, W, H);
+  } else {
+    const cont = map.getContainer(), dpr = window.devicePixelRatio || 1, r0 = cont.getBoundingClientRect();
+    W = Math.round(cont.clientWidth * dpr); H = Math.round(cont.clientHeight * dpr);
+    out = document.createElement('canvas'); out.width = W; out.height = H;
+    const g = out.getContext('2d');
+    g.fillStyle = '#fafaf7'; g.fillRect(0, 0, W, H);
+    // Our own canvases only (basemap tiles from other sites can't be copied into an image): site aerial, map layers
+    // (contours, buildings, roads), then the sketch and annotations.
+    const layers = [...cont.querySelectorAll('.leaflet-siteImg-pane canvas, .leaflet-overlay-pane canvas, .leaflet-sunImg-pane canvas')];
+    for (const c of layers) {
+      const r = c.getBoundingClientRect();
+      try {
+        g.globalAlpha = c.closest('.leaflet-siteImg-pane') ? 1 - dg.fade : 1;
+        g.drawImage(c, (r.left - r0.left) * dpr, (r.top - r0.top) * dpr, r.width * dpr, r.height * dpr);
+      } catch { /* a tainted canvas — skip it */ }
+    }
+    g.globalAlpha = 1;
+    g.drawImage(sketch.overlay(), 0, 0, W, H);
+  }
+  const a = document.createElement('a');
+  a.download = `${(PROJ.list.find(p => p.id === PROJ.current)?.name || 'site').replace(/[^\w-]+/g, '_')}_diagram.png`;
+  a.href = out.toDataURL('image/png');
+  a.click();
+}
 
 const FEAT_COLOR = { pad: '#f8fafc', wall: '#cbd5e1', slope: '#22d3ee' };
 const SEL_COLOR = '#e8913f';
@@ -3041,7 +3090,11 @@ function setMode(mode) {
   projTouch();
   $('panel').classList.toggle('mode-design', mode === 'design');
   $('panel').classList.toggle('mode-sketch', mode === 'sketch');
-  const sketchOn = mode === 'sketch';
+  $('panel').classList.toggle('mode-diagram', mode === 'diagram');
+  const diagramOn = mode === 'diagram';
+  const sketchOn = mode === 'sketch' || diagramOn;
+  map.getContainer().classList.toggle('diagram-view', diagramOn);
+  dgFade();
   map.getContainer().classList.toggle('sketch-mode', sketchOn);
   document.querySelectorAll('.mode').forEach(b => { const on = b.dataset.mode === mode; b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on)); });
   const design = mode === 'design';
@@ -3052,7 +3105,7 @@ function setMode(mode) {
   if (drawn) { if (design || sketchOn) map.removeLayer(drawn); else drawn.addTo(map); }
   map.getContainer().classList.toggle('design-mode', design);
   if (design || sketchOn) map.doubleClickZoom.disable(); else { map.doubleClickZoom.enable(); dz.poly = null; }
-  sketch.setActive(sketchOn);
+  sketch.setActive(sketchOn, diagramOn ? 'diagram' : 'sketch');
   if (design) dzEnsure().then(() => { dzApplyTool(); dzRefresh(true); v3Dirty(); });
   else { map.dragging.enable(); map.getContainer().classList.remove('sculpting'); $('dz-readout').hidden = true; dzPop.hidden = true; dzPopId = null; v3Dirty(); }
   flowKick();
@@ -3838,7 +3891,7 @@ async function projOpen(id) {
   try { localStorage.setItem('c2r-project', id); } catch { /* ignore */ }
   try {
     if (pick.active) stopPick();
-    if (dz.mode === 'design' || dz.mode === 'sketch') setMode('existing');
+    if (dz.mode === 'design' || dz.mode === 'sketch' || dz.mode === 'diagram') setMode('existing');
     sketchPending = snap.sketch || null;
     // Design: stored under its key, and kept as "pending" so it can be fitted to a slightly different grid.
     PROJ.pending = snap.designKey && snap.design ? { key: snap.designKey, design: snap.design } : null;
@@ -3877,7 +3930,7 @@ async function projOpen(id) {
       try { await generate(); } catch (err) { console.error(err); setStatus(`Opened “${meta.name}”, but generating failed: ${err.message || err}. Click Generate to try again.`, true); }
       finally { $('generate').disabled = !state.rect; }
       if (state.result && snap.mode === 'design') { setMode('design'); await dzEnsure(); }
-      if (state.result && snap.mode === 'sketch') setMode('sketch');
+      if (state.result && (snap.mode === 'sketch' || snap.mode === 'diagram')) setMode(snap.mode);
       if (state.result) setStatus(`Opened “${meta.name}”.`);
     } else setStatus(`Opened “${meta.name}” (no site boundary yet).`);
   } finally {
@@ -4039,7 +4092,7 @@ $('proj-new').addEventListener('click', async () => {
   $('proj-menu').hidden = true;
   if (!(await projAskSave('Starting a new project clears the map.'))) return;
   projDetach();
-  if (dz.mode === 'design' || dz.mode === 'sketch') setMode('existing');
+  if (dz.mode === 'design' || dz.mode === 'sketch' || dz.mode === 'diagram') setMode('existing');
   clearAll();
   PROJ.dirty = false; projRender();
   setStatus('Started a new blank project. Draw a site boundary to begin.');
@@ -4413,6 +4466,8 @@ function v3Build(resetView = false) {
   v3.setFeatures(prop ? v3Features(des, site) : []);
   v3.setBuildings(v3Buildings(site));
   v3.setSketch(sketch.tris(v3.ex || 1), sketch.parking3d());
+  v3.setDiagram(dz.mode === 'diagram');
+  v3.setNotes(sketch.notes3d());
   sunApply3d();
 }
 
@@ -4420,11 +4475,13 @@ function v3Build(resetView = false) {
 let v3Tex = null;
 function v3Texture(site) {
   if (!site.imagery) return null;
-  const key = JSON.stringify(vis());
+  const fade = dz.mode === 'diagram' ? dg.fade : 0;
+  const key = JSON.stringify([vis(), fade]);
   if (v3Tex && v3Tex.site === site && v3Tex.key === key) return v3Tex.canvas;
   const c = document.createElement('canvas');
   c.width = site.imagery.width; c.height = site.imagery.height;
   drawMap(c, { ...site, tinted: false, vis: vis() }, 'texture');
+  if (fade) { const g = c.getContext('2d'); g.fillStyle = `rgba(250,250,247,${fade})`; g.fillRect(0, 0, c.width, c.height); }   // diagram: fade toward white
   v3Tex = { site, key, canvas: c };
   return c;
 }

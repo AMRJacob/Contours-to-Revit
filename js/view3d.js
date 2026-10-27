@@ -187,6 +187,7 @@ export class SiteView3D {
   /** Building massing: flat array of triangle corners [x, y, z, …] (native XY, output Z). */
   setBuildings(tri) {
     if (this.bldg) { this.scene.remove(this.bldg); this.bldg.geometry.dispose(); this.bldg.material.dispose(); this.bldg = null; }
+    if (this.bldgEdges) { this.scene.remove(this.bldgEdges); this.bldgEdges.geometry.dispose(); this.bldgEdges.material.dispose(); this.bldgEdges = null; }
     if (!tri?.length) return;
     const pos = new Float32Array(tri.length);
     for (let i = 0; i < tri.length; i += 3) {
@@ -197,6 +198,7 @@ export class SiteView3D {
     geo.computeVertexNormals();
     this.bldg = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0xe7e2d8, side: THREE.DoubleSide, flatShading: true }));
     this.scene.add(this.bldg);
+    this._bldgStyle();
   }
 
   /**
@@ -277,6 +279,44 @@ export class SiteView3D {
     m.castShadow = m.receiveShadow = this.sunMode === 'time';
     m.visible = this.sunMode !== 'hours';
     m.material.needsUpdate = true;
+  }
+
+  /** Diagram annotations: [{ tris: flat display [x,y,z…], edges: flat display pairs, color, opacity }]. */
+  setNotes(items) {
+    if (this.notes) { this.scene.remove(this.notes); this.notes.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); this.notes = null; }
+    if (!items?.length) return;
+    const g = new THREE.Group(), P = (x, y, z) => [(x - this.cx) * this.k, (z - this.z0) * this.ex, -(y - this.cy) * this.k];
+    const buf = arr => { const a = new Float32Array(arr.length); for (let i = 0; i < arr.length; i += 3) a.set(P(arr[i], arr[i + 1], arr[i + 2]), i); return a; };
+    for (const it of items) {
+      if (it.tris?.length) {
+        const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(buf(it.tris), 3)); geo.computeVertexNormals();
+        const op = it.opacity ?? 1;
+        g.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: it.color, side: THREE.DoubleSide, transparent: op < 1, opacity: op, depthWrite: op >= 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })));
+      }
+      if (it.edges?.length) {
+        const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(buf(it.edges), 3));
+        g.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: it.edgeColor || it.color })));
+      }
+    }
+    this.notes = g; this.scene.add(g);
+  }
+  /** Diagram look: light background, pale buildings with crisp outlines. */
+  setDiagram(on) {
+    this.diagram = on;
+    const bg = on ? 0xf6f6f3 : 0x1c2226;
+    this.renderer.setClearColor(bg); this.scene.fog.color.set(bg);
+    this._hemi = this._hemi || this.scene.children.find(o => o.isHemisphereLight);
+    if (this._hemi) this._hemi.intensity = on ? 1.15 : 0.85;
+    this._bldgStyle();
+  }
+  _bldgStyle() {
+    if (!this.bldg) return;
+    this.bldg.material.color.set(this.diagram ? 0xf4f4f1 : 0xe7e2d8);
+    if (this.bldgEdges) { this.scene.remove(this.bldgEdges); this.bldgEdges.geometry.dispose(); this.bldgEdges.material.dispose(); this.bldgEdges = null; }
+    if (this.diagram) {
+      this.bldgEdges = new THREE.LineSegments(new THREE.EdgesGeometry(this.bldg.geometry, 25), new THREE.LineBasicMaterial({ color: 0x6b7280 }));
+      this.scene.add(this.bldgEdges);
+    }
   }
 
   /** Water-flow particles: a Flow instance (native XY); updated every frame while shown. */
@@ -470,6 +510,14 @@ export class SiteView3D {
   }
 
   setExaggeration(ex) { this.ex = ex; }
+
+  /** The current view as an image (renders a frame first so the drawing buffer is fresh). */
+  snapshot() {
+    this.controls.update();
+    for (const f of Object.values(this.frames)) f();
+    this.renderer.render(this.scene, this.camera);
+    return this.renderer.domElement;
+  }
 
   // ---- Sketching in 3D: native XY + output Z <-> screen, and picking the ground / sketch blocks under the cursor.
   world(x, y, z) { return new THREE.Vector3((x - this.cx) * this.k, (z - this.z0) * this.ex, -(y - this.cy) * this.k); }

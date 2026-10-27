@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.43.0">
+  <link rel="stylesheet" href="css/app.css?v=0.44.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -53,6 +53,7 @@
         <button role="tab" class="mode active" data-mode="existing" aria-selected="true">Existing site</button>
         <button role="tab" class="mode" data-mode="design" aria-selected="false" title="Sculpt the proposed grades and export new-construction contours">Site design</button>
         <button role="tab" class="mode" data-mode="sketch" aria-selected="false" title="Brainstorm massing and parking on the site — live floor area and parking counts">Sketch</button>
+        <button role="tab" class="mode" data-mode="diagram" aria-selected="false" title="Site analysis and concept diagrams — arrows, lines, regions and labels over a faded site">Diagram</button>
       </nav>
 
       <details class="step existing-only" id="step-site" open data-tone="site">
@@ -264,6 +265,26 @@
         </div>
       </details>
 
+      <section class="diagram-only" id="diagram-panel">
+        <div class="dz-empty" id="dg-empty">
+          <p><strong>Generate the existing site first.</strong> Diagrams sit on that site and its sketch.</p>
+        </div>
+        <details class="step" open data-tone="tools">
+          <summary><span class="num">1</span><span class="st-title">Diagram</span><span class="st-sum">annotate the site</span></summary>
+          <div class="step-body">
+            <p class="hint" id="dg-hint"></p>
+            <div class="field">
+              <label for="dg-fade">Fade the aerial <span class="sub">toward white</span></label>
+              <div class="align-row"><input type="range" id="dg-fade" min="0" max="100" step="5" value="75"><output id="dg-fade-v">75%</output></div>
+            </div>
+            <label class="check"><input type="checkbox" id="dg-labels"> Show block and parking labels</label>
+            <p class="hint">Keys: <kbd>V</kbd> select · <kbd>A</kbd> arrow · <kbd>L</kbd> line · <kbd>R</kbd> region · <kbd>T</kbd> label · <kbd>F</kbd> stand up / lay flat · <kbd>Alt</kbd>+drag duplicate · <kbd>Del</kbd> · <kbd>Ctrl</kbd>+<kbd>Z</kbd>. Draw on the ground or on any face of a sketch block; works on the map and in the 3D view. Colours come from the project's colour scheme (Sketch tab).</p>
+            <button type="button" class="btn" id="dg-export">Save image (PNG)</button>
+            <p class="hint">Saves the current view — plan or 3D. In plan, the basemap tiles are left out (only the site aerial and the app's own layers can be copied into an image).</p>
+          </div>
+        </details>
+      </section>
+
       <section class="sketch-only" id="sketch-panel">
         <div class="dz-empty" id="sk-empty">
           <p><strong>Generate the existing site first.</strong> Sketches sit on that site — switch to <em>Existing site</em>, draw a boundary and click Generate.</p>
@@ -275,7 +296,7 @@
               <p class="hint" id="sk-hint"></p>
               <div id="sk-stats"></div>
               <div class="sk-list" id="sk-list"></div>
-              <p class="hint">Keys: <kbd>V</kbd> select · <kbd>M</kbd> massing · <kbd>P</kbd> parking · <kbd>↑</kbd><kbd>↓</kbd> floors / slide rows · <kbd>[</kbd><kbd>]</kbd> turn rows · <kbd>Alt</kbd>+drag duplicate · <kbd>Shift</kbd> square · <kbd>Del</kbd> · <kbd>Ctrl</kbd>+<kbd>Z</kbd>. Sketches save with the site and with projects.</p>
+              <p class="hint">Keys: <kbd>V</kbd> select · <kbd>M</kbd> shapes (<kbd>1</kbd>–<kbd>5</kbd>) · <kbd>L</kbd> draw · <kbd>U</kbd> push/pull · <kbd>S</kbd> slope · <kbd>P</kbd> parking · <kbd>I</kbd> island · <kbd>D</kbd> drive aisle · <kbd>Ctrl</kbd>+drag move a point / edge / face (<kbd>Shift</kbd> up-down) · <kbd>↑</kbd><kbd>↓</kbd> floors / slide rows · <kbd>R</kbd> roof · <kbd>[</kbd><kbd>]</kbd> turn rows · <kbd>Alt</kbd>+drag duplicate · <kbd>Del</kbd> · <kbd>Ctrl</kbd>+<kbd>Z</kbd>. Sketches save with the site and with projects.</p>
             </div>
           </details>
           <details class="step" data-tone="settings">
@@ -635,6 +656,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.43.0"></script>
+  <script type="module" src="js/app.js?v=0.44.0"></script>
 </body>
 </html>

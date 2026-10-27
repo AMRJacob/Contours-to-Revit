@@ -8,10 +8,11 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly } from './parking.js?v=0.43.0';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.43.0';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.43.0';
-import * as SO from './solid.js?v=0.43.0';
+import { layoutLot, longestEdgeAngle, lanePoly } from './parking.js?v=0.44.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.44.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.44.0';
+import * as SO from './solid.js?v=0.44.0';
+import { noteGeom, WIDTHS } from './notes.js?v=0.44.0';
 
 const TOOLS = [
   { id: 'select', key: 'V', label: 'Select', icon: '<path d="M5 3l14 8-6 1.5L10 19z"/>' },
@@ -23,6 +24,22 @@ const TOOLS = [
   { id: 'island', key: 'I', label: 'Island', icon: '<rect x="3" y="8" width="18" height="8" rx="4"/><path d="M9 12h6" opacity=".7"/>' },
   { id: 'drive', key: 'D', label: 'Drive aisle', icon: '<path d="M5 21L10 3M19 21L14 3"/><path d="M12 5v3M12 11v3M12 17v3" opacity=".7"/>' },
 ];
+// Diagram tab tools (same model; annotations instead of modelling).
+const DTOOLS = [
+  { id: 'select', key: 'V', label: 'Select', icon: '<path d="M5 3l14 8-6 1.5L10 19z"/>' },
+  { id: 'arrow', key: 'A', label: 'Arrow', icon: '<path d="M4 18C8 8 13 7 18 7"/><path d="M14 4l5 3-4 4"/>' },
+  { id: 'line', key: 'L', label: 'Line', icon: '<path d="M4 19L20 5"/>' },
+  { id: 'region', key: 'R', label: 'Region', icon: '<path d="M5 7l9-3 6 7-4 9-10-3z" fill="currentColor" fill-opacity=".3"/>' },
+  { id: 'label', key: 'T', label: 'Label', icon: '<path d="M5 6h14M12 6v13"/>' },
+];
+const DHINTS = {
+  select: 'Click an annotation to style it · drag to move · drag its points · F stands it up / lays it down.',
+  arrow: 'Drag a straight arrow, or click points (it curves through them) and double-click to finish — on the ground or on any building face.',
+  line: 'Drag a straight line, or click points and double-click — on the ground or a face. Stand it up (F) for a fence or screen.',
+  region: 'Drag a rectangle or click an outline — on the ground or a face. Stand it up (F) for a volume.',
+  label: 'Click where the label goes, then type its text in the card.',
+};
+const SIZES = ['S', 'M', 'L'];
 const SHAPES = [
   { id: 'box', key: '1', label: 'Box or outline', icon: '<rect x="5" y="6" width="14" height="12"/>' },
   { id: 'circle', key: '2', label: 'Round (drag from the centre)', icon: '<circle cx="12" cy="12" r="7.5"/>' },
@@ -45,7 +62,7 @@ const DEFAULT_RATIOS = {   // examples only — every jurisdiction sets its own
   civic: { mode: 'ksf', r: 2.5 }, hospitality: { mode: 'unit', r: 1, unitSf: 450 }, mixed: { mode: 'ksf', r: 3 },
   industrial: { mode: 'ksf', r: 1 }, parking: { mode: 'ksf', r: 0 },
 };
-const LISTS = { mass: 'masses', lot: 'lots', island: 'islands', drive: 'drives' };
+const LISTS = { mass: 'masses', lot: 'lots', island: 'islands', drive: 'drives', note: 'notes' };
 const svg = i => `<svg viewBox="0 0 24 24">${i}</svg>`;
 const ORANGE = '#e8913f';
 
@@ -53,10 +70,11 @@ export function createSketch(ctx) {
   const { map, $, escapeHtml } = ctx;
   const sk = {
     model: blank(), tool: 'select', shape: 'box', sel: null, drag: null, draw: null, op: null, hov: null, undo: [], redo: [], ver: 0,
-    site: null, key: null, layouts: new Map(), infos: new Map(), active: false, v3: null, pitch: 6,
+    site: null, key: null, layouts: new Map(), infos: new Map(), ngeo: new Map(), active: false, v3: null, pitch: 6,
+    set: 'sketch', style: { color: 'arrow', size: 1, stand: false, curve: true }, showLabels: false,
   };
   function blank() {
-    return { v: 3, masses: [], lots: [], islands: [], drives: [], scheme: JSON.parse(JSON.stringify(BUILTIN_SCHEMES[0])), ratios: JSON.parse(JSON.stringify(DEFAULT_RATIOS)) };
+    return { v: 3, masses: [], lots: [], islands: [], drives: [], notes: [], scheme: JSON.parse(JSON.stringify(BUILTIN_SCHEMES[0])), ratios: JSON.parse(JSON.stringify(DEFAULT_RATIOS)) };
   }
   const scheme = () => sk.model.scheme;
   const uid = () => Math.random().toString(36).slice(2, 9);
@@ -151,7 +169,7 @@ export function createSketch(ctx) {
   }
 
   // ---------------------------------------------------------------- undo / change
-  const SAVED = ['masses', 'lots', 'islands', 'drives'];
+  const SAVED = ['masses', 'lots', 'islands', 'drives', 'notes'];
   function snapshot() { return JSON.stringify(Object.fromEntries(SAVED.map(k => [k, sk.model[k]]))); }
   function before() { sk.undo.push(snapshot()); if (sk.undo.length > 80) sk.undo.shift(); sk.redo.length = 0; }
   function restore(s) { const o = JSON.parse(s); for (const k of SAVED) sk.model[k] = o[k] || []; if (sk.sel && !findSel()) sk.sel = null; changed(); }
@@ -232,6 +250,7 @@ export function createSketch(ctx) {
     if (!sk.site || !visible()) return;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     if (sk.v3) drawLabels3d(g); else drawPlan(g);
+    if (diagramOn()) { drawNotes(g); drawNoteSel(g); drawNoteDraft(g); return; }
     drawSelection(g);
     drawHover(g);
     drawInProgress(g);
@@ -284,6 +303,7 @@ export function createSketch(ctx) {
     }
     for (const isl of sk.model.islands) { path(isl.pts); g.fillStyle = green; g.fill(); g.strokeStyle = sk.sel?.id === isl.id ? ORANGE : 'rgba(20,83,45,0.8)'; g.lineWidth = sk.sel?.id === isl.id ? 2.5 : 1.2; g.stroke(); }
     for (const l of sk.model.lots) {
+      if (!showTags()) break;
       const L = lotLayout(l);
       label(g, scr(centroid(l.pts)), `${L.total} spaces`, L.acc ? `${L.acc} accessible${L.van ? ` (${L.van} van)` : ''}${L.short ? ` · ${L.short} short` : ''}` : '');
     }
@@ -306,8 +326,9 @@ export function createSketch(ctx) {
         else if (sel) for (const [a, b] of I.edges) if (m.v[a][2] < 1e-6 && m.v[b][2] < 1e-6) { g.beginPath(); g.moveTo(...scr(m.v[a])); g.lineTo(...scr(m.v[b])); g.lineWidth = 2.5; g.strokeStyle = ORANGE; g.stroke(); }
       }
     }
-    for (const m of ms) label(g, scr(labelPt(m)), massTitle(m), massSub(m));
+    if (showTags()) for (const m of ms) label(g, scr(labelPt(m)), massTitle(m), massSub(m));
   }
+  const showTags = () => !diagramOn() || sk.showLabels;
   const useLabel = m => scheme().uses.find(x => x.key === m.use)?.label || m.use;
   const massTitle = m => (info(m).sheet ? `${useLabel(m)} · flat shape` : `${useLabel(m)} · ${info(m).floors} fl`);
   const massSub = m => (info(m).sheet ? 'pull it up (U)' : fmtArea(massGfa(m)));
@@ -320,6 +341,7 @@ export function createSketch(ctx) {
     return best || I.c;
   }
   function drawLabels3d(g) {
+    if (!showTags()) return;
     for (const l of sk.model.lots) {
       const L = lotLayout(l), c = centroid(l.pts);
       label(g, scr(c, zGround(c) + 1), `${L.total} spaces`, L.acc ? `${L.acc} accessible${L.van ? ` (${L.van} van)` : ''}` : '');
@@ -365,7 +387,7 @@ export function createSketch(ctx) {
     return out;
   }
   function drawSelection(g) {
-    const o = findSel(); if (!o) return;
+    const o = findSel(); if (!o || sk.sel.kind === 'note') return;
     const kind = sk.sel.kind, zf = handleZ(kind, o);
     if (sk.v3) {
       if (kind === 'mass') { g.lineWidth = 2; g.strokeStyle = ORANGE; for (const [a, b] of info(o).edges) { const p = P3(o, o.v[a]), q = P3(o, o.v[b]); if (!p || !q) continue; g.beginPath(); g.moveTo(...p); g.lineTo(...q); g.stroke(); } }
@@ -432,12 +454,28 @@ export function createSketch(ctx) {
   // ---------------------------------------------------------------- toolbar
   const bar = document.createElement('div');
   bar.className = 'sketch-bar'; bar.hidden = true;
-  bar.innerHTML = TOOLS.map(t => `<button type="button" class="sk-tool" data-tool="${t.id}" title="${t.label} (${t.key})" aria-label="${t.label}">${svg(t.icon)}<kbd>${t.key}</kbd><span>${t.label}</span></button>`).join('')
-    + '<div class="sk-sep"></div><button type="button" class="sk-tool sk-mini" data-act="undo" title="Undo (Ctrl+Z)" aria-label="Undo"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg><kbd>^Z</kbd></button>'
-    + '<button type="button" class="sk-tool sk-mini" data-act="redo" title="Redo (Ctrl+Y)" aria-label="Redo"><svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h3"/></svg><kbd>^Y</kbd></button>'
-    + `<div class="sk-fly" data-for="mass" hidden>${SHAPES.map(s => `<button type="button" class="sk-tool sk-mini" data-shape="${s.id}" title="${s.label} (${s.key})" aria-label="${s.label}">${svg(s.icon)}<kbd>${s.key}</kbd></button>`).join('')}</div>`
-    + '<div class="sk-fly sk-num" data-for="push" hidden><span>Distance</span><input type="number" step="0.5" data-fly="dist" title="Type an exact distance for the last push/pull"><span class="sk-u"></span></div>'
-    + '<div class="sk-fly sk-num" data-for="slope" hidden><span>Pitch</span><input type="number" step="0.5" min="0" max="48" value="6" data-fly="pitch" title="Rise per 12 of run"><span>: 12</span></div>';
+  const tools = () => (sk.set === 'diagram' ? DTOOLS : TOOLS);
+  const hints = () => (sk.set === 'diagram' ? DHINTS : HINTS);
+  const hintEl = () => $(sk.set === 'diagram' ? 'dg-hint' : 'sk-hint');
+  const swatchKeys = () => [...scheme().site.filter(u => !['lot', 'stripe', 'accessible'].includes(u.key)), ...scheme().uses];
+  const swatchHtml = cur => swatchKeys().map(u => `<button type="button" class="dg-sw${cur === u.key ? ' on' : ''}" data-col="${u.key}" title="${escapeHtml(u.label)}" style="background:${u.color}"></button>`).join('')
+    + `<label class="dg-sw dg-custom${cur?.startsWith?.('#') ? ' on' : ''}" title="Any colour"><input type="color" data-col="custom" value="${cur?.startsWith?.('#') ? cur : '#e8913f'}"></label>`;
+  function buildBar() {
+    const T = tools();
+    bar.dataset.set = sk.set;
+    bar.innerHTML = T.map(t => `<button type="button" class="sk-tool" data-tool="${t.id}" title="${t.label} (${t.key})" aria-label="${t.label}">${svg(t.icon)}<kbd>${t.key}</kbd><span>${t.label}</span></button>`).join('')
+      + '<div class="sk-sep"></div><button type="button" class="sk-tool sk-mini" data-act="undo" title="Undo (Ctrl+Z)" aria-label="Undo"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg><kbd>^Z</kbd></button>'
+      + '<button type="button" class="sk-tool sk-mini" data-act="redo" title="Redo (Ctrl+Y)" aria-label="Redo"><svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h3"/></svg><kbd>^Y</kbd></button>'
+      + (sk.set === 'diagram'
+        ? `<div class="sk-fly dg-style" data-for="style" hidden><div class="dg-sws">${swatchHtml(sk.style.color)}</div>
+            <div class="dg-row"><span class="seg seg-dark">${SIZES.map((z, i) => `<label><input type="radio" name="dg-size" value="${i}"${sk.style.size === i ? ' checked' : ''}><span>${z}</span></label>`).join('')}</span>
+            <label class="skc-chk" title="Stand it up from the surface (F)"><input type="checkbox" data-st="stand"${sk.style.stand ? ' checked' : ''}> Upright</label>
+            <label class="skc-chk" title="Curve arrows and lines through their points"><input type="checkbox" data-st="curve"${sk.style.curve ? ' checked' : ''}> Curved</label></div></div>`
+        : `<div class="sk-fly" data-for="mass" hidden>${SHAPES.map(sh => `<button type="button" class="sk-tool sk-mini" data-shape="${sh.id}" title="${sh.label} (${sh.key})" aria-label="${sh.label}">${svg(sh.icon)}<kbd>${sh.key}</kbd></button>`).join('')}</div>`
+          + '<div class="sk-fly sk-num" data-for="push" hidden><span>Distance</span><input type="number" step="0.5" data-fly="dist" title="Type an exact distance for the last push/pull"><span class="sk-u"></span></div>'
+          + `<div class="sk-fly sk-num" data-for="slope" hidden><span>Pitch</span><input type="number" step="0.5" min="0" max="48" value="${sk.pitch}" data-fly="pitch" title="Rise per 12 of run"><span>: 12</span></div>`);
+  }
+  buildBar();
   map.getContainer().appendChild(bar);
   L.DomEvent.disableClickPropagation(bar); L.DomEvent.disableScrollPropagation(bar);
   bar.addEventListener('click', e => {
@@ -446,34 +484,52 @@ export function createSketch(ctx) {
     if (b.dataset.shape) setShape(b.dataset.shape);
     if (b.dataset.act === 'undo') doUndo();
     if (b.dataset.act === 'redo') doRedo();
+    if (b.dataset.col) setStyle({ color: b.dataset.col });
   });
   bar.addEventListener('change', e => {
     const t = e.target, v = Number(t.value);
     if (t.dataset.fly === 'pitch') { sk.pitch = Math.max(0, Math.min(48, Number.isFinite(v) ? v : 6)); redoLast('slope'); }
     if (t.dataset.fly === 'dist' && Number.isFinite(v)) redoLast('push', v * kz());
+    if (t.name === 'dg-size') setStyle({ size: v });
+    if (t.dataset.st) setStyle({ [t.dataset.st]: t.checked });
+    if (t.dataset.col === 'custom') setStyle({ color: t.value });
   });
+  /** Diagram style for new annotations (and the selected one). */
+  function setStyle(ch) {
+    Object.assign(sk.style, ch);
+    bar.querySelectorAll('[data-col]').forEach(x => x.classList.toggle('on', x.dataset.col === sk.style.color || (x.dataset.col === 'custom' && sk.style.color.startsWith('#'))));
+    const o = sk.sel?.kind === 'note' ? findSel() : null;
+    if (o) { before(); applyStyle(o, ch); cardEl.dataset.sig = ''; changed(true); }
+  }
+  function applyStyle(o, ch) {
+    if ('color' in ch) o.color = ch.color;
+    if ('size' in ch) { if (WIDTHS[o.type]) o.w = WIDTHS[o.type][ch.size]; o.size = ch.size; }
+    if ('stand' in ch && o.type !== 'label') o.stand = ch.stand;
+    if ('curve' in ch) o.curve = ch.curve;
+  }
   function setTool(t) {
+    if (!tools().some(x => x.id === t)) t = 'select';
     sk.tool = t; sk.draw = null; sk.hov = null;
     card();
     bar.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
     bar.querySelectorAll('.sk-fly').forEach(f => {
-      f.hidden = f.dataset.for !== t;
-      if (!f.hidden) { const b = bar.querySelector(`[data-tool="${t}"]`); f.style.top = `${b.offsetTop}px`; }
+      f.hidden = f.dataset.for === 'style' ? t === 'select' : f.dataset.for !== t;
+      if (!f.hidden) { const b = bar.querySelector(`[data-tool="${f.dataset.for === 'style' ? 'arrow' : t}"]`); f.style.top = `${b.offsetTop}px`; }
     });
-    bar.querySelector('.sk-u').textContent = uLen();
+    const u = bar.querySelector('.sk-u'); if (u) u.textContent = uLen();
     setShape(sk.shape, true);
     const drawing = t !== 'select';
     map.getContainer().classList.toggle('sk-drawing', drawing);
     sk.v3?.el.classList.toggle('sk-drawing', drawing && sk.active);
     sk.v3?.sketchNav(sk.active && drawing);
-    const hint = HINTS[t] + (drawing ? (sk.v3 ? ' Wheel-drag pans, Shift+wheel-drag or right-drag orbits.' : ' Wheel-drag pans.') : '');
-    if ($('sk-hint')) $('sk-hint').textContent = hint;
+    const hint = hints()[t] + (drawing ? (sk.v3 ? ' Wheel-drag pans, Shift+wheel-drag or right-drag orbits.' : ' Wheel-drag pans.') : '');
+    if (hintEl()) hintEl().textContent = hint;
     draw();
   }
   function setShape(s, quiet) {
     sk.shape = s;
     bar.querySelectorAll('[data-shape]').forEach(b => b.classList.toggle('on', b.dataset.shape === s));
-    if (!quiet && sk.tool !== 'mass') setTool('mass');
+    if (!quiet && sk.tool !== 'mass' && sk.set === 'sketch') setTool('mass');
   }
   function doUndo() { if (!sk.undo.length) return; sk.redo.push(snapshot()); restore(sk.undo.pop()); }
   function doRedo() { if (!sk.redo.length) return; sk.undo.push(snapshot()); restore(sk.redo.pop()); }
@@ -485,6 +541,17 @@ export function createSketch(ctx) {
   L.DomEvent.disableClickPropagation(cardEl); L.DomEvent.disableScrollPropagation(cardEl);
   const num = (k, v, min, max, step, w = 46) => `<input type="number" data-k="${k}" min="${min}" max="${max}" step="${step}" value="${v}" style="width:${w}px">`;
   function cardHtml(kind, o) {
+    if (kind === 'note') {
+      const nm = { arrow: 'Arrow', line: 'Line', region: 'Region', label: 'Label' }[o.type];
+      return `<div class="skc-row"><b>${nm}</b>${o.on === 'mass' ? '<span class="skc-read">on a building face</span>' : ''}<span style="flex:1"></span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div>
+        ${o.type === 'label' ? `<div class="skc-row"><input type="text" data-k="text" value="${escapeHtml(o.text || '')}" style="flex:1;min-width:160px"></div>` : ''}
+        <div class="skc-row dg-sws">${swatchHtml(o.color)}</div>
+        <div class="skc-row">${o.type !== 'region' ? `<span class="seg seg-dark">${SIZES.map((z, i) => `<label><input type="radio" name="skc-size" value="${i}"${(o.size ?? 1) === i ? ' checked' : ''}><span>${z}</span></label>`).join('')}</span>` : ''}
+          ${o.type !== 'label' ? `<label class="skc-chk" title="F"><input type="checkbox" data-k="stand"${o.stand ? ' checked' : ''}> Upright</label>` : ''}
+          ${o.type === 'arrow' || o.type === 'line' ? `<label class="skc-chk"><input type="checkbox" data-k="curve"${o.curve ? ' checked' : ''}> Curved</label>` : ''}</div>
+        ${o.stand && (o.type === 'line' || o.type === 'region') ? `<div class="skc-row"><span>Height</span>${num('h', o.h || 20, 1, 500, 1)}<span>${uLen()}</span></div>` : ''}
+        ${o.type === 'region' ? `<div class="skc-row"><span>Opacity</span><input type="range" data-k="op" min="0.1" max="1" step="0.05" value="${o.op ?? 0.55}"></div>` : ''}`;
+    }
     if (kind === 'mass') {
       const head = `<div class="skc-row"><select data-k="use">${scheme().uses.map(u => `<option value="${u.key}"${u.key === o.use ? ' selected' : ''}>${escapeHtml(u.label)}</option>`).join('')}</select>
           <button type="button" data-k="del" title="Delete (Del)">🗑</button></div>`;
@@ -518,17 +585,17 @@ export function createSketch(ctx) {
   }
   function card() {
     const o = findSel();
-    if (!o || !sk.active || !sk.site || sk.drag || sk.draw || sk.op || ['pen', 'push', 'slope'].includes(sk.tool) || (sk.v3 && !sk.v3.visible)) { cardEl.hidden = true; return; }
+    if (!o || !sk.active || !sk.site || sk.drag || sk.draw || sk.op || ['pen', 'push', 'slope'].includes(sk.tool) || (sk.set === 'diagram' && sk.tool !== 'select' && !(sk.tool === 'label' && o.type === 'label')) || (sk.v3 && !sk.v3.visible)) { cardEl.hidden = true; return; }
     const kind = sk.sel.kind;
     let x1 = -Infinity, y0 = Infinity;
-    const pts = kind === 'mass' ? o.v.map(p => P3(o, p)) : o.pts.map(p => scr(p, handleZ(kind, o)(p)));
+    const pts = kind === 'mass' ? o.v.map(p => P3(o, p)) : kind === 'note' ? (noteScreen(o) || []) : o.pts.map(p => scr(p, handleZ(kind, o)(p)));
     for (const q of pts) { if (!q) continue; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; }
     if (!Number.isFinite(x1)) { cardEl.hidden = true; return; }
     const W = cardEl.parentElement.clientWidth, H = cardEl.parentElement.clientHeight;
-    const sig = `${kind}:${o.id}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use])}`;
+    const sig = `${kind}:${o.id}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use, o.color, o.stand, o.curve, o.size])}`;
     if (cardEl.dataset.sig !== sig && !cardEl.contains(document.activeElement)) { cardEl.dataset.sig = sig; cardEl.innerHTML = cardHtml(kind, o); }
-    const read = cardEl.querySelector('[data-o="read"]');
-    if (kind === 'mass') {
+    const read = cardEl.querySelector('[data-o="read"]') || {};
+    if (kind === 'note') { /* nothing to read out */ } else if (kind === 'mass') {
       const I = info(o), fl = cardEl.querySelector('[data-o="floors"]');
       if (fl) fl.textContent = String(I.floors);
       read.textContent = I.sheet ? fmtArea(area(I.foot) * sfPerNative2()) : `${fmtArea(massGfa(o))} total · ${I.floors ? `${fmtArea(I.P[0].area * sfPerNative2())} ground floor · ` : ''}${fmtLen(I.zmax)} tall`;
@@ -549,6 +616,8 @@ export function createSketch(ctx) {
     return SO.shiftTop(o, ftfN(o), dir, info(o).P);
   }
   cardEl.addEventListener('click', e => {
+    const sw = e.target.closest('button[data-col]'), on = findSel();
+    if (sw && on && sk.sel.kind === 'note') { before(); on.color = sw.dataset.col; cardEl.dataset.sig = ''; changed(true); return; }
     const b = e.target.closest('button[data-k]'); const o = findSel(); if (!b || !o) return;
     const k = b.dataset.k;
     if (k === 'del') { removeSel(); return; }
@@ -566,6 +635,16 @@ export function createSketch(ctx) {
     const o = findSel(); if (!o) return;
     const t = e.target, k = t.dataset.k, v = Number(t.value), p = o.prm;
     before();
+    if (sk.sel.kind === 'note') {
+      if (k === 'text') o.text = t.value;
+      if (k === 'stand') o.stand = t.checked;
+      if (k === 'curve') o.curve = t.checked;
+      if (k === 'h') o.h = Math.max(1, v || 20);
+      if (k === 'op') o.op = Math.max(0.1, Math.min(1, v || 0.55));
+      if (t.name === 'skc-size') applyStyle(o, { size: v });
+      if (t.dataset.col === 'custom') o.color = t.value;
+      cardEl.dataset.sig = ''; changed(true); return;
+    }
     if (k === 'use') o.use = t.value;
     if (k === 'ftf') { o.ftf = Math.max(2, v || o.ftf); regen(o); }
     if (p) {
@@ -588,11 +667,16 @@ export function createSketch(ctx) {
     cardEl.dataset.sig = '';
     changed();
   });
+  cardEl.addEventListener('input', e => {
+    const o = findSel(); if (!o || sk.sel.kind !== 'note' || e.target.dataset.k !== 'text') return;
+    o.text = e.target.value; sk.ver++; draw();
+  });
   function remember(o) { sk.last = { use: o.use, floors: o.prm?.floors || info(o).floors || 3, ftf: o.ftf, roof: o.prm?.roof?.type || sk.last?.roof || 'flat' }; }
   function removeSel() {
     if (!sk.sel) return;
     before();
     sk.model[LISTS[sk.sel.kind]] = list(sk.sel.kind).filter(m => m.id !== sk.sel.id);
+    if (sk.sel.kind === 'mass') sk.model.notes = sk.model.notes.filter(n => n.mid !== sk.sel.id);
     sk.sel = null; changed();
   }
 
@@ -773,9 +857,9 @@ export function createSketch(ctx) {
     if (ok) { sk.sel = { kind: 'mass', id: m.id }; changed(); } else { sk.undo.pop(); draw(); }
   }
   function flash(text) {
-    if (!$('sk-hint')) return;
-    const h = $('sk-hint'); h.textContent = text; h.classList.add('sk-warn');
-    clearTimeout(sk.flashT); sk.flashT = setTimeout(() => { h.classList.remove('sk-warn'); h.textContent = HINTS[sk.tool]; }, 3500);
+    const h = hintEl(); if (!h) return;
+    h.textContent = text; h.classList.add('sk-warn');
+    clearTimeout(sk.flashT); sk.flashT = setTimeout(() => { h.classList.remove('sk-warn'); h.textContent = hints()[sk.tool]; }, 3500);
   }
 
   // ---------------------------------------------------------------- push/pull, Ctrl-move, slope
@@ -861,10 +945,198 @@ export function createSketch(ctx) {
     }
   }
 
+  // ---------------------------------------------------------------- diagram annotations
+  const diagramOn = () => sk.set === 'diagram' && sk.active;
+  const noteColor = n => (n.color?.startsWith?.('#') ? n.color : colorOf(scheme(), n.color || 'arrow'));
+  /** How a note's points map to uniform space and back (see notes.js). */
+  function noteEnv(n) {
+    const e = ex3(), k = kz();
+    const D = u => [u[0] * k, u[1] * k, u[2] / e];
+    const drape = u => [u[0], u[1], (zGround([u[0] * k, u[1] * k]) + 0.25 * outPerFt()) * e];
+    const base = { D, drape, ft: outPerFt(), step: 5 * perFt(), stepU: 5 * perFt() / k };
+    if (n.on === 'mass') {
+      const m = massById(n.mid); if (!m) return null;
+      return { ...base, U: p => [p[0] / k, p[1] / k, zOut(m, p[2]) * e], N: n.n, ground: false };
+    }
+    return { ...base, U: p => [p[0] / k, p[1] / k, (zGround(p) + 0.25 * outPerFt()) * e], N: [0, 0, 1], ground: true };
+  }
+  function nGeom(n, flat = false) {
+    const m = n.on === 'mass' ? massById(n.mid) : null;
+    const key = JSON.stringify([n, ex3(), flat, m ? massBase(m) : 0, !!sk.v3]);
+    const c = sk.ngeo.get(n.id);
+    if (c && c.key === key) return c.G;
+    const env = noteEnv(n);
+    const G = env ? noteGeom(n, env, flat) : { outline: [], tris: [], edges: [] };
+    sk.ngeo.set(n.id, { key, G });
+    return G;
+  }
+  /** Display point of a note's point (for labels and handles). */
+  function noteDisp(n, p) {
+    if (n.on === 'mass') { const m = massById(n.mid); return m ? [p[0], p[1], zOut(m, p[2])] : null; }
+    return [p[0], p[1], zGround(p) + 0.3];
+  }
+  const labelSize = n => [12, 15, 20][n.size ?? 1];
+  function labelBox(g, n) {
+    const d = noteDisp(n, n.pts[0]); const q = d && scr(d, d[2]); if (!q) return null;
+    g.font = `700 ${labelSize(n)}px system-ui, sans-serif`;
+    const w = g.measureText(n.text || 'Label').width + 12, h = labelSize(n) + 10;
+    return { x: q[0] - w / 2, y: q[1] - h / 2, w, h, q };
+  }
+  function drawNotes(g) {
+    for (const n of sk.model.notes) {
+      if (n.type === 'label') continue;
+      if (sk.v3) continue;                                  // 3D draws them as meshes
+      const G = nGeom(n, true);
+      const Q = G.outline.map(p => scr(p, p[2])); if (Q.length < 3 || Q.some(q => !q)) continue;
+      g.beginPath(); Q.forEach((q, i) => (i ? g.lineTo(...q) : g.moveTo(...q))); g.closePath();
+      g.fillStyle = noteColor(n); g.globalAlpha = n.type === 'region' ? (n.op ?? 0.55) : 1; g.fill(); g.globalAlpha = 1;
+      if (n.stand) { g.setLineDash([5, 4]); g.strokeStyle = '#111827'; g.lineWidth = 1; g.stroke(); g.setLineDash([]); }
+    }
+    for (const n of sk.model.notes) {
+      if (n.type !== 'label') continue;
+      const B = labelBox(g, n); if (!B) continue;
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.lineWidth = 4; g.strokeStyle = 'rgba(255,255,255,0.92)'; g.strokeText(n.text || 'Label', B.q[0], B.q[1]);
+      g.fillStyle = noteColor(n); g.fillText(n.text || 'Label', B.q[0], B.q[1]);
+    }
+  }
+  /** Screen outline / box of a note, for picking and the selection outline. */
+  function noteScreen(n, g) {
+    if (n.type === 'label') { const B = labelBox(g || canvas.getContext('2d'), n); return B ? [[B.x, B.y], [B.x + B.w, B.y], [B.x + B.w, B.y + B.h], [B.x, B.y + B.h]] : null; }
+    const G = nGeom(n, !sk.v3), Q = G.outline.map(p => scr(p, p[2]));
+    return Q.length >= 3 && Q.every(Boolean) ? Q : null;
+  }
+  function hitNote(ev) {
+    const o = findSel();
+    if (o && sk.sel.kind === 'note') for (let i = 0; i < o.pts.length; i++) { const d = noteDisp(o, o.pts[i]), q = d && scr(d, d[2]); if (q && Math.hypot(q[0] - ev.sx, q[1] - ev.sy) < 8) return { id: o.id, vi: i }; }
+    for (let i = sk.model.notes.length - 1; i >= 0; i--) { const n = sk.model.notes[i], Q = noteScreen(n); if (Q && inPoly(Q, ev.sx, ev.sy)) return { id: n.id }; }
+    return null;
+  }
+  function drawNoteSel(g) {
+    const o = findSel(); if (!o || sk.sel.kind !== 'note') return;
+    const Q = noteScreen(o, g);
+    if (Q) { g.beginPath(); Q.forEach((q, i) => (i ? g.lineTo(...q) : g.moveTo(...q))); g.closePath(); g.strokeStyle = ORANGE; g.lineWidth = 2; g.setLineDash([5, 3]); g.stroke(); g.setLineDash([]); }
+    for (const p of o.pts) { const d = noteDisp(o, p), q = d && scr(d, d[2]); if (!q) continue; g.beginPath(); g.rect(q[0] - 4, q[1] - 4, 8, 8); g.fillStyle = '#fff'; g.fill(); g.strokeStyle = ORANGE; g.lineWidth = 1.5; g.stroke(); }
+  }
+  /** Point on the drawing surface of a note in progress / being moved. */
+  function notePoint(ev, sfc) {
+    if (sfc.on === 'ground') return ev.xy;
+    const m = massById(sfc.mid); if (!m) return null;
+    const r = rayIn(m, ev); if (!r) return null;
+    const den = SO.dot(sfc.n, r.d); if (Math.abs(den) < 1e-9) return null;
+    const t = SO.dot(sfc.n, SO.sub(sfc.p0, r.o)) / den;
+    return t > 0 ? SO.add(r.o, SO.mul(r.d, t)) : null;
+  }
+  function noteSurface(ev) {
+    const f = pickFace(ev);
+    if (f) { const m = massById(f.id); return { on: 'mass', mid: f.id, n: SO.faceNormal(m, f.fi), p0: f.p, p: f.p }; }
+    const xy = ev.xy; return xy ? { on: 'ground', p: xy } : null;
+  }
+  function noteRect(d) {
+    if (d.on === 'ground') return rectPts(d.a, d.b);
+    const n = d.n, u = SO.unit(Math.abs(n[2]) > 0.9 ? [1, 0, 0] : SO.cross([0, 0, 1], n)), v = SO.cross(n, u);
+    const dd = SO.sub(d.b, d.a), du = SO.dot(dd, u), dv = SO.dot(dd, v);
+    return [d.a, SO.add(d.a, SO.mul(u, du)), SO.add(SO.add(d.a, SO.mul(u, du)), SO.mul(v, dv)), SO.add(d.a, SO.mul(v, dv))];
+  }
+  function drawNoteDraft(g) {
+    const d = sk.draw; if (!d?.note || (!d.rect && !d.pts)) return;
+    const P = d.rect ? (d.type === 'region' ? noteRect(d) : [d.a, d.b]) : [...d.pts, ...(d.hover ? [d.hover] : [])];
+    if (P.length < 2) return;
+    const tmp = { id: '_draft', type: d.type, on: d.on, mid: d.mid, n: d.n, pts: P, color: sk.style.color, w: WIDTHS[d.type]?.[sk.style.size], stand: false, curve: sk.style.curve };
+    sk.ngeo.delete('_draft');
+    const G = nGeom(tmp, true), Q = G.outline.map(p => scr(p, p[2]));
+    if (Q.length >= 3 && Q.every(Boolean)) { g.beginPath(); Q.forEach((q, i) => (i ? g.lineTo(...q) : g.moveTo(...q))); g.closePath(); g.fillStyle = noteColor(tmp); g.globalAlpha = 0.6; g.fill(); g.globalAlpha = 1; g.strokeStyle = ORANGE; g.lineWidth = 1.5; g.setLineDash([5, 3]); g.stroke(); g.setLineDash([]); }
+  }
+  function finishNote(pts) {
+    const d = sk.draw; sk.draw = null;
+    if (!d) return;
+    if (pts.length < (d.type === 'region' ? 3 : d.type === 'label' ? 1 : 2)) { draw(); return; }
+    before();
+    const o = { id: uid(), type: d.type, on: d.on, pts, color: sk.style.color, size: sk.style.size, stand: d.type === 'label' ? false : sk.style.stand, curve: sk.style.curve };
+    if (d.on === 'mass') { o.mid = d.mid; o.n = d.n; }
+    if (WIDTHS[d.type]) o.w = WIDTHS[d.type][sk.style.size];
+    if (d.type === 'region') { o.op = 0.55; o.h = 30; }
+    if (d.type === 'line') o.h = 20;
+    if (d.type === 'label') o.text = 'Label';
+    sk.model.notes.push(o);
+    sk.sel = { kind: 'note', id: o.id };
+    changed();
+    if (d.type === 'label') setTimeout(() => { const t = cardEl.querySelector('[data-k="text"]'); if (t) { t.focus(); t.select(); } }, 0);
+  }
+  function noteDown(ev) {
+    const t = sk.tool;
+    if (t === 'select') {
+      const h = hitNote(ev);
+      if (!h) { sk.clickEmpty = [ev.sx, ev.sy]; sk.sel = null; draw(); card(); return false; }
+      const o = sk.model.notes.find(n => n.id === h.id);
+      if (ev.alt && h.vi == null) { before(); const c = JSON.parse(JSON.stringify(o)); c.id = uid(); sk.model.notes.push(c); sk.sel = { kind: 'note', id: c.id }; }
+      else sk.sel = { kind: 'note', id: o.id };
+      const tgt = findSel();
+      const sfc = { on: tgt.on, mid: tgt.mid, n: tgt.n, p0: tgt.pts[0] };
+      const start = notePoint(ev, sfc); if (!start) return true;
+      sk.drag = { note: true, id: tgt.id, vi: h.vi, sfc, start, orig: JSON.stringify(tgt.pts), pushed: ev.alt };
+      draw(); card();
+      return true;
+    }
+    if (sk.draw?.note && sk.draw.pts) {                    // clicking out points
+      const p = notePoint(ev, sk.draw); if (!p) return true;
+      const d = sk.draw;
+      if (d.type === 'region' && d.pts.length >= 3) { const a = noteDisp(d, d.pts[0]), q = a && scr(a, a[2]); if (q && Math.hypot(q[0] - ev.sx, q[1] - ev.sy) < 10) { finishNote(d.pts.slice()); return true; } }
+      d.pts.push(p); draw(); return true;
+    }
+    const sfc = noteSurface(ev); if (!sfc) return true;
+    if (t === 'label') { sk.draw = { note: true, type: 'label', ...sfc }; finishNote([sfc.p]); return true; }
+    sk.draw = { note: true, type: t, ...sfc, a: sfc.p, b: sfc.p, cp: [ev.sx, ev.sy], pending: true };
+    card();
+    return true;
+  }
+  function noteMove(ev) {
+    const d = sk.draw;
+    if (d?.note) {
+      const p = notePoint(ev, d); if (!p) return;
+      if (d.pending && Math.hypot(ev.sx - d.cp[0], ev.sy - d.cp[1]) > 6) { d.pending = false; d.rect = true; }
+      if (d.rect) d.b = p; else if (d.pts) d.hover = p;
+      draw(); return;
+    }
+    const g = sk.drag; if (!g?.note) return;
+    const o = sk.model.notes.find(n => n.id === g.id); if (!o) return;
+    const cur = notePoint(ev, g.sfc); if (!cur) return;
+    if (!g.pushed) { before(); g.pushed = true; }
+    const dl = cur.map((v, i) => v - g.start[i]), P = JSON.parse(g.orig);
+    o.pts = P.map((p, i) => (g.vi == null || g.vi === i ? p.map((v, j) => v + (dl[j] || 0)) : p));
+    g.moved = true; dragged();
+  }
+  function noteUp(ev) {
+    if (sk.clickEmpty) sk.clickEmpty = null;
+    const d = sk.draw;
+    if (d?.note) {
+      if (d.rect) { finishNote(d.type === 'region' ? noteRect(d) : [d.a, d.b]); return; }
+      if (d.pending) { sk.draw = { ...d, pending: false, pts: [d.a] }; draw(); }
+      return;
+    }
+    if (sk.drag?.note) { const moved = sk.drag.moved; sk.drag = null; if (moved) changed(true); else card(); }
+    void ev;
+  }
+  function finishNoteOutline() {
+    const d = sk.draw; if (!d?.note || !d.pts) return;
+    const P = d.pts.slice();
+    while (P.length > 2 && P.at(-1).every((v, i) => Math.abs(v - P.at(-2)[i]) < 1e-6)) P.pop();
+    finishNote(P);
+  }
+  /** Annotations as 3D meshes. */
+  function notes3d() {
+    if (sk.set !== 'diagram' || !sk.active) return [];
+    return sk.model.notes.filter(n => n.type !== 'label').map(n => {
+      const G = nGeom(n);
+      return { tris: G.tris.flat(), edges: n.stand ? G.edges.flat(2) : [], color: noteColor(n), opacity: n.type === 'region' ? (n.op ?? 0.55) : 1, edgeColor: '#1f2937' };
+    });
+  }
+
   // ---------------------------------------------------------------- pointer (shared by the map and the 3D view)
   /** Pointer down; true when the sketch took it (so the map / 3D camera shouldn't). */
   function down(ev) {
     if (!sk.active || !sk.site) return false;
+    if (sk.set === 'diagram') return noteDown(ev);
     const t = sk.tool;
     // Face tools.
     if (t === 'push' || t === 'slope' || (t === 'select' && ev.ctrl)) {
@@ -927,7 +1199,9 @@ export function createSketch(ctx) {
     }
     const start = ev.at(h.z) || ev.xy; if (!start) return true;
     // Moving a lot takes its islands and drive aisles along.
-    const carry = h.kind === 'lot' && (!h.h || h.h.t === 'r') ? [...sk.model.islands, ...sk.model.drives].filter(q => inPoly(src.pts, ...centroid(q.pts))).map(q => ({ q, orig: JSON.parse(JSON.stringify(q.pts)) })) : [];
+    // A block takes the diagram annotations drawn on it.
+    const carry = h.kind === 'lot' && (!h.h || h.h.t === 'r') ? [...sk.model.islands, ...sk.model.drives].filter(q => inPoly(src.pts, ...centroid(q.pts))).map(q => ({ q, orig: JSON.parse(JSON.stringify(q.pts)) }))
+      : h.kind === 'mass' && !pushed && (!h.h || h.h.t === 'r' || h.h.t === 's') ? sk.model.notes.filter(n => n.mid === src.id).map(q => ({ q, orig: JSON.parse(JSON.stringify(q.pts)), n: q.n?.slice() })) : [];
     sk.drag = { kind: target.kind, id: target.id, h: h.h, z: h.z, start, orig: JSON.stringify(obj), angle0: obj.angle, carry, pushed, sx: ev.sx, sy: ev.sy };
     if (target.kind === 'mass') sk.baseLock = null;
     sk.sel = { kind: target.kind, id: target.id };
@@ -942,6 +1216,7 @@ export function createSketch(ctx) {
   }
   function move(ev) {
     if (!sk.active || !sk.site) return;
+    if (sk.set === 'diagram') { noteMove(ev); return; }
     if (sk.op) { sk.op.moved = sk.op.moved || Math.hypot(ev.sx - sk.op.sx, ev.sy - sk.op.sy) > 3; if (sk.op.moved) moveOp(ev); return; }
     const d = sk.draw;
     if (d?.face) {
@@ -999,21 +1274,30 @@ export function createSketch(ctx) {
         const cs = Math.cos(a), sn = Math.sin(a), rot = ([x, y]) => [c[0] + (x - c[0]) * cs - (y - c[1]) * sn, c[1] + (x - c[0]) * sn + (y - c[1]) * cs];
         mapObj(o, rot);
         if (g.kind === 'lot' && g.angle0 != null) o.angle = g.angle0 + a;
-        for (const cq of g.carry) cq.q.pts = cq.orig.map(rot);
+        carryAll(g, rot);
       } else {
         const f = Math.max(0.05, Math.hypot(cur[0] - c[0], cur[1] - c[1]) / Math.max(1e-9, Math.hypot(g.start[0] - c[0], g.start[1] - c[1])));
-        mapObj(o, ([x, y]) => [c[0] + (x - c[0]) * f, c[1] + (y - c[1]) * f]);
+        const sc = ([x, y]) => [c[0] + (x - c[0]) * f, c[1] + (y - c[1]) * f];
+        mapObj(o, sc); carryAll(g, sc);
       }
     } else {
       mapObj(o, ([x, y]) => [x + dx, y + dy]);
-      for (const cq of g.carry) cq.q.pts = cq.orig.map(([x, y]) => [x + dx, y + dy]);
+      carryAll(g, ([x, y]) => [x + dx, y + dy]);
     }
     g.moved = true;
     dragged();
   }
+  /** Move what an object carries (lot islands / aisles, block annotations) with it; heights and normals follow. */
+  function carryAll(g, fn) {
+    for (const cq of g.carry) {
+      cq.q.pts = cq.orig.map(p => [...fn(p), ...p.slice(2)]);
+      if (cq.n) { const a = fn([0, 0]), b = fn([cq.n[0], cq.n[1]]); const hx = b[0] - a[0], hy = b[1] - a[1], l = Math.hypot(hx, hy), hl = Math.hypot(cq.n[0], cq.n[1]); cq.q.n = l > 1e-12 ? [hx / l * hl, hy / l * hl, cq.n[2]] : cq.n.slice(); }
+    }
+  }
   const isRect = P => P.length === 4 && [0, 1, 2, 3].every(i => { const a = P[i], b = P[(i + 1) % 4]; return Math.abs(a[0] - b[0]) < 1e-6 || Math.abs(a[1] - b[1]) < 1e-6; });
   function up(ev) {
     if (!sk.active) return;
+    if (sk.set === 'diagram') { noteUp(ev); return; }
     if (sk.op) { endOp(); return; }
     if (sk.clickEmpty) {
       const [x, y] = sk.clickEmpty; sk.clickEmpty = null;
@@ -1032,6 +1316,7 @@ export function createSketch(ctx) {
     if (sk.drag) { const moved = sk.drag.moved; sk.drag = null; if (moved) changed(true); else card(); }
   }
   function finishOutline() {
+    if (sk.set === 'diagram') { finishNoteOutline(); return; }
     const d = sk.draw;
     if (d?.face) { if (d.pts.length >= 3 && !d.pts[0].t) penFinish('loop'); return; }
     if (!d?.pts) return;
@@ -1125,14 +1410,15 @@ export function createSketch(ctx) {
     if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return true; }
     if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'y') { e.preventDefault(); doRedo(); return true; }
     if (e.ctrlKey || e.metaKey || e.altKey) return false;
-    const t = TOOLS.find(x => x.key.toLowerCase() === k.toLowerCase());
+    const t = tools().find(x => x.key.toLowerCase() === k.toLowerCase());
     if (t) { e.preventDefault(); setTool(t.id); return true; }
-    const s = SHAPES.find(x => x.key === k);
+    const s = sk.set === 'sketch' && SHAPES.find(x => x.key === k);
     if (s) { e.preventDefault(); setShape(s.id); return true; }
     const o = findSel();
     if (!o) return false;
     const kind = sk.sel.kind;
     if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); removeSel(); return true; }
+    if (kind === 'note' && k.toLowerCase() === 'f' && o.type !== 'label') { e.preventDefault(); before(); o.stand = !o.stand; cardEl.dataset.sig = ''; changed(true); return true; }
     if (kind === 'mass' && (k === 'ArrowUp' || k === 'ArrowDown')) { e.preventDefault(); before(); if (floorsBy(o, k === 'ArrowUp' ? 1 : -1)) { remember(o); changed(true); } else sk.undo.pop(); return true; }
     if (kind === 'mass' && k.toLowerCase() === 'r' && o.prm) {
       e.preventDefault(); before();
@@ -1149,6 +1435,7 @@ export function createSketch(ctx) {
     if (!$('sk-stats')) return;
     const has = !!sk.site;
     $('sk-empty').hidden = has; $('sk-body').hidden = !has;
+    if ($('dg-empty')) $('dg-empty').hidden = has;
     if (!has) return;
     const st = stats();
     const useRows = [...st.byUse].sort((a, b) => b[1] - a[1]).map(([u, sf]) => {
@@ -1202,7 +1489,9 @@ export function createSketch(ctx) {
     $('sk-scheme').addEventListener('change', e => {
       const s = schemeById(e.target.value); if (!s) return;
       sk.model.scheme = JSON.parse(JSON.stringify(s)); for (const u of s.uses) if (!sk.model.ratios[u.key]) sk.model.ratios[u.key] = { mode: 'ksf', r: 0 };
-      sk.cardVer = (sk.cardVer || 0) + 1; changed();
+      sk.cardVer = (sk.cardVer || 0) + 1;
+      if (sk.set === 'diagram') { buildBar(); setTool(sk.tool); }
+      changed();
     });
     $('sk-swatches').addEventListener('input', e => {
       const t = e.target; if (t.type !== 'color') return;
@@ -1308,7 +1597,9 @@ export function createSketch(ctx) {
     get version() { return sk.ver; },
     get model() { return sk.model; },
     onSite,
-    setActive(on) {
+    /** on: the Sketch or Diagram tab is showing; set: which toolset ('sketch' | 'diagram'). */
+    setActive(on, set = 'sketch') {
+      if (on && set !== sk.set) { sk.set = set; sk.sel = null; sk.tool = 'select'; buildBar(); }
       sk.active = on; canvas.hidden = !visible(); bar.hidden = !on;
       if (!on) { sk.draw = null; sk.op = null; sk.hov = null; cardEl.hidden = true; map.getContainer().classList.remove('sk-drawing'); sk.v3?.el.classList.remove('sk-drawing'); sk.v3?.sketchNav(false); }
       else setTool(sk.tool);
@@ -1316,7 +1607,11 @@ export function createSketch(ctx) {
     },
     attach3d,
     redraw() { draw(); card(); },
-    buildings, tris, parking3d, stats, wirePanel, panel, info,
+    buildings, tris, parking3d, stats, wirePanel, panel, info, notes3d,
+    get diagram() { return diagramOn(); },
+    setShowLabels(on) { sk.showLabels = on; draw(); },
+    /** The overlay canvas (labels, plan drawing) for image export. */
+    overlay: () => { draw(); return canvas; },
     hasContent: () => sk.model.masses.length + sk.model.lots.length + sk.model.islands.length + sk.model.drives.length > 0,
     refreshVisibility() { canvas.hidden = !visible(); draw(); },
     _sk: sk,

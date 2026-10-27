@@ -265,8 +265,9 @@ input[type="search"]:focus, select:focus { outline: 2px solid var(--accent); out
 .aerial-res { margin: 0 0 8px; } .aerial-res label { font-size: 12px; }
 
 /* ---------- Mode switching ---------- */
-.panel.mode-design .existing-only, .panel.mode-sketch .existing-only { display: none !important; }
+.panel.mode-design .existing-only, .panel.mode-sketch .existing-only, .panel.mode-diagram .existing-only { display: none !important; }
 .panel:not(.mode-sketch) .sketch-only { display: none !important; }
+.panel:not(.mode-diagram) .diagram-only { display: none !important; }
 .panel:not(.mode-design) .design-only { display: none !important; }
 
 /* ---------- Site design ---------- */
@@ -624,3 +625,15 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 kbd { font: 600 10.5px/1 var(--mono, monospace); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 3px; padding: 1px 3px; }
 
 .leaflet-container.mid-pan, .leaflet-container.mid-pan * { cursor: grabbing !important; }
+
+/* Diagram tab */
+.leaflet-container.diagram-view { background: #fafaf7; }
+.diagram-view .leaflet-tile-pane, .diagram-view .leaflet-siteImg-pane { opacity: var(--dg-fade, .25); }
+.dg-style { flex-direction: column; align-items: stretch; padding: 7px 8px; gap: 6px; }
+.dg-sws { display: flex; flex-wrap: wrap; gap: 4px; max-width: 232px; }
+.dg-sw { width: 20px; height: 20px; border-radius: 50%; border: 2px solid rgba(255,255,255,.25); cursor: pointer; padding: 0; position: relative; overflow: hidden; }
+.dg-sw.on { border-color: #fff; box-shadow: 0 0 0 2px #e8913f; }
+.dg-custom { background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); }
+.dg-custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.dg-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dg-style .seg label span, .sk-card .seg label span { padding: 2px 8px; }
