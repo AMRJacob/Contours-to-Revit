@@ -19,8 +19,8 @@
 //   'image' — ArcGIS ImageServer /exportImage, same (optionally locked to one flight)
 //   'tiles' — cached tiles: Web Mercator grids are stitched and warped here; a grid already in the site's State
 //             Plane zone is stitched and cropped directly.
-import { projector, zoneUnitsPerMeter } from './geo.js?v=0.38.1';
-import { NATIONAL, STATES, STATE_LIST } from './imgcatalog.js?v=0.38.1';
+import { projector, zoneUnitsPerMeter } from './geo.js?v=0.38.2';
+import { NATIONAL, STATES, STATE_LIST } from './imgcatalog.js?v=0.38.2';
 
 export { STATE_LIST };
 
@@ -494,7 +494,7 @@ export async function probe(zone, box, cands, { prefer = 'sharp', onProgress } =
   if (x1 - x0 > side * 0.5 && y1 - y0 > side * 0.5) centres.push([x0, y0], [x1, y0], [x1, y1], [x0, y1]);
   const winBox = ([x, y], s) => ({ xmin: x - s / 2, xmax: x + s / 2, ymin: y - s / 2, ymax: y + s / 2 });
   const run = limiter(8);
-  let done = 0;
+  let done = 0, stage1Over = false, stage2Over = false;   // late stragglers must not report progress
   const total = cands.length;
   const results = cands.map(([src, how]) => ({ key: candKey(src, how), src, how, status: 'ok', why: '', empty: [], tex: [],
     measuredIn: null, nativeIn: src.nativeIn || null, effIn: null, year: src.year ?? null, ms: 0 }));
@@ -515,8 +515,9 @@ export async function probe(zone, box, cands, { prefer = 'sharp', onProgress } =
       }
     }
     r.ms = Math.round(performance.now() - t0);
-    onProgress?.(++done, total, 'coverage');
+    if (!stage1Over) onProgress?.(++done, total, 'coverage');
   }), results, { minMs: 10000 });
+  stage1Over = true;
   // A spot that is clearly emptier than the same spot from another source is a gap in this source (white roofs
   // and bright pavement look the same from every source, so they don't count against anyone).
   for (let i = 0; i < centres.length; i++) {
@@ -547,8 +548,9 @@ export async function probe(zone, box, cands, { prefer = 'sharp', onProgress } =
       else { const k = detailPx(cv); r.measuredIn = k == null ? null : k * sampleIn; }
       cv.width = cv.height = 0;
     } catch (e) { if (!r.late) { r.status = 'error'; r.why = e.message || 'failed'; } }
-    onProgress?.(++done, ok.length, 'detail');
+    if (!stage2Over) onProgress?.(++done, ok.length, 'detail');
   }), ok, { minMs: 4000 });
+  stage2Over = true;
   for (const r of results) r.effIn = r.measuredIn == null ? r.nativeIn : Math.max(r.measuredIn, r.nativeIn || 0);
   for (const r of results) { delete r.empty; delete r.tex; delete r.late; }
   // A map service tried through a tile cache it doesn't have isn't worth listing.

@@ -3,7 +3,7 @@
 // the browser with laz-perf (WASM), and turned into a roof surface per footprint. Heights are measured against the
 // lidar's own ground points next to each building, so the lidar's vertical datum never matters.
 
-import { orthogonalize, dominantAngle, prismMass, mergeMass, clipHalf, polyArea } from './massing.js?v=0.38.1';
+import { orthogonalize, dominantAngle, prismMass, mergeMass, clipHalf, polyArea } from './massing.js?v=0.38.2';
 
 const RESOURCES = 'https://raw.githubusercontent.com/hobuinc/usgs-lidar/master/boundaries/resources.geojson';
 const R_EARTH = 6378137;
