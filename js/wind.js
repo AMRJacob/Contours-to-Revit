@@ -5,8 +5,10 @@
 // NCEI asks that it be cited as "NOAA National Centers for Environmental Information, Global Surface Hourly".
 // (Open-Meteo was considered but its free API is for non-commercial use only.)
 //
-// The station is the nearest one (preferring airports) whose record is current and goes back at least five
-// years; the rose uses the last five full calendar years. Winds are reported at the station (usually an airport,
+// The station is the nearest one (preferring airports) whose record runs to recent years and goes back at least
+// five years; the rose uses its last five full calendar years. NCEI froze this product in August 2025 (its
+// successor, GHCN-hourly, ships every weather variable in ~9 MB per station-year), so the years end in 2024 for
+// now — fine for a prevailing-wind rose, which barely changes from year to year. Winds are reported at the station (usually an airport,
 // 10 m above open ground) — buildings, trees and terrain at the site change local wind a lot.
 
 const ISD = 'https://www.ncei.noaa.gov/pub/data/noaa/isd-history.csv';
@@ -42,9 +44,9 @@ const km = (a, b, c, d) => { const R = 6371, p = Math.PI / 180, x = (d - b) * p 
 
 /** Candidate stations near lat/lon, best first (current record, ≥ 5 years, airports preferred, then distance). */
 export async function nearStations(lat, lon, n = 4) {
-  const now = new Date(), y = now.getFullYear();
-  const recent = `${y - 1}${String(now.getMonth() + 1).padStart(2, '0')}01`, old = `${y - 6}0101`;
-  const list = (await stations()).filter(s => s.end >= recent && s.begin <= old)
+  const y = new Date().getFullYear();
+  const recent = '20250101', old = `${Math.min(y - 1, 2025) - 6}0101`;      // record ends in 2025 or later (see top)
+  const list = (await stations()).filter(s => s.end.replace(/\D/g, '') >= recent && s.begin <= old)
     .map(s => ({ ...s, km: km(lat, lon, s.lat, s.lon) })).filter(s => s.km < 120);
   // An airport within 1.5× the distance of the nearest station is preferred (their records are the most complete).
   list.sort((a, b) => (a.km * (a.icao ? 1 : 1.5)) - (b.km * (b.icao ? 1 : 1.5)));
@@ -56,7 +58,8 @@ export async function nearStations(lat, lon, n = 4) {
  * Returns { station, years: [y0, y1], n, seasons: { all|winter|…: { n, calm, sec: [SECTORS][bins] counts, mean: m/s } } }.
  */
 async function roseFor(st, onStatus) {
-  const y1 = new Date().getFullYear() - 1, y0 = y1 - 4;
+  const end = st.end.replace(/\D/g, '');
+  const y1 = Math.min(new Date().getFullYear() - 1, Number(end.slice(0, 4)) - (end.slice(4) >= '1231' ? 0 : 1)), y0 = y1 - 4;
   onStatus?.(`Downloading ${y0}–${y1} hourly winds from ${st.name}${st.icao ? ` (${st.icao})` : ''}…`);
   const p = new URLSearchParams({ dataset: 'global-hourly', stations: st.id, startDate: `${y0}-01-01`, endDate: `${y1}-12-31`, dataTypes: 'WND', format: 'csv' });
   const r = await fetch(`${ADS}?${p}`, { signal: AbortSignal.timeout(90000) });

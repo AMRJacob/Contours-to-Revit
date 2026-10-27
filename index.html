@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.39.0">
+  <link rel="stylesheet" href="css/app.css?v=0.39.1">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -523,7 +523,7 @@
       </div>
       <div class="env-panels" id="env-panels">
         <section class="env-panel" id="sun-panel" hidden aria-label="Sun">
-          <div class="env-h"><span>Sun</span><small id="sun-read"></small></div>
+          <div class="env-h"><button type="button" class="env-title" title="Show / hide the controls">Sun</button><small id="sun-read"></small></div>
           <div class="env-row">
             <input type="date" id="sun-date" aria-label="Date">
             <span class="env-chips"><button type="button" data-sd="03-20">Mar 20</button><button type="button" data-sd="06-21">Jun 21</button><button type="button" data-sd="09-22">Sep 22</button><button type="button" data-sd="12-21">Dec 21</button></span>
@@ -542,7 +542,7 @@
           <p class="env-note">Ground and building masses only — trees aren't modelled. Times are this computer's time zone.</p>
         </section>
         <section class="env-panel" id="wind-panel" hidden aria-label="Prevailing wind">
-          <div class="env-h"><span>Prevailing wind</span>
+          <div class="env-h"><button type="button" class="env-title" title="Show / hide the rose">Prevailing wind</button>
             <select id="wind-season" aria-label="Season"><option value="all">All year</option><option value="winter">Winter (Dec–Feb)</option><option value="spring">Spring (Mar–May)</option><option value="summer">Summer (Jun–Aug)</option><option value="fall">Fall (Sep–Nov)</option></select>
           </div>
           <canvas id="wind-rose" width="200" height="200" aria-label="Wind rose"></canvas>
@@ -582,6 +582,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.39.0"></script>
+  <script type="module" src="js/app.js?v=0.39.1"></script>
 </body>
 </html>

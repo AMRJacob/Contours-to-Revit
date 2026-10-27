@@ -159,6 +159,7 @@ export async function sunHours(R, tris, day, site, { stepMin = 15, onProgress, i
   const steps = [];
   for (let t = rise.getTime(); t <= set.getTime(); t += stepMin * 6e4) steps.push(new Date(t));
   const dt = stepMin / 60;
+  let lastYield = performance.now();
   for (let si = 0; si < steps.length; si++) {
     if (isStale?.()) return null;
     const pos = sunPosition(steps[si], lat, lng);
@@ -179,7 +180,7 @@ export async function sunHours(R, tris, day, site, { stepMin = 15, onProgress, i
       }
     }
     onProgress?.((si + 1) / steps.length);
-    if (si % 2 === 1) await new Promise(r => setTimeout(r, 0));
+    if (performance.now() - lastYield > 120) { await new Promise(r => setTimeout(r, 0)); lastYield = performance.now(); }
   }
   return { cells, tris: tH, steps: steps.length, hoursMax: (set - rise) / 36e5 };
 }

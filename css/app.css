@@ -542,3 +542,7 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .wind-key b { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 3px; vertical-align: -1px; }
 .sun-canvas, .wind-canvas { position: absolute; inset: 0; pointer-events: none; }
 .wind-canvas { z-index: 461; }
+.env-title { background: none; border: 0; padding: 0; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
+.env-title::before { content: '▾ '; color: #9aa3a9; }
+.env-panel.collapsed .env-title::before { content: '▸ '; }
+.env-panel.collapsed > :not(.env-h) { display: none !important; }
