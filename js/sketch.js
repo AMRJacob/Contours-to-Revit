@@ -5,8 +5,8 @@
 // Hotkeys: V select · M massing · P parking · Esc cancel / select · Del delete · Ctrl+Z / Ctrl+Y undo / redo ·
 // ↑ ↓ floors (massing) or slide rows (parking) · [ ] turn parking rows · Enter / double-click finish an outline ·
 // Alt+drag duplicate · Shift square corners.
-import { layoutLot, longestEdgeAngle, PARK_DEFAULTS } from './parking.js?v=0.41.1';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.41.1';
+import { layoutLot, longestEdgeAngle, PARK_DEFAULTS } from './parking.js?v=0.41.2';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.41.2';
 
 const TOOLS = [
   { id: 'select', key: 'V', label: 'Select', icon: '<path d="M5 3l14 8-6 1.5L10 19z"/>' },
@@ -379,9 +379,9 @@ export function createSketch(ctx) {
   map.on('mouseup', up);
   document.addEventListener('mouseup', e => { if (sk.drag || (sk.draw && !sk.draw.pts)) up({ originalEvent: e }); });
   map.on('dblclick', () => { if (sk.active && sk.draw?.pts?.length >= 3) { const P = sk.draw.pts.slice(); if (P.length > 3 && Math.hypot(P.at(-1)[0] - P.at(-2)[0], P.at(-1)[1] - P.at(-2)[1]) < 1e-6) P.pop(); finishDraw(P); } });
-  map.on('move zoom resize viewreset', () => { if (sk.active) { draw(); card(); } });
-  map.on('zoomstart', () => { if (sk.active) canvas.style.visibility = 'hidden'; });
-  map.on('zoomend', () => { canvas.style.visibility = ''; if (sk.active) { draw(); card(); } });
+  map.on('move zoom resize viewreset', () => { if (showOnMap()) { draw(); card(); } });
+  map.on('zoomstart', () => { if (showOnMap()) canvas.style.visibility = 'hidden'; });
+  map.on('zoomend', () => { canvas.style.visibility = ''; if (showOnMap()) { draw(); card(); } });
 
   const typing = e => /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName) && !['range', 'checkbox', 'radio'].includes(e.target.type);
   // Capture phase, so keys used here (arrows) don't also pan the map.
