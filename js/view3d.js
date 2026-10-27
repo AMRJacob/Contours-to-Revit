@@ -221,6 +221,7 @@ export class SiteView3D {
       geo.computeVertexNormals();
       const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, flatShading: true }));
       m.name = 'sketchMass';
+      m.userData.ids = mass.ids || [];
       g.add(m);
       if (mass.lines?.length) {
         const lp = new Float32Array(mass.lines.length);
@@ -234,6 +235,21 @@ export class SiteView3D {
       for (let i = 0; i < park.lines.length; i += 3) lp.set(P(park.lines[i], park.lines[i + 1], park.lines[i + 2]), i);
       const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(lp, 3));
       g.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: park.stripe || '#ffffff' })));
+    }
+    const fill = (arr, color, opacity = 1) => {
+      if (!arr?.length) return;
+      const ap = new Float32Array(arr.length);
+      for (let i = 0; i < arr.length; i += 3) ap.set(P(arr[i], arr[i + 1], arr[i + 2]), i);
+      const ag = new THREE.BufferGeometry(); ag.setAttribute('position', new THREE.BufferAttribute(ap, 3)); ag.computeVertexNormals();
+      g.add(new THREE.Mesh(ag, new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide, transparent: opacity < 1, opacity })));
+    };
+    fill(park?.islands, park?.greenColor || '#8cc084');
+    fill(park?.drives, park?.lotColor || '#9aa3ad', 0.85);
+    if (park?.marks?.length) {
+      const lp = new Float32Array(park.marks.length);
+      for (let i = 0; i < park.marks.length; i += 3) lp.set(P(park.marks[i], park.marks[i + 1], park.marks[i + 2]), i);
+      const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(lp, 3));
+      g.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: '#fde047' })));
     }
     if (park?.acc?.length) {
       const ap = new Float32Array(park.acc.length);
@@ -444,6 +460,75 @@ export class SiteView3D {
   }
 
   setExaggeration(ex) { this.ex = ex; }
+
+  // ---- Sketching in 3D: native XY + output Z <-> screen, and picking the ground / sketch blocks under the cursor.
+  world(x, y, z) { return new THREE.Vector3((x - this.cx) * this.k, (z - this.z0) * this.ex, -(y - this.cy) * this.k); }
+  native(v) { return [v.x / this.k + this.cx, -v.z / this.k + this.cy, v.y / this.ex + this.z0]; }
+  /** Screen position (px in the stage) of a native point, or null when it is behind the camera. */
+  project(x, y, z) {
+    const v = this.world(x, y, z).project(this.camera);
+    if (v.z > 1 || v.z < -1) return null;
+    return [(v.x + 1) / 2 * this.el.clientWidth, (1 - v.y) / 2 * this.el.clientHeight];
+  }
+  _ray(sx, sy) {
+    this._rc = this._rc || new THREE.Raycaster();
+    this._rc.setFromCamera(new THREE.Vector2(sx / this.el.clientWidth * 2 - 1, 1 - sy / this.el.clientHeight * 2), this.camera);
+    return this._rc;
+  }
+  /** Terrain height (world y) under world (X, Z), from the displayed mesh; NaN off the model. */
+  groundY(X, Z) {
+    const g = this.g, m = this.mesh; if (!g || !m) return NaN;
+    const { cols, rows } = m.userData, st = this.step;
+    const c = ((X / this.k + this.cx) - g.x0) / (g.s * st), r = ((-Z / this.k + this.cy) - g.y0) / (g.s * st);
+    if (!(c >= 0 && r >= 0 && c <= cols - 1 && r <= rows - 1)) return NaN;
+    const c0 = Math.min(cols - 2, Math.floor(c)), r0 = Math.min(rows - 2, Math.floor(r)), fc = c - c0, fr = r - r0;
+    const P = m.geometry.attributes.position.array, y = (rr, cc) => P[(rr * cols + cc) * 3 + 1];
+    return (y(r0, c0) * (1 - fc) + y(r0, c0 + 1) * fc) * (1 - fr) + (y(r0 + 1, c0) * (1 - fc) + y(r0 + 1, c0 + 1) * fc) * fr;
+  }
+  /** Ground point under the cursor: [x, y, z] native XY + output Z, or null. Marches the ray over the height grid. */
+  pickGround(sx, sy) {
+    if (!this.mesh) return null;
+    const { ray } = this._ray(sx, sy), o = ray.origin, d = ray.direction;
+    const bb = this.mesh.geometry.boundingBox || (this.mesh.geometry.computeBoundingBox(), this.mesh.geometry.boundingBox);
+    const ymax = bb.max.y + 1, ymin = bb.min.y - 1;
+    let t0 = 0, t1;
+    if (o.y > ymax) { if (d.y >= 0) return null; t0 = (ymax - o.y) / d.y; }
+    t1 = d.y < 0 ? (ymin - o.y) / d.y : t0 + this.camera.far;
+    const cell = this.g.s * this.step * this.k * 0.5, h = Math.hypot(d.x, d.z);
+    const dt = Math.max((t1 - t0) / 6000, cell / Math.max(h, 1e-3));
+    const f = t => { const y = this.groundY(o.x + d.x * t, o.z + d.z * t); return Number.isNaN(y) ? NaN : o.y + d.y * t - y; };
+    let pt = t0, pf = f(t0);
+    for (let t = t0 + dt; t <= t1 + dt; t += dt) {
+      const ft = f(t);
+      if (pf > 0 && ft <= 0) {
+        let a = pt, b = t;
+        for (let i = 0; i < 24; i++) { const mid = (a + b) / 2; if (f(mid) > 0) a = mid; else b = mid; }
+        return this.native(o.clone().addScaledVector(d, b));
+      }
+      if (!Number.isNaN(ft)) { pt = t; pf = ft; }
+    }
+    return null;
+  }
+  /** Point on the horizontal plane at output elevation z under the cursor (native XY), or null. */
+  pickPlane(sx, sy, z) {
+    const { ray } = this._ray(sx, sy), o = ray.origin, d = ray.direction, Y = (z - this.z0) * this.ex;
+    if (Math.abs(d.y) < 1e-9) return null;
+    const t = (Y - o.y) / d.y; if (t <= 0) return null;
+    return this.native(o.clone().addScaledVector(d, t)).slice(0, 2);
+  }
+  /** Sketch block under the cursor: { id, at: [x, y, z] } or null. */
+  pickSketch(sx, sy) {
+    const m = this.sketch?.getObjectByName('sketchMass');
+    if (!m) return null;                       // (still pickable while sun hours hide it behind the coloured copy)
+    const hit = this._ray(sx, sy).intersectObject(m, false)[0];
+    if (!hit) return null;
+    return { id: m.userData.ids[hit.faceIndex], at: this.native(hit.point) };
+  }
+  /** While a sketch drawing tool is on, the left button is the pen: right-drag orbits, Shift+right-drag pans. */
+  sketchNav(on) {
+    this.controls.mouseButtons = on ? { LEFT: -1, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }
+      : { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+  }
 
   /** Navigation speed multiplier (1 = default). */
   setSpeed(m) {

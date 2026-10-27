@@ -1,22 +1,22 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.41.4';
-import { fetchElevation, sample } from './dem.js?v=0.41.4';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.41.4';
-import { Dxf } from './dxf.js?v=0.41.4';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.41.4';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.41.4';
-import { Flow } from './flow.js?v=0.41.4';
-import { createSketch } from './sketch.js?v=0.41.4';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.41.4';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.41.4';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.41.4';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.41.4';
-import { loadLidar, applyLidar } from './lidar.js?v=0.41.4';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.41.4';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.41.4';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.42.0';
+import { fetchElevation, sample } from './dem.js?v=0.42.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.42.0';
+import { Dxf } from './dxf.js?v=0.42.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.42.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.42.0';
+import { Flow } from './flow.js?v=0.42.0';
+import { createSketch } from './sketch.js?v=0.42.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.42.0';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.42.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.42.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.42.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.42.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.42.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.42.0';
 
-const VERSION = '0.41.4';
+const VERSION = '0.42.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -1227,7 +1227,7 @@ document.querySelectorAll('.tab[data-view]').forEach(t => t.addEventListener('cl
   $('view3d').hidden = v !== '3d';
   if (v === 'preview') renderPreview();
   else if (v === 'map') map.invalidateSize();
-  if (v === '3d') v3Open(); else v3?.show(false);
+  if (v === '3d') v3Open(); else { v3?.show(false); sketch.attach3d(null); }
   // The Layers panel follows into the 3D view (same toggles: they drape on the ground and switch the massing).
   const lp = document.querySelector('.layers-panel');
   if (lp) {
@@ -2344,6 +2344,9 @@ const sketch = createSketch({
   unitsPerFt: site => zoneUnitsPerMeter(site.zone) * 0.3048,
   mode: () => dz.mode,
   onChange: () => { projTouch(); v3Dirty(); if (sunS?.on) sunLater(); },
+  // While dragging in 3D: just the sketch geometry (the full rebuild waits for the drag to pause).
+  onLive: () => { if (v3 && curView() === '3d' && state.result) v3.setSketch(sketch.tris(v3.ex || 1), sketch.parking3d()); },
+  ex3d: () => v3?.ex || 1,
 });
 sketch.wirePanel();
 
@@ -4366,6 +4369,7 @@ async function v3Open() {
   if (curView() !== '3d') return;
   v3.show(true);
   v3Build();
+  sketch.attach3d(v3);          // the sketch toolbar and tools carry on in 3D
   flowKick();
 }
 
