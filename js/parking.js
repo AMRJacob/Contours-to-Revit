@@ -114,59 +114,65 @@ export function layoutLot(poly, opts = {}) {
   };
   let total = 0;
   for (const run of rowRuns) total += run.n;
-  // Accessible spaces: on the run whose end is nearest accNear (or the longest run), at that end.
-  let req = adaRequired(total), placed = { acc: 0, van: 0 }, removed = 0;
-  let accRun = null, accFromEnd = false;
-  if (rowRuns.length) {
-    const near = opts.accNear ? toF(opts.accNear) : null;
-    let best = Infinity;
-    for (const run of rowRuns) {
-      const mid = (run.r.band[0] + run.r.band[1]) / 2, e0 = run.u0, e1 = run.u0 + run.n * pitch;
-      if (near) {
-        const d0 = Math.hypot(near[0] - e0, near[1] - mid), d1 = Math.hypot(near[0] - e1, near[1] - mid);
-        if (Math.min(d0, d1) < best) { best = Math.min(d0, d1); accRun = run; accFromEnd = d1 < d0; }
-      } else if (-run.n < best) { best = -run.n; accRun = run; accFromEnd = false; }
-    }
+  // Accessible spaces: pairs sharing an access aisle (a pair holding a van space gets the 8 ft van aisle), placed
+  // at the row ends nearest accNear (the nearest building), spilling to the next-nearest rows when one is full.
+  const near = opts.accNear ? toF(opts.accNear) : null;
+  const ends = [];
+  for (const run of rowRuns) {
+    const mid = (run.r.band[0] + run.r.band[1]) / 2, e0 = run.u0, e1 = run.u0 + run.n * pitch;
+    const d0 = near ? Math.hypot(near[0] - e0, near[1] - mid) : -run.n, d1 = near ? Math.hypot(near[0] - e1, near[1] - mid) : -run.n;
+    ends.push({ run, fromEnd: d1 < d0, d: Math.min(d0, d1) });
   }
-  // Width the accessible group needs: spaces in pairs sharing an aisle; a pair with a van gets the van aisle.
-  const groupLen = (acc, van) => {
-    let len = 0;
-    for (let i = 0; i < acc; i += 2) {
-      const inPair = Math.min(2, acc - i), hasVan = i / 2 < van;
-      len += inPair * S.accW * k + (hasVan ? S.vanAisle : S.accAisle) * k;
+  ends.sort((p, q) => p.d - q.d);
+  const pairLen = van => 2 * S.accW * k + (van ? S.vanAisle : S.accAisle) * k;
+  /** Place `acc` accessible spaces (`van` of them van): returns per-run groups and how many standard stalls each displaces. */
+  const plan = (acc, van) => {
+    const groups = new Map();
+    let left = acc, vans = van;
+    for (const e of ends) {
+      if (left <= 0) break;
+      const room = e.run.n * pitch;
+      let len = 0, inRun = 0, vanIn = 0;
+      while (left - inRun > 0) {
+        const n2 = Math.min(2, left - inRun), isVan = vans - vanIn > 0;
+        const add = n2 === 2 ? pairLen(isVan) : S.accW * k + (isVan ? S.vanAisle : S.accAisle) * k;
+        if (len + add > room) break;
+        len += add; inRun += n2; if (isVan) vanIn++;
+      }
+      if (!inRun) continue;
+      groups.set(e.run, { acc: inRun, van: vanIn, len, removed: Math.ceil(len / pitch - 1e-9), fromEnd: e.fromEnd });
+      left -= inRun; vans -= vanIn;
     }
-    return len;
+    let removed = 0, placedAcc = 0, placedVan = 0;
+    for (const g of groups.values()) { removed += g.removed; placedAcc += g.acc; placedVan += g.van; }
+    return { groups, removed, acc: placedAcc, van: placedVan };
   };
-  for (let iter = 0; iter < 3 && accRun; iter++) {
-    const need = Math.ceil(groupLen(req.acc, req.van) / pitch);
-    if (need > accRun.n) break;
-    removed = need;
-    const newTotal = total - removed + req.acc;
-    const r2 = adaRequired(newTotal);
-    if (r2.acc === req.acc) { placed = { ...req }; break; }
-    req = r2;
+  let req = adaRequired(total), P2 = plan(req.acc, req.van);
+  for (let iter = 0; iter < 4; iter++) {
+    const r2 = adaRequired(total - P2.removed + P2.acc);
+    if (r2.acc === req.acc && r2.van === req.van) break;
+    req = r2; P2 = plan(req.acc, req.van);
   }
-  if (accRun && !placed.acc && req.acc && Math.ceil(groupLen(req.acc, req.van) / pitch) <= accRun.n) { removed = Math.ceil(groupLen(req.acc, req.van) / pitch); placed = { ...req }; }
   for (const run of rowRuns) {
     let u = run.u0, n = run.n;
-    if (run === accRun && placed.acc) {
-      // The accessible group takes `removed` standard stalls' worth of row at the chosen end.
-      const gl = removed * pitch;
-      const g0 = accFromEnd ? run.u0 + (n - removed) * pitch : run.u0;
-      let x = g0 + (gl - groupLen(placed.acc, placed.van)) / 2;
-      for (let i = 0; i < placed.acc; i += 2) {
-        const hasVan = i / 2 < placed.van, inPair = Math.min(2, placed.acc - i), aw = (hasVan ? S.vanAisle : S.accAisle) * k, sw = S.accW * k;
-        stalls.push({ pts: stallAt(run.r, x, sw), acc: true, van: hasVan });
-        x += sw;
-        stalls.push({ pts: stallAt(run.r, x, aw), aisle: true });
-        x += aw;
-        if (inPair === 2) { stalls.push({ pts: stallAt(run.r, x, sw), acc: true, van: hasVan && false }); x += sw; }
+    const g = P2.groups.get(run);
+    if (g) {
+      const gl = g.removed * pitch;
+      const g0 = g.fromEnd ? run.u0 + (n - g.removed) * pitch : run.u0;
+      let x = g0 + (gl - g.len) / 2, vans = g.van;
+      for (let i = 0; i < g.acc; i += 2) {
+        const isVan = vans > 0, inPair = Math.min(2, g.acc - i), aw = (isVan ? S.vanAisle : S.accAisle) * k, sw = S.accW * k;
+        stalls.push({ pts: stallAt(run.r, x, sw), acc: true, van: isVan }); x += sw;
+        stalls.push({ pts: stallAt(run.r, x, aw), aisle: true }); x += aw;
+        if (inPair === 2) { stalls.push({ pts: stallAt(run.r, x, sw), acc: true, van: false }); x += sw; }
+        if (isVan) vans--;
       }
-      if (!accFromEnd) u += removed * pitch;
-      n -= removed;
+      if (!g.fromEnd) u += g.removed * pitch;
+      n -= g.removed;
     }
     for (let i = 0; i < n; i++) stalls.push({ pts: stallAt(run.r, u + i * pitch, pitch) });
   }
+  const placed = { acc: P2.acc, van: P2.van };
   const back = q => q.map(fromF);
   const out = stalls.map(st => ({ ...st, pts: back(st.pts) }));
   const std = out.filter(st => !st.acc && !st.aisle).length;

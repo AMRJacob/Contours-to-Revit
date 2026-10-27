@@ -5,8 +5,8 @@
 // Hotkeys: V select · M massing · P parking · Esc cancel / select · Del delete · Ctrl+Z / Ctrl+Y undo / redo ·
 // ↑ ↓ floors (massing) or slide rows (parking) · [ ] turn parking rows · Enter / double-click finish an outline ·
 // Alt+drag duplicate · Shift square corners.
-import { layoutLot, longestEdgeAngle, PARK_DEFAULTS } from './parking.js?v=0.41.0';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.41.0';
+import { layoutLot, longestEdgeAngle, PARK_DEFAULTS } from './parking.js?v=0.41.1';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.41.1';
 
 const TOOLS = [
   { id: 'select', key: 'V', label: 'Select', icon: '<path d="M5 3l14 8-6 1.5L10 19z"/>' },
