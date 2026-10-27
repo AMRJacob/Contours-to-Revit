@@ -1,21 +1,22 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.40.1';
-import { fetchElevation, sample } from './dem.js?v=0.40.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.40.1';
-import { Dxf } from './dxf.js?v=0.40.1';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.40.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.40.1';
-import { Flow } from './flow.js?v=0.40.1';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.40.1';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.40.1';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.40.1';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.40.1';
-import { loadLidar, applyLidar } from './lidar.js?v=0.40.1';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.40.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.40.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.41.0';
+import { fetchElevation, sample } from './dem.js?v=0.41.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.41.0';
+import { Dxf } from './dxf.js?v=0.41.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.41.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.41.0';
+import { Flow } from './flow.js?v=0.41.0';
+import { createSketch } from './sketch.js?v=0.41.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.41.0';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.41.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.41.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.41.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.41.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.41.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.41.0';
 
-const VERSION = '0.40.1';
+const VERSION = '0.41.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -663,6 +664,7 @@ async function generate() {
   };
   site.meta = buildMeta(site);
   state.result = site;
+  sketch.onSite(site, sketchPending); sketchPending = null;
 
   showResults(site);
   drawContoursOnMap(site);
@@ -2325,6 +2327,26 @@ function dzAffine(site) {
 }
 const toScreen = (M, x, y) => [M.a * x + M.c * y + M.e, M.b * x + M.d * y + M.f];
 
+// ----- Sketch tab (js/sketch.js): massing and parking brainstorming on the generated site -----
+var sketchPending = null;           // a project's sketch, applied when its site has been generated
+function siteGroundAt(site, x, y) {
+  const g = site.grid, fx = (x - g.x0) / g.s, fy = (y - g.y0) / g.s;
+  const i = Math.max(0, Math.min(g.nx - 2, Math.floor(fx))), j = Math.max(0, Math.min(g.ny - 2, Math.floor(fy)));
+  const tx = Math.max(0, Math.min(1, fx - i)), ty = Math.max(0, Math.min(1, fy - j)), q = j * g.nx + i, z = g.z;
+  const v = (z[q] * (1 - tx) + z[q + 1] * tx) * (1 - ty) + (z[q + g.nx] * (1 - tx) + z[q + g.nx + 1] * tx) * ty;
+  return Number.isFinite(v) ? v : (site.stats?.min ?? 0);
+}
+const sketch = createSketch({
+  map, $, escapeHtml, toScreen, triangulate, idb,
+  affine: site => dzAffine(site),
+  toNative: ll => projector(state.result.zone).fwd([ll.lng, ll.lat]),
+  zAt: (x, y) => (state.result ? siteGroundAt(state.result, x, y) : 0),
+  unitsPerFt: site => zoneUnitsPerMeter(site.zone) * 0.3048,
+  mode: () => dz.mode,
+  onChange: () => { projTouch(); v3Dirty(); if (sunS?.on) sunLater(); },
+});
+sketch.wirePanel();
+
 const FEAT_COLOR = { pad: '#f8fafc', wall: '#cbd5e1', slope: '#22d3ee' };
 const SEL_COLOR = '#e8913f';
 
@@ -3006,15 +3028,19 @@ function setMode(mode) {
   dz.mode = mode;
   projTouch();
   $('panel').classList.toggle('mode-design', mode === 'design');
+  $('panel').classList.toggle('mode-sketch', mode === 'sketch');
+  const sketchOn = mode === 'sketch';
+  map.getContainer().classList.toggle('sketch-mode', sketchOn);
   document.querySelectorAll('.mode').forEach(b => { const on = b.dataset.mode === mode; b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on)); });
   const design = mode === 'design';
   if (design && !$('preview').hidden) document.querySelector('.tab[data-view="map"]').click();
   document.querySelector('.tab[data-view="preview"]').hidden = design;
   dzCanvas.hidden = !design;
   if (state.mapGroups?.contours) { if (design) map.removeLayer(state.mapGroups.contours); else if (visibility.contours) state.mapGroups.contours.addTo(map); }
-  if (drawn) { if (design) map.removeLayer(drawn); else drawn.addTo(map); }
+  if (drawn) { if (design || sketchOn) map.removeLayer(drawn); else drawn.addTo(map); }
   map.getContainer().classList.toggle('design-mode', design);
-  if (design) map.doubleClickZoom.disable(); else { map.doubleClickZoom.enable(); dz.poly = null; }
+  if (design || sketchOn) map.doubleClickZoom.disable(); else { map.doubleClickZoom.enable(); dz.poly = null; }
+  sketch.setActive(sketchOn);
   if (design) dzEnsure().then(() => { dzApplyTool(); dzRefresh(true); v3Dirty(); });
   else { map.dragging.enable(); map.getContainer().classList.remove('sculpting'); $('dz-readout').hidden = true; dzPop.hidden = true; dzPopId = null; v3Dirty(); }
   flowKick();
@@ -3719,6 +3745,7 @@ function projSnapshot() {
     designKey: des ? designKey(site.grid, site.zone.code) : null,
     design: des && des.changed ? des.serialize() : null,
     summary: des ? { features: des.features.length } : null,
+    sketch: JSON.parse(JSON.stringify(sketch.model)),
   };
 }
 
@@ -3799,7 +3826,8 @@ async function projOpen(id) {
   try { localStorage.setItem('c2r-project', id); } catch { /* ignore */ }
   try {
     if (pick.active) stopPick();
-    if (dz.mode === 'design') setMode('existing');
+    if (dz.mode === 'design' || dz.mode === 'sketch') setMode('existing');
+    sketchPending = snap.sketch || null;
     // Design: stored under its key, and kept as "pending" so it can be fitted to a slightly different grid.
     PROJ.pending = snap.designKey && snap.design ? { key: snap.designKey, design: snap.design } : null;
     if (PROJ.pending) await idb.set(snap.designKey, snap.design);
@@ -3817,6 +3845,7 @@ async function projOpen(id) {
     if (snap.prefix) { folder.prefix = snap.prefix; $('folder-prefix').value = snap.prefix; try { localStorage.setItem('c2r-prefix', snap.prefix); } catch { /* ignore */ } updateFolderUi(); }
     drawn.clearLayers();
     state.result = null;
+    sketch.onSite(null);
     for (const g of Object.values(state.mapGroups || {})) map.removeLayer(g);
     state.mapGroups = {};
     $('step-results').hidden = true;
@@ -3836,6 +3865,7 @@ async function projOpen(id) {
       try { await generate(); } catch (err) { console.error(err); setStatus(`Opened “${meta.name}”, but generating failed: ${err.message || err}. Click Generate to try again.`, true); }
       finally { $('generate').disabled = !state.rect; }
       if (state.result && snap.mode === 'design') { setMode('design'); await dzEnsure(); }
+      if (state.result && snap.mode === 'sketch') setMode('sketch');
       if (state.result) setStatus(`Opened “${meta.name}”.`);
     } else setStatus(`Opened “${meta.name}” (no site boundary yet).`);
   } finally {
@@ -3997,7 +4027,7 @@ $('proj-new').addEventListener('click', async () => {
   $('proj-menu').hidden = true;
   if (!(await projAskSave('Starting a new project clears the map.'))) return;
   projDetach();
-  if (dz.mode === 'design') setMode('existing');
+  if (dz.mode === 'design' || dz.mode === 'sketch') setMode('existing');
   clearAll();
   PROJ.dirty = false; projRender();
   setStatus('Started a new blank project. Draw a site boundary to begin.');
@@ -4045,6 +4075,7 @@ function clearAll() {
   align.rot = 0; align.datum = null; saveAlign();
   $('rot-deg').value = '0'; $('datum').value = '';
   state.result = null;
+  sketch.onSite(null);
   $('step-results').hidden = true;
   if (curView() !== 'map') document.querySelector('.tab[data-view="map"]').click();
   document.querySelector('.tab[data-view="preview"]').disabled = true;
@@ -4368,6 +4399,7 @@ function v3Build(resetView = false) {
   v3.site = site;
   v3.setFeatures(prop ? v3Features(des, site) : []);
   v3.setBuildings(v3Buildings(site));
+  v3.setSketch(sketch.tris(v3.ex || 1), sketch.parking3d());
   sunApply3d();
 }
 
@@ -4608,7 +4640,7 @@ function sunWhen() {
   return new Date(y, m - 1, d, Math.floor(min / 60), min % 60);
 }
 function sunBuildings(site) {
-  const out = [];
+  const out = [...sketch.buildings()];
   for (const src of BUILDING_SOURCES) {
     if (!visibility[src.key]) continue;
     for (const b of (src.key === 'buildings' ? site.context?.buildings : site.context?.[src.key]) || []) out.push(b);
@@ -4617,7 +4649,7 @@ function sunBuildings(site) {
 }
 /** Height raster of ground + visible buildings for the current site (cached per site, layers and size). */
 function sunRaster(site, maxSide) {
-  const key = `${maxSide}|${BUILDING_SOURCES.map(b => (visibility[b.key] ? 1 : 0)).join('')}|${site.generated?.getTime()}`;
+  const key = `${maxSide}|${BUILDING_SOURCES.map(b => (visibility[b.key] ? 1 : 0)).join('')}|${site.generated?.getTime()}|${sketch.version}`;
   if (sunS.R && sunS.Rsite === site && sunS.Rkey === key) return sunS.R;
   sunS.R = heightRaster(site, sunBuildings(site), maxSide); sunS.Rsite = site; sunS.Rkey = key;
   return sunS.R;
@@ -4703,13 +4735,14 @@ function sunApply3d() {
     v3.setSun('hours', { colorAt, surf: { S: H.surf.S, idx: H.surf.idx, col } });
   } else v3.setSun('off');
 }
-const sunHoursKey = site => `${$('sun-date').value}|${BUILDING_SOURCES.map(b => (visibility[b.key] ? 1 : 0)).join('')}|${site.generated?.getTime()}|${v3?.ex || 1}`;
+const sunHoursKey = site => `${$('sun-date').value}|${BUILDING_SOURCES.map(b => (visibility[b.key] ? 1 : 0)).join('')}|${site.generated?.getTime()}|${v3?.ex || 1}|${sketch.version}`;
 async function sunComputeHours(site) {
   const key = sunHoursKey(site);
   if (sunS.hours && sunS.hours.site === site && sunS.hours.key === key) return true;
   const seq = ++sunS.busy;
   const R = sunRaster(site, SUN_RASTER);
-  const surf = surfaceSamples(v3Buildings(site, 1), v3Buildings(site), site.toOut);
+  const skT = sketch.tris(1).tris, skS = sketch.tris(v3?.ex || 1).tris;
+  const surf = surfaceSamples([...v3Buildings(site, 1), ...skT], [...v3Buildings(site), ...skS], site.toOut);
   const t0 = performance.now();
   $('sun-msg').textContent = 'Working out the sun hours…';
   const res = await sunHours(R, surf, sunWhen(), site, {

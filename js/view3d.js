@@ -198,6 +198,61 @@ export class SiteView3D {
     this.scene.add(this.bldg);
   }
 
+  /**
+   * Sketch: massing blocks ({ tris: flat [x,y,z…] native XY / output Z, colors: hex per triangle, lines: floor lines })
+   * and parking ({ lines: stall lines, acc: accessible stall triangles, stripe, accColor }).
+   */
+  setSketch(mass, park) {
+    if (this.sketch) { this.scene.remove(this.sketch); this.sketch.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); this.sketch = null; }
+    const g = new THREE.Group();
+    const P = (x, y, z) => [(x - this.cx) * this.k, (z - this.z0) * this.ex, -(y - this.cy) * this.k];
+    if (mass?.tris?.length) {
+      const n = mass.tris.length / 3, pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+      const c = new THREE.Color();
+      for (let v = 0; v < n; v++) {
+        const q = P(mass.tris[v * 3], mass.tris[v * 3 + 1], mass.tris[v * 3 + 2]);
+        pos.set(q, v * 3);
+        c.set(mass.colors[Math.floor(v / 3)]);                 // three converts sRGB hex to linear itself
+        col[v * 3] = c.r; col[v * 3 + 1] = c.g; col[v * 3 + 2] = c.b;
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      geo.computeVertexNormals();
+      const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, flatShading: true }));
+      m.name = 'sketchMass';
+      g.add(m);
+      if (mass.lines?.length) {
+        const lp = new Float32Array(mass.lines.length);
+        for (let i = 0; i < mass.lines.length; i += 3) lp.set(P(mass.lines[i], mass.lines[i + 1], mass.lines[i + 2]), i);
+        const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(lp, 3));
+        g.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x1f2937, transparent: true, opacity: 0.35 })));
+      }
+    }
+    if (park?.lines?.length) {
+      const lp = new Float32Array(park.lines.length);
+      for (let i = 0; i < park.lines.length; i += 3) lp.set(P(park.lines[i], park.lines[i + 1], park.lines[i + 2]), i);
+      const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(lp, 3));
+      g.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: park.stripe || '#ffffff' })));
+    }
+    if (park?.acc?.length) {
+      const ap = new Float32Array(park.acc.length);
+      for (let i = 0; i < park.acc.length; i += 3) ap.set(P(park.acc[i], park.acc[i + 1], park.acc[i + 2]), i);
+      const ag = new THREE.BufferGeometry(); ag.setAttribute('position', new THREE.BufferAttribute(ap, 3));
+      g.add(new THREE.Mesh(ag, new THREE.MeshBasicMaterial({ color: park.accColor || '#2563eb', side: THREE.DoubleSide })));
+    }
+    this.sketch = g;
+    this.scene.add(g);
+    if (this.sunMode) this._sketchSun();
+  }
+  _sketchSun() {
+    const m = this.sketch?.getObjectByName('sketchMass');
+    if (!m) return;
+    m.castShadow = m.receiveShadow = this.sunMode === 'time';
+    m.visible = this.sunMode !== 'hours';
+    m.material.needsUpdate = true;
+  }
+
   /** Water-flow particles: a Flow instance (native XY); updated every frame while shown. */
   setFlow(flow, sinks) {
     this.flow = flow;
@@ -284,6 +339,7 @@ export class SiteView3D {
     if (this.mat) this.mat.needsUpdate = true;
     if (this.bldg) this.bldg.material.needsUpdate = true;
     this.sunMode = mode;
+    this._sketchSun();
     if (mode === 'time') {
       if (!sun.target.parent) this.scene.add(sun.target);
       sun.target.position.set(0, mid, 0);
