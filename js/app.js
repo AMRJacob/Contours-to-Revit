@@ -1,32 +1,32 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.39.1';
-import { fetchElevation, sample } from './dem.js?v=0.39.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.39.1';
-import { Dxf } from './dxf.js?v=0.39.1';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.39.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.39.1';
-import { Flow } from './flow.js?v=0.39.1';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, sunHours, hoursColor, compass } from './sun.js?v=0.39.1';
-import { windRose, roseSummary, sectorName, WindField, SPEED_BINS, WIND_CREDIT } from './wind.js?v=0.39.1';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.39.1';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.39.1';
-import { loadLidar, applyLidar } from './lidar.js?v=0.39.1';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.39.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.39.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.40.0';
+import { fetchElevation, sample } from './dem.js?v=0.40.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.40.0';
+import { Dxf } from './dxf.js?v=0.40.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.40.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.40.0';
+import { Flow } from './flow.js?v=0.40.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.40.0';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.40.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.40.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.40.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.40.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.40.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.40.0';
 
-const VERSION = '0.39.1';
+const VERSION = '0.40.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
 const MAX_POINTS_HARD = 400000;
 const ACRES_WARN = 640;
-const ACRES_HARD = 3000;
+const ACRES_HARD = 6400;   // 10 square miles
 const SQFT_PER_ACRE = 43560;
 
 const OPTIONS = {
-  ft: { spacing: [1, 3, 5, 10], spacingDefault: 5, interval: [1, 2, 5], intervalDefault: 2, label: 'ft', tick: '′' },
-  m: { spacing: [0.5, 1, 1.5, 3], spacingDefault: 1.5, interval: [0.25, 0.5, 1, 2], intervalDefault: 0.5, label: 'm', tick: ' m' },
+  ft: { spacing: [1, 3, 5, 10, 25, 50, 100], spacingDefault: 5, interval: [1, 2, 5], intervalDefault: 2, label: 'ft', tick: '′' },
+  m: { spacing: [0.5, 1, 1.5, 3, 5, 10, 25], spacingDefault: 1.5, interval: [0.25, 0.5, 1, 2], intervalDefault: 0.5, label: 'm', tick: ' m' },
 };
 
 const $ = id => document.getElementById(id);
@@ -580,7 +580,18 @@ async function generate() {
   let lidarInfo = null;
   if ($('bldg-lidar').checked && context) {
     try {
-      const lid = await loadLidar(bbox, p.fwd, msg => setStatus(msg));
+      // Only the lidar near buildings (12 m around each footprint, for the ground beside it) is downloaded.
+      const lidList = ['bldgBest', 'buildings', 'bldgMs', 'bldgOsm'].filter(k => k === 'bldgBest' || visibility[k])
+        .flatMap(k => (k === 'buildings' ? context.buildings : context[k]) || []);
+      const pad = 12 * nativePerM;
+      const focus = lidList.filter(b => b.ring?.length).map(b => {
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (const [x, y] of b.ring) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+        const a = p.inv([x0 - pad, y0 - pad]), c = p.inv([x1 + pad, y1 + pad]);
+        return [Math.min(a[0], c[0]), Math.min(a[1], c[1]), Math.max(a[0], c[0]), Math.max(a[1], c[1])];
+      });
+      if (!focus.length) throw new Error('no buildings on this site');
+      const lid = await loadLidar(bbox, p.fwd, msg => setStatus(msg), focus);
       setStatus('Fitting roofs to the lidar…');
       await tick();
       lidarInfo = { cellFt: Number($('bldg-lidar-res').value) || 1, name: lid.name, year: lid.year, n: lid.n, mb: lid.mb, hasBuildingClass: lid.hasBuildingClass, counts: {} };
@@ -4582,6 +4593,8 @@ $('flow-speed').addEventListener('input', e => {
 // ---------- Sun (view only) ----------
 // Shadows at a chosen moment (3D: real cast shadows; map: shade drawn over the site) or hours of direct sun over the
 // chosen day (3D: ground and buildings coloured; map: heat over the site). Ground and building masses only.
+// Height raster for shadows: up to this many cells per side (~3 ft cells up to ~1 mile across).
+const SUN_RASTER = 1800;
 var sunS = { on: false, mode: 'time', R: null, Rkey: '', hours: null, hKey: '', busy: 0, play: 0, msg: '' };
 map.createPane('sunImg').style.zIndex = 255;
 const sunCanvas = L.DomUtil.create('canvas', 'sun-canvas', map.getPane('sunImg'));
@@ -4628,12 +4641,12 @@ function sunReadout() {
   $('sun-read').textContent = sunS.mode === 'hours' ? rs
     : p.alt > 0 ? `${Math.round(p.alt)}° up, from the ${compass(p.az)} (${Math.round(p.az)}°) · ${rs}` : `below the horizon · ${rs}`;
 }
-/** Image of the raster for the map: shade (time) or sun-hour heat (hours). */
-function sunImage(R, vals, mode, max) {
-  const c = document.createElement('canvas'); c.width = R.nx; c.height = R.ny;
-  const g = c.getContext('2d'), img = g.createImageData(R.nx, R.ny), d = img.data;
-  for (let j = 0; j < R.ny; j++) for (let i = 0; i < R.nx; i++) {
-    const q = j * R.nx + i, o = ((R.ny - 1 - j) * R.nx + i) * 4;
+/** Image for the map: shade (time) or sun-hour heat (hours), one pixel per evaluated cell (grid nx × ny). */
+function sunImage(gr, vals, mode, max) {
+  const c = document.createElement('canvas'); c.width = gr.nx; c.height = gr.ny;
+  const g = c.getContext('2d'), img = g.createImageData(gr.nx, gr.ny), d = img.data;
+  for (let j = 0; j < gr.ny; j++) for (let i = 0; i < gr.nx; i++) {
+    const q = j * gr.nx + i, o = ((gr.ny - 1 - j) * gr.nx + i) * 4;
     if (mode === 'time') { if (!vals[q]) { d[o] = 12; d[o + 1] = 18; d[o + 2] = 38; d[o + 3] = 125; } }
     else { const [r, gg, b] = hoursColor(vals[q] / (max || 1)); d[o] = r * 255; d[o + 1] = gg * 255; d[o + 2] = b * 255; d[o + 3] = 170; }
   }
@@ -4652,10 +4665,10 @@ function sunMapDraw() {
   ctx.clearRect(0, 0, sunCanvas.width, sunCanvas.height);
   const im = sunS.img;
   if (!sunS.on || !site || !im || im.site !== site || curView() !== 'map') return;
-  const M = dzAffine(site), R = im.R, s2 = R.s;
+  const M = dzAffine(site), R = im.R, s2 = R.s * (im.stride || 1), rows = im.canvas.height;
   ctx.save();
   if (site.mask) { ctx.beginPath(); site.mask.forEach(([x, y], i) => { const [sx, sy] = toScreen(M, x, y); ctx[i ? 'lineTo' : 'moveTo'](sx * dpr, sy * dpr); }); ctx.closePath(); ctx.clip(); }
-  const x0 = R.x0 - s2 / 2, y1 = R.y0 + (R.ny - 1) * s2 + s2 / 2;
+  const x0 = R.x0 - s2 / 2, y1 = R.y0 + (rows - 1) * s2 + s2 / 2;
   ctx.setTransform(dpr * M.a * s2, dpr * M.b * s2, -dpr * M.c * s2, -dpr * M.d * s2, dpr * (M.a * x0 + M.c * y1 + M.e), dpr * (M.b * x0 + M.d * y1 + M.f));
   ctx.imageSmoothingEnabled = im.mode === 'hours';
   ctx.drawImage(im.canvas, 0, 0);
@@ -4680,32 +4693,32 @@ function sunApply3d() {
     v3.setSun('time', { dir: sunDir3d(site, p), alt: p.alt });
     if (was === 'hours') setTimeout(() => v3Build(), 0);            // put the aerial colours back on the ground and buildings
   } else if (sunS.hours && sunS.hours.site === site && sunS.hours.key === sunHoursKey(site)) {
-    const H = sunS.hours, R = H.R, max = H.res.hoursMax || 1;
+    const H = sunS.hours, R = H.R, res = H.res, st = res.stride, max = res.hoursMax || 1;
     const colorAt = (x, y) => {
-      const i = Math.round((x - R.x0) / R.s), j = Math.round((y - R.y0) / R.s);
-      return hoursColor(i < 0 || j < 0 || i >= R.nx || j >= R.ny ? 0 : H.res.cells[j * R.nx + i] / max);
+      const i = Math.round((x - R.x0) / (R.s * st)), j = Math.round((y - R.y0) / (R.s * st));
+      return hoursColor(i < 0 || j < 0 || i >= res.nx || j >= res.ny ? 0 : res.cells[j * res.nx + i] / max);
     };
-    const tc = new Float32Array(H.res.tris.length * 3);
-    H.res.tris.forEach((h, t) => { const c = hoursColor(h / max); tc[t * 3] = c[0]; tc[t * 3 + 1] = c[1]; tc[t * 3 + 2] = c[2]; });
-    v3.setSun('hours', { colorAt, triColors: tc });
+    const col = new Float32Array(res.pts.length * 3);
+    res.pts.forEach((h, v) => { const c = hoursColor(h / max); col[v * 3] = c[0]; col[v * 3 + 1] = c[1]; col[v * 3 + 2] = c[2]; });
+    v3.setSun('hours', { colorAt, surf: { S: H.surf.S, idx: H.surf.idx, col } });
   } else v3.setSun('off');
 }
-const sunHoursKey = site => `${$('sun-date').value}|${BUILDING_SOURCES.map(b => (visibility[b.key] ? 1 : 0)).join('')}|${site.generated?.getTime()}`;
+const sunHoursKey = site => `${$('sun-date').value}|${BUILDING_SOURCES.map(b => (visibility[b.key] ? 1 : 0)).join('')}|${site.generated?.getTime()}|${v3?.ex || 1}`;
 async function sunComputeHours(site) {
   const key = sunHoursKey(site);
   if (sunS.hours && sunS.hours.site === site && sunS.hours.key === key) return true;
   const seq = ++sunS.busy;
-  const R = sunRaster(site, 220);
-  const tris = v3Buildings(site, 1);
+  const R = sunRaster(site, SUN_RASTER);
+  const surf = surfaceSamples(v3Buildings(site, 1), v3Buildings(site), site.toOut);
   const t0 = performance.now();
   $('sun-msg').textContent = 'Working out the sun hours…';
-  const res = await sunHours(R, tris, sunWhen(), site, {
-    stepMin: 20, isStale: () => seq !== sunS.busy || !sunS.on || sunS.mode !== 'hours' || state.result !== site,
+  const res = await sunHours(R, surf, sunWhen(), site, {
+    stepMin: 20, stride: strideFor(R, 90000), isStale: () => seq !== sunS.busy || !sunS.on || sunS.mode !== 'hours' || state.result !== site,
     onProgress: f => { $('sun-msg').textContent = `Working out the sun hours… ${Math.round(f * 100)} %`; },
   });
   if (!res) return false;
-  sunS.hours = { site, key, R, res };
-  $('sun-msg').textContent = `${res.steps} sun positions, every 20 min from sunrise to sunset · ${((performance.now() - t0) / 1000).toFixed(1)} s.`;
+  sunS.hours = { site, key, R, res, surf };
+  $('sun-msg').textContent = `${res.steps} sun positions, every 20 min from sunrise to sunset · ${surf.n.toLocaleString()} points on roofs and walls, about ${surf.d.toFixed(1)} ${site.zone.unit === 'm' ? 'm' : 'ft'} apart · ${((performance.now() - t0) / 1000).toFixed(1)} s.`;
   return true;
 }
 async function sunKick() {
@@ -4719,9 +4732,9 @@ async function sunKick() {
     $('sun-msg').textContent = '';
     if (view === 'map') {
       const p = sunPosition(sunWhen(), site.center.lat, site.center.lng);
-      const R = sunRaster(site, 300);
-      const lit = shadeRaster(R, sunVector(p, site.convergence || 0, site.toOut));
-      sunS.img = { site, R, mode: 'time', canvas: sunImage(R, lit, 'time') };
+      const R = sunRaster(site, SUN_RASTER);
+      const gr = shadeRaster(R, sunVector(p, site.convergence || 0, site.toOut), strideFor(R, 160000));
+      sunS.img = { site, R, mode: 'time', stride: gr.stride, canvas: sunImage(gr, gr.lit, 'time') };
       sunMapDraw();
     } else sunMapDraw();
     sunApply3d();
@@ -4731,7 +4744,7 @@ async function sunKick() {
     if (!ok || state.result !== site || !sunS.on || sunS.mode !== 'hours' || (seq !== sunS.busy && sunS.hours?.key !== sunHoursKey(site))) return;
     const H = sunS.hours, max = H.res.hoursMax || 1;
     $('sun-legend-max').textContent = `${max.toFixed(1)} h (sunrise to sunset)`;
-    sunS.img = { site, R: H.R, mode: 'hours', canvas: sunImage(H.R, H.res.cells, 'hours', max) };
+    sunS.img = { site, R: H.R, mode: 'hours', stride: H.res.stride, canvas: sunImage(H.res, H.res.cells, 'hours', max) };
     sunMapDraw();
     sunApply3d();
   }
@@ -4768,7 +4781,6 @@ var windCanvas = document.createElement('canvas');
 windCanvas.className = 'wind-canvas';
 windCanvas.hidden = true;
 map.getContainer().appendChild(windCanvas);
-const WIND_COLORS = ['#7dd3fc', '#34d399', '#facc15', '#fb923c', '#f43f5e'];
 function windSet(on) {
   windS.on = on;
   $('wind-toggle').setAttribute('aria-pressed', String(on));
@@ -4776,7 +4788,40 @@ function windSet(on) {
   windKick();
 }
 $('wind-toggle').addEventListener('click', () => { if (state.result) windSet(!windS.on); });
-$('wind-season').addEventListener('change', () => { windS.field = null; windPanel(); windKick(); });
+const windCtl = () => { $('wind-hour').disabled = $('wind-allday').checked; $('wind-thr-row').hidden = windShow() !== 'thr'; windRefresh(); };
+const windShow = () => document.querySelector('input[name="wind-show"]:checked')?.value || 'prev';
+const windHour = () => ($('wind-allday').checked ? null : Number($('wind-hour').value));
+const fmtHour = h => `${(h % 12) || 12} ${h < 12 ? 'am' : 'pm'}`;
+$('wind-season').addEventListener('change', windCtl);
+$('wind-allday').addEventListener('change', windCtl);
+$('wind-hour').addEventListener('input', windCtl);
+$('wind-thr').addEventListener('input', windCtl);
+document.querySelectorAll('input[name="wind-show"]').forEach(r => r.addEventListener('change', windCtl));
+/** Colour for a direction's share of hours between the cutoff and the most common direction (light blue → orange). */
+function windRamp(t) {
+  const st = [[0, [0.576, 0.773, 0.992]], [0.5, [0.992, 0.878, 0.278]], [1, [0.976, 0.451, 0.086]]];
+  t = Math.max(0, Math.min(1, t));
+  const i = t <= 0.5 ? 1 : 2, [a, ca] = st[i - 1], [b, cb] = st[i], u = (t - a) / (b - a);
+  return [ca[0] + (cb[0] - ca[0]) * u, ca[1] + (cb[1] - ca[1]) * u, ca[2] + (cb[2] - ca[2]) * u];
+}
+const rgbCss = c => `rgb(${Math.round(c[0] * 255)},${Math.round(c[1] * 255)},${Math.round(c[2] * 255)})`;
+/** What to draw for the current season / hour / mode: the summary and the flows for the streaks. */
+function windState() {
+  const r = windS.rose;
+  if (!r) return null;
+  const s = r.seasons[$('wind-season').value] || r.seasons.all, sum = roseSummary(s, windHour());
+  const mx = Math.max(...sum.frac), thr = Number($('wind-thr').value) / 100;
+  const cols = sum.frac.map(f => (windShow() === 'prev' ? null : f >= thr ? windRamp(mx > thr ? (f - thr) / (mx - thr) : 1) : null));
+  const flows = windShow() === 'prev'
+    ? (sum.frac[sum.prevailing] > 0 ? [{ from: sum.prevailing * 22.5, w: 1, v: sum.spd[sum.prevailing], color: [0.95, 0.97, 1] }] : [])
+    : sum.frac.map((f, i) => (cols[i] ? { from: i * 22.5, w: f, v: sum.spd[i], color: cols[i] } : null)).filter(Boolean);
+  return { sum, mx, thr, cols, flows };
+}
+function windRefresh() {
+  const ws = windState();
+  if (windS.field && ws) windS.field.setFlows(ws.flows);
+  windPanel();
+}
 const windMph = site => (site?.outUnit || 'ft') !== 'm';
 const spd = (v, site) => windMph(site) ? `${Math.round(v * 2.23694)} mph` : `${v.toFixed(1)} m/s`;
 function windPanel() {
@@ -4786,35 +4831,44 @@ function windPanel() {
   const g = cv.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, 200, 200);
+  $('wind-hour-v').textContent = windHour() == null ? 'all day' : fmtHour(windHour());
+  $('wind-thr-v').textContent = `${$('wind-thr').value} %`;
   if (windS.loading || windS.err || !r) {
     $('wind-read').textContent = windS.err ? `Wind data not available: ${windS.err}` : windS.msg || 'Loading…';
     $('wind-src').textContent = ''; $('wind-key').innerHTML = '';
     return;
   }
-  const s = r.seasons[$('wind-season').value] || r.seasons.all, sum = roseSummary(s);
-  const cx = 100, cy = 102, R0 = 82, mx = Math.max(...sum.frac, 0.01);
-  const ring = mx > 0.16 ? 0.05 : mx > 0.08 ? 0.04 : 0.02;
+  const { sum, mx, thr, cols } = windState();
+  const cx = 100, cy = 102, R0 = 82, top = Math.max(mx, 0.01);
+  const ring = top > 0.16 ? 0.05 : top > 0.08 ? 0.04 : 0.02;
   g.strokeStyle = 'rgba(255,255,255,0.14)'; g.fillStyle = '#9aa3a9'; g.font = '9px sans-serif'; g.lineWidth = 1;
-  for (let f = ring; f <= mx + 1e-9; f += ring) { g.beginPath(); g.arc(cx, cy, R0 * f / mx, 0, Math.PI * 2); g.stroke(); g.fillText(`${Math.round(f * 100)}%`, cx + 2, cy - R0 * f / mx + 9); }
+  for (let f = ring; f <= top + 1e-9; f += ring) { g.beginPath(); g.arc(cx, cy, R0 * f / top, 0, Math.PI * 2); g.stroke(); g.fillText(`${Math.round(f * 100)}%`, cx + 2, cy - R0 * f / top + 9); }
+  if (windShow() === 'thr' && thr < top) { g.setLineDash([3, 3]); g.strokeStyle = 'rgba(253,224,71,0.6)'; g.beginPath(); g.arc(cx, cy, R0 * thr / top, 0, Math.PI * 2); g.stroke(); g.setLineDash([]); }
   g.fillStyle = '#e7e4dd'; g.font = 'bold 11px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
   [['N', 0], ['E', 90], ['S', 180], ['W', 270]].forEach(([t, a]) => { const q = a * Math.PI / 180; g.fillText(t, cx + Math.sin(q) * (R0 + 10), cy - Math.cos(q) * (R0 + 10)); });
   const w = Math.PI * 2 / 16 * 0.42;
-  s.sec.forEach((bins, i) => {
-    const a = i * Math.PI / 8;
-    let acc = 0;
-    for (let b = bins.length - 1; b >= 0; b--) acc += bins[b];                    // outermost = total
-    let r1 = acc / (s.n || 1) / mx * R0;
-    for (let b = bins.length - 1; b >= 0; b--) {                                   // draw from the outside in, fastest outside
-      g.beginPath(); g.moveTo(cx, cy); g.arc(cx, cy, r1, a - Math.PI / 2 - w, a - Math.PI / 2 + w); g.closePath();
-      g.fillStyle = WIND_COLORS[Math.min(b, WIND_COLORS.length - 1)]; g.fill();
-      r1 -= bins[b] / (s.n || 1) / mx * R0;
-    }
+  sum.frac.forEach((f, i) => {
+    if (!f) return;
+    const a = i * Math.PI / 8 - Math.PI / 2;
+    g.beginPath(); g.moveTo(cx, cy); g.arc(cx, cy, f / top * R0, a - w, a + w); g.closePath();
+    g.fillStyle = windShow() === 'prev' ? (i === sum.prevailing ? '#f1f5f9' : 'rgba(148,163,184,0.35)') : cols[i] ? rgbCss(cols[i]) : 'rgba(148,163,184,0.22)';
+    g.fill();
   });
-  const edges = SPEED_BINS.map(v => (windMph(site) ? Math.round(v * 2.23694) : v));
-  $('wind-key').innerHTML = edges.map((e, i) => `<span><b style="background:${WIND_COLORS[i]}"></b>${i < edges.length - 1 ? `${e}–${edges[i + 1]}` : `${e}+`}</span>`).join('') + `<span>${windMph(site) ? 'mph' : 'm/s'}</span>`;
-  $('wind-read').textContent = `Prevailing from the ${sectorName(sum.prevailing)} (${Math.round(sum.frac[sum.prevailing] * 100)} % of hours) · calm ${Math.round(sum.calm * 100)} % · average ${spd(sum.mean, site)}. Petals point where the wind comes from; N is true north.`;
+  const when = `${$('wind-season').selectedOptions[0].textContent.replace(/ \(.*\)/, '').toLowerCase()}${windHour() == null ? '' : `, around ${fmtHour(windHour())}`}`;
+  if (windShow() === 'thr') {
+    const shown = sum.frac.filter(f => f >= thr).length;
+    $('wind-key').innerHTML = `<span>${$('wind-thr').value} %</span><i></i><span>${Math.round(mx * 100)} %</span>`;
+    $('wind-read').textContent = shown
+      ? `${shown} direction${shown === 1 ? '' : 's'} with at least ${$('wind-thr').value} % of hours (${when}) — colour shows how often. Calm ${Math.round(sum.calm * 100)} %.`
+      : `No direction reaches ${$('wind-thr').value} % of hours (${when}). Lower the cutoff.`;
+  } else {
+    $('wind-key').innerHTML = '';
+    $('wind-read').textContent = sum.frac[sum.prevailing] > 0
+      ? `Prevailing from the ${sectorName(sum.prevailing)} — ${Math.round(sum.frac[sum.prevailing] * 100)} % of hours (${when}), averaging ${spd(sum.spd[sum.prevailing], site)} from there. Calm ${Math.round(sum.calm * 100)} %.`
+      : `Calm (${when}).`;
+  }
   const st = r.station;
-  $('wind-src').textContent = `${st.name}${st.icao ? ` (${st.icao})` : ''}, ${st.km.toFixed(0)} km away · ${r.years[0]}–${r.years[1]}, ${r.n.toLocaleString()} hourly reports · ${WIND_CREDIT}. Station winds, ~10 m above open ground — buildings and trees change them locally.`;
+  $('wind-src').textContent = `Petals point where the wind comes from; N is true north. ${st.name}${st.icao ? ` (${st.icao})` : ''}, ${st.km.toFixed(0)} km away · ${r.years[0]}–${r.years[1]}, ${r.n.toLocaleString()} hourly reports · ${WIND_CREDIT}. Hours in this computer's time zone. Station winds, ~10 m above open ground — buildings and trees change them locally.`;
 }
 async function windLoad(site) {
   windS.loading = true; windS.err = ''; windS.msg = 'Finding the nearest weather station…'; windPanel();
@@ -4832,7 +4886,7 @@ function windKick() {
   const on = windS.on && !!site;
   if (on && windS.site !== site && !windS.loading) { windS.rose = null; windS.field = null; windLoad(site); }
   const ready = on && windS.rose && windS.site === site;
-  if (ready && !windS.field) windS.field = new WindField(site.box, windS.rose.seasons[$('wind-season').value] || windS.rose.seasons.all, site.convergence || 0);
+  if (ready && !windS.field) { windS.field = new WindField(site.box, site.convergence || 0); windS.field.setFlows(windState().flows); }
   const map2d = ready && view === 'map';
   windCanvas.hidden = !map2d;
   if (!map2d) { cancelAnimationFrame(windS.raf); windS.raf = 0; windCanvas.getContext('2d').clearRect(0, 0, windCanvas.width, windCanvas.height); }
@@ -4863,15 +4917,17 @@ function windFrame() {
   ctx.fillRect(0, 0, W, H);
   ctx.globalCompositeOperation = 'source-over';
   f.step();
-  ctx.strokeStyle = 'rgba(241,245,249,0.85)';
-  ctx.lineWidth = 1.3 * dpr; ctx.lineCap = 'round';
-  ctx.beginPath();
-  for (let p = 0; p < f.n; p++) {
-    if (f.age[p] < 2 || !f.inBox(p)) continue;
-    const [ax, ay] = toScreen(M, f.ox[p], f.oy[p]), [bx, by] = toScreen(M, f.px[p], f.py[p]);
-    ctx.moveTo(ax * dpr, ay * dpr); ctx.lineTo(bx * dpr, by * dpr);
-  }
-  ctx.stroke();
+  ctx.lineWidth = 1.5 * dpr; ctx.lineCap = 'round';
+  f.flows.forEach((fl, fi) => {
+    ctx.strokeStyle = rgbCss(fl.color);
+    ctx.beginPath();
+    for (let p = 0; p < f.n; p++) {
+      if (f.fi[p] !== fi || f.age[p] < 2 || !f.inBox(p)) continue;
+      const [ax, ay] = toScreen(M, f.ox[p], f.oy[p]), [bx, by] = toScreen(M, f.px[p], f.py[p]);
+      ctx.moveTo(ax * dpr, ay * dpr); ctx.lineTo(bx * dpr, by * dpr);
+    }
+    ctx.stroke();
+  });
   windS.raf = requestAnimationFrame(windFrame);
 }
 map.on('move zoom resize viewreset', () => { if (windS.on) { windS.M = null; windCanvas.getContext('2d').clearRect(0, 0, windCanvas.width, windCanvas.height); } });

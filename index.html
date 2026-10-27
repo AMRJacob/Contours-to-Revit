@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.39.1">
+  <link rel="stylesheet" href="css/app.css?v=0.40.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -545,6 +545,20 @@
           <div class="env-h"><button type="button" class="env-title" title="Show / hide the rose">Prevailing wind</button>
             <select id="wind-season" aria-label="Season"><option value="all">All year</option><option value="winter">Winter (Dec–Feb)</option><option value="spring">Spring (Mar–May)</option><option value="summer">Summer (Jun–Aug)</option><option value="fall">Fall (Sep–Nov)</option></select>
           </div>
+          <div class="env-row">
+            <label class="env-inline"><input type="checkbox" id="wind-allday" checked> All day</label>
+            <input type="range" id="wind-hour" min="0" max="23" step="1" value="15" aria-label="Hour of day" disabled>
+            <output id="wind-hour-v">all day</output>
+          </div>
+          <div class="env-row seg seg-dark" role="radiogroup" aria-label="Show">
+            <label><input type="radio" name="wind-show" value="prev" checked><span>Prevailing only</span></label>
+            <label><input type="radio" name="wind-show" value="thr"><span>Directions above</span></label>
+          </div>
+          <div class="env-row" id="wind-thr-row" hidden>
+            <span class="env-lbl">Cutoff</span>
+            <input type="range" id="wind-thr" min="2" max="20" step="1" value="8" aria-label="Minimum share of hours">
+            <output id="wind-thr-v">8 %</output>
+          </div>
           <canvas id="wind-rose" width="200" height="200" aria-label="Wind rose"></canvas>
           <div class="env-legend wind-key" id="wind-key"></div>
           <p class="env-note" id="wind-read"></p>
@@ -582,6 +596,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.39.1"></script>
+  <script type="module" src="js/app.js?v=0.40.0"></script>
 </body>
 </html>

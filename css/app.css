@@ -546,3 +546,8 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .env-title::before { content: '▾ '; color: #9aa3a9; }
 .env-panel.collapsed .env-title::before { content: '▸ '; }
 .env-panel.collapsed > :not(.env-h) { display: none !important; }
+.env-inline { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.env-inline input { accent-color: #e5e7eb; }
+.env-lbl { color: #c8cdd1; }
+#wind-hour, #wind-thr { accent-color: #e5e7eb; }
+.wind-key i { flex: 1; min-width: 80px; height: 8px; border-radius: 3px; background: linear-gradient(90deg, #93c5fd, #fde047, #f97316); }

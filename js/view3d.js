@@ -264,7 +264,8 @@ export class SiteView3D {
    * Sun. mode 'off' (default lighting), 'time' (light from the sun's position with cast shadows) or 'hours'
    * (terrain and buildings coloured by hours of direct sun). opts:
    *   time:  { dir: [x, y, z] toward the sun in scene axes, alt (degrees) }
-   *   hours: { colorAt(x, y) -> [r, g, b] for native XY on the ground, triColors: Float32Array (r, g, b per building triangle) }
+   *   hours: { colorAt(x, y) -> [r, g, b] for native XY on the ground,
+   *            surf: { S (positions: native XY, output Z, as the buildings are drawn), idx, col (r, g, b per point) } }
    */
   setSun(mode, opts = {}) {
     const R = this.renderer, sun = this.sun, hemi = this.scene.children.find(o => o.isHemisphereLight);
@@ -277,7 +278,8 @@ export class SiteView3D {
     if (sun.target.parent) { sun.target.position.set(0, 0, 0); }
     if (hemi) hemi.intensity = 0.85;
     if (this.mesh) { this.mesh.castShadow = this.mesh.receiveShadow = false; }
-    if (this.bldg) { this.bldg.castShadow = this.bldg.receiveShadow = false; }
+    if (this.bldg) { this.bldg.castShadow = this.bldg.receiveShadow = false; this.bldg.visible = true; }
+    if (this.sunSurf) { this.scene.remove(this.sunSurf); this.sunSurf.geometry.dispose(); this.sunSurf.material.dispose(); this.sunSurf = null; }
     if (this.mat && this._sunMap !== undefined) { this.mat.map = this._sunMap; this.mat.needsUpdate = true; this._sunMap = undefined; this._sunColorsDirty = true; }
     if (this.mat) this.mat.needsUpdate = true;
     if (this.bldg) this.bldg.material.needsUpdate = true;
@@ -316,11 +318,20 @@ export class SiteView3D {
         geo.attributes.color.needsUpdate = true;
         this._sunMap = this.mat.map; this.mat.map = null; this.mat.needsUpdate = true;
       }
-      if (this.bldg && opts.triColors) {
-        const n = this.bldg.geometry.attributes.position.count, c = new Float32Array(n * 3);
-        for (let v = 0; v < n; v++) { const t = Math.floor(v / 3); c[v * 3] = opts.triColors[t * 3]; c[v * 3 + 1] = opts.triColors[t * 3 + 1]; c[v * 3 + 2] = opts.triColors[t * 3 + 2]; }
-        this.bldg.geometry.setAttribute('color', new THREE.BufferAttribute(c, 3));
-        this.bldg.material.vertexColors = true; this.bldg.material.color.set(0xffffff); this.bldg.material.needsUpdate = true;
+      if (opts.surf?.idx?.length) {
+        // Roofs and walls split into small triangles, each corner coloured by its own sun hours.
+        const S = opts.surf.S, n = S.length / 3, pos = new Float32Array(n * 3);
+        for (let v = 0; v < n; v++) {
+          pos[v * 3] = (S[v * 3] - this.cx) * this.k; pos[v * 3 + 1] = (S[v * 3 + 2] - this.z0) * this.ex; pos[v * 3 + 2] = -(S[v * 3 + 1] - this.cy) * this.k;
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(opts.surf.col, 3));
+        geo.setIndex(new THREE.BufferAttribute(opts.surf.idx, 1));
+        geo.computeVertexNormals();
+        this.sunSurf = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+        this.scene.add(this.sunSurf);
+        if (this.bldg) this.bldg.visible = false;
       }
     }
   }
@@ -332,10 +343,7 @@ export class SiteView3D {
     if (!field) return;
     const T = 12, n = field.n;
     const tp = new Float32Array(n * (T - 1) * 6), tc = new Float32Array(n * (T - 1) * 6);
-    for (let p = 0; p < n; p++) for (let t = 0; t < T - 1; t++) for (let e = 0; e < 2; e++) {
-      const f = 1 - (t + e) / (T - 1), o = ((p * (T - 1) + t) * 2 + e) * 3;
-      tc[o] = 0.11 + 0.85 * f; tc[o + 1] = 0.13 + 0.83 * f; tc[o + 2] = 0.15 + 0.8 * f;
-    }
+    const BG = [0.11, 0.13, 0.15];                                     // tails fade toward the background
     const tgeo = new THREE.BufferGeometry();
     tgeo.setAttribute('position', new THREE.BufferAttribute(tp, 3));
     tgeo.setAttribute('color', new THREE.BufferAttribute(tc, 3));
@@ -353,14 +361,20 @@ export class SiteView3D {
         const h = p * T * 3;
         if (!filled || field.age[p] <= 1 || y < -1e4) { for (let t = 0; t < T; t++) { hist[h + t * 3] = x; hist[h + t * 3 + 1] = y; hist[h + t * 3 + 2] = z; } }
         else { hist.copyWithin(h + 3, h, h + (T - 1) * 3); hist[h] = x; hist[h + 1] = y; hist[h + 2] = z; }
+        const col = field.color(p);
         for (let t = 0; t < T - 1; t++) {
           const o = (p * (T - 1) + t) * 6;
           tp[o] = hist[h + t * 3]; tp[o + 1] = hist[h + t * 3 + 1]; tp[o + 2] = hist[h + t * 3 + 2];
           tp[o + 3] = hist[h + t * 3 + 3]; tp[o + 4] = hist[h + t * 3 + 4]; tp[o + 5] = hist[h + t * 3 + 5];
+          for (let e = 0; e < 2; e++) {
+            const f = 1 - (t + e) / (T - 1), c = o + e * 3;
+            tc[c] = BG[0] + (col[0] - BG[0]) * f; tc[c + 1] = BG[1] + (col[1] - BG[1]) * f; tc[c + 2] = BG[2] + (col[2] - BG[2]) * f;
+          }
         }
       }
       filled = true;
       tgeo.attributes.position.needsUpdate = true;
+      tgeo.attributes.color.needsUpdate = true;
     };
   }
 

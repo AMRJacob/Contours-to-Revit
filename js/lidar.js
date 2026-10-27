@@ -3,7 +3,7 @@
 // the browser with laz-perf (WASM), and turned into a roof surface per footprint. Heights are measured against the
 // lidar's own ground points next to each building, so the lidar's vertical datum never matters.
 
-import { orthogonalize, dominantAngle, prismMass, mergeMass, polyArea, wingRects, wingShape, wingRoof, convexHalfplanes } from './massing.js?v=0.39.1';
+import { orthogonalize, dominantAngle, prismMass, mergeMass, polyArea, wingRects, wingShape, wingRoof, convexHalfplanes } from './massing.js?v=0.40.0';
 
 const RESOURCES = 'https://raw.githubusercontent.com/hobuinc/usgs-lidar/master/boundaries/resources.geojson';
 const R_EARTH = 6378137;
@@ -58,8 +58,37 @@ async function collectionsAt(lon, lat) {
   return hits.sort((a, b) => yearOf(b.name) - yearOf(a.name));
 }
 
-/** Read every EPT node overlapping the bbox (EPSG:3857). Returns typed arrays of points inside it. */
-async function readEpt(url, [x0, y0, x1, y1], onStatus) {
+/**
+ * Index of boxes (EPSG:3857) on a coarse grid, for "is this point / node near a building" tests. null = no focus.
+ */
+function focusIndex(boxes, cell = 200) {
+  if (!boxes) return null;
+  const m = new Map();
+  for (const b of boxes) {
+    for (let i = Math.floor(b[0] / cell); i <= Math.floor(b[2] / cell); i++) for (let j = Math.floor(b[1] / cell); j <= Math.floor(b[3] / cell); j++) {
+      const k = i * 1e6 + j; let a = m.get(k); if (!a) m.set(k, a = []); a.push(b);
+    }
+  }
+  return {
+    // Does the box overlap any focus box? (Very large boxes — upper tree levels — always do.)
+    box([x0, y0, x1, y1]) {
+      const i0 = Math.floor(x0 / cell), i1 = Math.floor(x1 / cell), j0 = Math.floor(y0 / cell), j1 = Math.floor(y1 / cell);
+      if ((i1 - i0 + 1) * (j1 - j0 + 1) > 2500) return true;
+      for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) for (const b of m.get(i * 1e6 + j) || []) if (b[0] <= x1 && b[2] >= x0 && b[1] <= y1 && b[3] >= y0) return true;
+      return false;
+    },
+    pt(x, y) {
+      for (const b of m.get(Math.floor(x / cell) * 1e6 + Math.floor(y / cell)) || []) if (x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3]) return true;
+      return false;
+    },
+  };
+}
+
+/**
+ * Read the EPT nodes overlapping the bbox (EPSG:3857) — only those near a focus box when focus is given (the
+ * buildings, so a big site with fields and woods doesn't download them). Returns typed arrays of the points kept.
+ */
+async function readEpt(url, [x0, y0, x1, y1], onStatus, focus = null) {
   const base = url.replace(/ept\.json$/, '');
   const ept = await (await fetch(url)).json();
   if (ept.dataType !== 'laszip') throw new Error(`unsupported lidar format ${ept.dataType}`);
@@ -69,7 +98,8 @@ async function readEpt(url, [x0, y0, x1, y1], onStatus) {
     const sx = (B[3] - B[0]) / 2 ** d, sy = (B[4] - B[1]) / 2 ** d;
     return [B[0] + x * sx, B[1] + y * sy, B[0] + (x + 1) * sx, B[1] + (y + 1) * sy];
   };
-  const hits = k => { const b = nodeBox(k); return !(b[2] < x0 || b[0] > x1 || b[3] < y0 || b[1] > y1); };
+  const F = focusIndex(focus);
+  const hits = k => { const b = nodeBox(k); return !(b[2] < x0 || b[0] > x1 || b[3] < y0 || b[1] > y1) && (!F || F.box(b)); };
   // Hierarchy: -1 marks a subtree stored in its own file.
   const nodes = [];
   let pending = ['0-0-0-0'];
@@ -87,7 +117,7 @@ async function readEpt(url, [x0, y0, x1, y1], onStatus) {
   const one = async key => {
     const buf = await (await fetch(`${base}ept-data/${key}.laz`)).arrayBuffer();
     bytes += buf.byteLength;
-    decode(L, buf, x0, y0, x1, y1, xs, ys, zs, cs, rs);
+    decode(L, buf, x0, y0, x1, y1, xs, ys, zs, cs, rs, F);
     done++;
     onStatus?.(`Reading lidar — ${done} of ${nodes.length} tiles (${(bytes / 1e6).toFixed(0)} MB)…`);
   };
@@ -97,7 +127,7 @@ async function readEpt(url, [x0, y0, x1, y1], onStatus) {
   return { x: Float64Array.from(xs), y: Float64Array.from(ys), z: Float32Array.from(zs), c: Uint8Array.from(cs), r: Uint8Array.from(rs), bytes, nodes: nodes.length };
 }
 
-function decode(L, buf, x0, y0, x1, y1, xs, ys, zs, cs, rs) {
+function decode(L, buf, x0, y0, x1, y1, xs, ys, zs, cs, rs, F = null) {
   const dv = new DataView(buf);
   const sx = dv.getFloat64(131, true), sy = dv.getFloat64(139, true), sz = dv.getFloat64(147, true);
   const ox = dv.getFloat64(155, true), oy = dv.getFloat64(163, true), oz = dv.getFloat64(171, true);
@@ -114,7 +144,7 @@ function decode(L, buf, x0, y0, x1, y1, xs, ys, zs, cs, rs) {
         lz.getPoint(pp);
         const v = new DataView(L.HEAPU8.buffer, pp, len);
         const x = v.getInt32(0, true) * sx + ox, y = v.getInt32(4, true) * sy + oy;
-        if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+        if (x < x0 || x > x1 || y < y0 || y > y1 || (F && !F.pt(x, y))) continue;
         const c = fmt >= 6 ? v.getUint8(16) : v.getUint8(15) & 31;
         if (NOISE.has(c)) continue;
         // Number of returns of this pulse (1 = a single hit, typical of roofs; several = foliage, edges).
@@ -127,9 +157,10 @@ function decode(L, buf, x0, y0, x1, y1, xs, ys, zs, cs, rs) {
 
 /**
  * Load lidar for a site. bbox = [w, s, e, n] lon/lat. fwd: [lon, lat] → native zone XY.
+ * focusLL: optional [w, s, e, n] lon/lat boxes (buildings plus a margin) — only lidar near them is read.
  * Returns { name, year, n, hasBuildingClass, x, y (native), z (m), c } or throws.
  */
-export async function loadLidar(bbox, fwd, onStatus) {
+export async function loadLidar(bbox, fwd, onStatus, focusLL = null) {
   const [w, s, e, n] = bbox;
   onStatus?.('Finding lidar for this site…');
   const cols = await collectionsAt((w + e) / 2, (s + n) / 2);
@@ -139,7 +170,8 @@ export async function loadLidar(bbox, fwd, onStatus) {
   for (const col of cols.slice(0, 3)) {
     try {
       onStatus?.(`Reading lidar — ${col.name}…`);
-      pc = await readEpt(col.url, [mx0, my0, mx1, my1], onStatus);
+      const focus = focusLL ? focusLL.map(([a, b, c, d]) => [...toMerc(a, b), ...toMerc(c, d)]) : null;
+      pc = await readEpt(col.url, [mx0, my0, mx1, my1], onStatus, focus);
       if (pc.x.length > 100) { used = col; break; }
     } catch (err) { console.warn('lidar', col.name, err); }
   }
@@ -684,7 +716,7 @@ function cleanBuilding(b, idx, lid, g, gDem, zPerM, m, tris) {
   const triF = P => (tris ? tris(P) : []);
 
   // --- candidate roofs: flat, gable (ridge along u or v), hip ---
-  const um = (u0 + u1) / 2, vm = (v0 + v1) / 2, hu = (u1 - u0) / 2, hv = (v1 - v0) / 2;
+  const hu = (u1 - u0) / 2, hv = (v1 - v0) / 2;
   const at = q => [u0 + ((q % nu) + 0.5) * C, v0 + (((q / nu) | 0) + 0.5) * C];
   const fitLin = xf => { // h = e + s·x by least squares over the roof cells; returns { e, s, rms }
     let n = 0, sx = 0, sy = 0, sxx = 0, sxy = 0;

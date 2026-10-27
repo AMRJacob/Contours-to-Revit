@@ -66,7 +66,10 @@ async function roseFor(st, onStatus) {
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const txt = await r.text();
   const nb = SPEED_BINS.length;                        // bins 0..nb-1 above calm (last = above the top edge)
-  const mk = () => ({ n: 0, calm: 0, sum: 0, sec: Array.from({ length: SECTORS }, () => new Array(nb).fill(0)) });
+  // Per season: all hours by sector and speed bin, plus by local hour of day (sector counts, speed sums, calms).
+  const mk = () => ({ n: 0, calm: 0, sum: 0, sec: Array.from({ length: SECTORS }, () => new Array(nb).fill(0)),
+    hn: new Array(24).fill(0), hcalm: new Array(24).fill(0), hsec: Array.from({ length: 24 }, () => new Array(SECTORS).fill(0)),
+    hspd: Array.from({ length: 24 }, () => new Array(SECTORS).fill(0)) });
   const S = { all: mk(), winter: mk(), spring: mk(), summer: mk(), fall: mk() };
   const seen = new Set();
   for (const line of txt.split('\n')) {
@@ -81,14 +84,16 @@ async function roseFor(st, onStatus) {
     if (!'01459'.includes(sq) || spd === '9999') continue;
     const v = Number(spd) / 10;
     const month = Number(Mo);
+    const hr = new Date(Date.UTC(+Y, +Mo - 1, +D, +h, 30)).getHours();      // reports are UTC; hour in this computer's zone
     const season = SEASONS.winter.includes(month) ? 'winter' : SEASONS.spring.includes(month) ? 'spring' : SEASONS.summer.includes(month) ? 'summer' : 'fall';
+    const calm = code === 'C' || v < SPEED_BINS[0];
+    if (!calm && (dir === '999' || code === 'V' || !'01459'.includes(dq))) continue;     // variable / unknown direction
+    const sec = calm ? -1 : Math.round(Number(dir) / (360 / SECTORS)) % SECTORS;
+    let b = 0; while (b < nb - 1 && v >= SPEED_BINS[b + 1]) b++;
     for (const s of [S.all, S[season]]) {
-      s.n++; s.sum += v;
-      if (code === 'C' || v < SPEED_BINS[0]) { s.calm++; continue; }
-      if (dir === '999' || code === 'V' || !'01459'.includes(dq)) { s.n--; s.sum -= v; continue; }   // variable / unknown direction
-      const sec = Math.round(Number(dir) / (360 / SECTORS)) % SECTORS;
-      let b = 0; while (b < nb - 1 && v >= SPEED_BINS[b + 1]) b++;
-      s.sec[sec][b]++;
+      s.n++; s.sum += v; s.hn[hr]++;
+      if (calm) { s.calm++; s.hcalm[hr]++; continue; }
+      s.sec[sec][b]++; s.hsec[hr][sec]++; s.hspd[hr][sec] += v;
     }
   }
   if (S.all.n < 5000) throw new Error(`only ${S.all.n} usable hours`);
@@ -106,7 +111,7 @@ export async function windRose(lat, lon, { onStatus } = {}) {
   if (!cands.length) throw new Error('no NOAA station with a current five-year record within 120 km');
   const errs = [];
   for (const st of cands) {
-    const key = `c2r-wind:${st.id}`;
+    const key = `c2r-wind2:${st.id}`;
     try { const c = JSON.parse(localStorage.getItem(key) || 'null'); if (c && Date.now() - c.t < 30 * 864e5) return { ...c.rose, station: { ...c.rose.station, km: st.km } }; } catch { /* ignore */ }
     try {
       const rose = await roseFor(st, onStatus);
@@ -117,64 +122,76 @@ export async function windRose(lat, lon, { onStatus } = {}) {
   throw new Error(errs.join('; '));
 }
 
-/** Share of hours (0–1) from each sector, and the prevailing sector, for one season of a rose. */
-export function roseSummary(s) {
-  const tot = s.n || 1;
-  const frac = s.sec.map(b => b.reduce((a, v) => a + v, 0) / tot);
+/**
+ * Share of hours (0–1) from each sector, the prevailing sector, calm share and mean speed (m/s) for one season of
+ * a rose — over the whole day, or for one local hour of the day (0–23). spd: mean speed (m/s) per sector.
+ */
+export function roseSummary(s, hour = null) {
+  let frac, spd, calm, tot;
+  if (hour == null) {
+    tot = s.n || 1;
+    frac = s.sec.map(b => b.reduce((a, v) => a + v, 0) / tot);
+    spd = s.sec.map(b => { let c = 0, w = 0; b.forEach((n, k) => { c += n; w += n * ((SPEED_BINS[k] + (SPEED_BINS[k + 1] || SPEED_BINS[k] * 1.3)) / 2); }); return c ? w / c : 0; });
+    calm = s.calm / tot;
+  } else {
+    tot = s.hn[hour] || 1;
+    frac = s.hsec[hour].map(c => c / tot);
+    spd = s.hspd[hour].map((v, i) => (s.hsec[hour][i] ? v / s.hsec[hour][i] : 0));
+    calm = s.hcalm[hour] / tot;
+  }
   let best = 0; frac.forEach((f, i) => { if (f > frac[best]) best = i; });
-  return { frac, prevailing: best, calm: s.calm / tot, mean: s.mean };
+  const mean = frac.reduce((a, f, i) => a + f * spd[i], 0) / Math.max(1e-9, 1 - calm);
+  return { frac, spd, prevailing: best, calm, mean, n: tot };
 }
 
 export const sectorName = i => ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'][i % 16];
 
 /**
- * Particles drifting with the wind across the site box (native units): each one picks a direction and speed drawn
- * from the rose (so frequent winds show up as more streaks), drifts, and respawns upwind. conv: grid convergence.
+ * Streaks drifting across the site box (native units). setFlows([{ from (degrees, true north), w (weight), v (m/s),
+ * color: [r, g, b] 0–1 }]): each streak follows one flow, picked by weight, in straight parallel lines — one flow
+ * gives a calm, uniform drift. conv: grid convergence.
  */
 export class WindField {
-  constructor(box, season, conv = 0, n = 700) {
+  constructor(box, conv = 0, n = 450) {
     this.box = box; this.n = n; this.conv = conv;
     this.px = new Float32Array(n); this.py = new Float32Array(n); this.ox = new Float32Array(n); this.oy = new Float32Array(n);
     this.vx = new Float32Array(n); this.vy = new Float32Array(n); this.age = new Float32Array(n); this.life = new Float32Array(n);
+    this.fi = new Int16Array(n);
     this.speed = 1;
-    this.setSeason(season);
+    this.flows = [];
   }
-  setSeason(s) {
-    // Cumulative table of (sector, bin) weighted by hours.
-    this.table = [];
-    let acc = 0;
-    s.sec.forEach((bins, i) => bins.forEach((c, b) => { if (c) { acc += c; this.table.push([acc, i, b]); } }));
-    this.total = acc;
+  setFlows(flows) {
+    this.flows = flows.filter(f => f.w > 0);
+    this.total = this.flows.reduce((a, f) => a + f.w, 0);
     for (let p = 0; p < this.n; p++) this.spawn(p, true);
   }
   spawn(p, anywhere) {
-    const b = this.box, w = b.xmax - b.xmin, h = b.ymax - b.ymin;
-    if (!this.total) { this.px[p] = this.ox[p] = b.xmin; this.py[p] = this.oy[p] = b.ymin; this.vx[p] = this.vy[p] = 0; return; }
-    const r = Math.random() * this.total;
-    let lo = 0, hi = this.table.length - 1;
-    while (lo < hi) { const m = (lo + hi) >> 1; if (this.table[m][0] < r) lo = m + 1; else hi = m; }
-    const [, sec, bin] = this.table[lo];
-    const from = (sec * (360 / SECTORS) + (Math.random() - 0.5) * (360 / SECTORS) + this.conv) * Math.PI / 180;   // grid azimuth the wind comes from
-    const v = (SPEED_BINS[bin] + (SPEED_BINS[bin + 1] || SPEED_BINS[bin] * 1.3)) / 2;                       // m/s, bin middle
-    const size = Math.max(w, h), u = size / 160 * (0.4 + v / 6);                                             // native units per frame
-    this.vx[p] = -Math.sin(from) * u; this.vy[p] = -Math.cos(from) * u;                                      // blows toward the opposite direction
-    let x = b.xmin + Math.random() * w, y = b.ymin + Math.random() * h;
-    if (!anywhere) { // start on the upwind edge region
-      const back = Math.random() * size * 0.5;
-      x -= this.vx[p] / u * back; y -= this.vy[p] / u * back;
-    }
+    const b = this.box, w = b.xmax - b.xmin, h = b.ymax - b.ymin, size = Math.max(w, h);
+    if (!this.total) { this.px[p] = this.ox[p] = this.py[p] = this.oy[p] = NaN; this.vx[p] = this.vy[p] = 0; this.fi[p] = -1; return; }
+    let r = Math.random() * this.total, i = 0;
+    while (i < this.flows.length - 1 && r > this.flows[i].w) { r -= this.flows[i].w; i++; }
+    const f = this.flows[i];
+    const from = (f.from + (Math.random() - 0.5) * 4 + this.conv) * Math.PI / 180;            // grid azimuth the wind comes from
+    const u = size / 220 * (0.5 + Math.min(f.v, 12) / 8);                                        // native units per frame
+    this.vx[p] = -Math.sin(from) * u; this.vy[p] = -Math.cos(from) * u;                          // blows toward the opposite side
+    const cx = (b.xmin + b.xmax) / 2, cy = (b.ymin + b.ymax) / 2;
+    // Start on a line across the flow, upwind of the site (or anywhere on the first fill), so streaks run parallel.
+    const ux = this.vx[p] / u, uy = this.vy[p] / u, across = (Math.random() - 0.5) * size * 1.5;
+    const back = anywhere ? (Math.random() - 0.5) * size * 1.4 : -size * (0.7 + Math.random() * 0.15);
+    const x = cx + -uy * across + ux * back, y = cy + ux * across + uy * back;
     this.px[p] = this.ox[p] = x; this.py[p] = this.oy[p] = y;
-    this.age[p] = 0; this.life[p] = 60 + Math.random() * 120;
+    this.age[p] = 0; this.life[p] = 400; this.fi[p] = i;
   }
   step() {
-    const b = this.box, pad = Math.max(b.xmax - b.xmin, b.ymax - b.ymin) * 0.6;
+    const b = this.box, pad = Math.max(b.xmax - b.xmin, b.ymax - b.ymin) * 0.8;
     for (let p = 0; p < this.n; p++) {
       this.ox[p] = this.px[p]; this.oy[p] = this.py[p];
       this.px[p] += this.vx[p] * this.speed; this.py[p] += this.vy[p] * this.speed;
       this.age[p]++;
       const x = this.px[p], y = this.py[p];
-      if (this.age[p] > this.life[p] || x < b.xmin - pad || x > b.xmax + pad || y < b.ymin - pad || y > b.ymax + pad) this.spawn(p, false);
+      if (!(this.age[p] <= this.life[p]) || x < b.xmin - pad || x > b.xmax + pad || y < b.ymin - pad || y > b.ymax + pad) this.spawn(p, false);
     }
   }
   inBox(p) { const b = this.box; return this.px[p] >= b.xmin && this.px[p] <= b.xmax && this.py[p] >= b.ymin && this.py[p] <= b.ymax; }
+  color(p) { return this.flows[this.fi[p]]?.color || [1, 1, 1]; }
 }

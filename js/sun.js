@@ -120,69 +120,115 @@ export function litAt(R, sv, x, y, z, skip = 0) {
   }
 }
 
-/** Lit mask of the raster cells (1 = sun, 0 = shade) for one sun position. */
-export function shadeRaster(R, sv) {
-  const out = new Uint8Array(R.nx * R.ny);
-  if (sv.alt <= 0) return out;
-  for (let j = 0; j < R.ny; j++) for (let i = 0; i < R.nx; i++) {
-    const q = j * R.nx + i;
-    // A hair above the surface (output units) so flat roofs and ground don't shade themselves.
-    out[q] = litAt(R, sv, R.x0 + i * R.s, R.y0 + j * R.s, R.H[q] + 0.15, R.s * 0.75) ? 1 : 0;
+/** Ground sampling step so the evaluated cells stay under maxEval (shadows still march over the full raster). */
+export function strideFor(R, maxEval = 120000) { return Math.max(1, Math.ceil(Math.sqrt(R.nx * R.ny / maxEval))); }
+
+/**
+ * Lit mask (1 = sun, 0 = shade) on every `stride`-th raster cell for one sun position.
+ * Returns { lit, nx, ny, stride } — the mask grid is nx × ny, cell (i, j) at raster cell (i·stride, j·stride).
+ */
+export function shadeRaster(R, sv, stride = 1) {
+  const nx = Math.floor((R.nx - 1) / stride) + 1, ny = Math.floor((R.ny - 1) / stride) + 1;
+  const lit = new Uint8Array(nx * ny);
+  if (sv.alt > 0) {
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const ri = i * stride, rj = j * stride;
+      // A hair above the surface (output units) so flat roofs and ground don't shade themselves.
+      lit[j * nx + i] = litAt(R, sv, R.x0 + ri * R.s, R.y0 + rj * R.s, R.H[rj * R.nx + ri] + 0.15, R.s * 0.75) ? 1 : 0;
+    }
   }
-  return out;
+  return { lit, nx, ny, stride };
 }
 
 /**
- * Hours of direct sun on each raster cell and each building triangle over the local day of `day`, in steps of
- * `stepMin` minutes. tris: flat [x,y,z × 3 …] (native XY, output Z) — the same array the 3D view draws.
- * Calls onProgress(fraction) and yields to the page between time steps. Returns { cells, tris, steps, hoursMax }.
+ * Points on building roofs and walls to test, from the building triangles: every triangle is split into a grid of
+ * small triangles about `d` across (d grows on big sites so there are at most maxPts points), so a shadow line
+ * falling partway across a roof or wall shows. trisTrue / trisShown: the same triangles (flat [x, y, z × 3 …],
+ * native XY, output Z) at true height and as the 3D view draws them (heights scaled for exaggeration).
+ * Returns { P (true positions), N (unit normals, roofs up), S (shown positions), idx (triangles), n }.
  */
-export async function sunHours(R, tris, day, site, { stepMin = 15, onProgress, isStale } = {}) {
-  const { lat, lng } = site.center, k = site.toOut;
-  const { rise, set } = sunTimes(day, lat, lng);
-  const cells = new Float32Array(R.nx * R.ny);
-  const nT = tris ? tris.length / 9 : 0, tH = new Float32Array(nT);
-  if (!rise || !set) return { cells, tris: tH, steps: 0, hoursMax: 0 };
-  // Triangle centroids and normals (normal flipped to point up / outward is not knowable for walls, so both sides
-  // are tried: a face is lit if the side facing the sun is unobstructed).
-  const C = new Float32Array(nT * 3), N = new Float32Array(nT * 3);
+export function surfaceSamples(trisTrue, trisShown, k, { d = 2, maxPts = 180000 } = {}) {
+  const nT = trisTrue.length / 9;
+  const V = o => [trisTrue[o], trisTrue[o + 1], trisTrue[o + 2] / k];    // z in native units for geometry
+  let area = 0;
+  for (let t = 0; t < nT; t++) {
+    const [ax, ay, az] = V(t * 9), [bx, by, bz] = V(t * 9 + 3), [cx, cy, cz] = V(t * 9 + 6);
+    const ux = bx - ax, uy = by - ay, uz = bz - az, vx = cx - ax, vy = cy - ay, vz = cz - az;
+    area += Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 2;
+  }
+  d = Math.max(d, Math.sqrt(area * 2.2 / maxPts));
+  const P = [], N = [], S = [], idx = [];
   for (let t = 0; t < nT; t++) {
     const o = t * 9;
-    const ax = tris[o], ay = tris[o + 1], az = tris[o + 2] / k, bx = tris[o + 3], by = tris[o + 4], bz = tris[o + 5] / k, cx = tris[o + 6], cy = tris[o + 7], cz = tris[o + 8] / k;
-    C[t * 3] = (ax + bx + cx) / 3; C[t * 3 + 1] = (ay + by + cy) / 3; C[t * 3 + 2] = (tris[o + 2] + tris[o + 5] + tris[o + 8]) / 3;
-    const ux = bx - ax, uy = by - ay, uz = bz - az, vx = cx - ax, vy = cy - ay, vz = cz - az;
+    const A = V(o), B = V(o + 3), C = V(o + 6);
+    const ux = B[0] - A[0], uy = B[1] - A[1], uz = B[2] - A[2], vx = C[0] - A[0], vy = C[1] - A[1], vz = C[2] - A[2];
     let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-    const L = Math.hypot(nx, ny, nz) || 1; nx /= L; ny /= L; nz /= L;
-    if (nz < 0) { nx = -nx; ny = -ny; nz = -nz; }                 // roofs: point up
-    N[t * 3] = nx; N[t * 3 + 1] = ny; N[t * 3 + 2] = nz;
+    const L = Math.hypot(nx, ny, nz);
+    if (L < 1e-9) continue;
+    nx /= L; ny /= L; nz /= L;
+    if (nz < 0) { nx = -nx; ny = -ny; nz = -nz; }
+    const edge = Math.max(Math.hypot(ux, uy, uz), Math.hypot(vx, vy, vz), Math.hypot(C[0] - B[0], C[1] - B[1], C[2] - B[2]));
+    const n = Math.max(1, Math.min(200, Math.ceil(edge / d)));
+    const base = P.length / 3;
+    // Barycentric grid: row r has n - r + 1 points; the same weights place the shown copy.
+    for (let r = 0; r <= n; r++) for (let c = 0; c <= n - r; c++) {
+      const wb = c / n, wc = r / n, wa = 1 - wb - wc;
+      for (let q = 0; q < 3; q++) {
+        P.push(trisTrue[o + q] * wa + trisTrue[o + 3 + q] * wb + trisTrue[o + 6 + q] * wc);
+        S.push(trisShown[o + q] * wa + trisShown[o + 3 + q] * wb + trisShown[o + 6 + q] * wc);
+      }
+      N.push(nx, ny, nz);
+    }
+    const id = (r, c) => base + r * (n + 1) - (r * (r - 1)) / 2 + c;
+    for (let r = 0; r < n; r++) for (let c = 0; c < n - r; c++) {
+      idx.push(id(r, c), id(r, c + 1), id(r + 1, c));
+      if (c < n - r - 1) idx.push(id(r, c + 1), id(r + 1, c + 1), id(r + 1, c));
+    }
   }
+  return { P: Float32Array.from(P), N: Float32Array.from(N), S: Float32Array.from(S), idx: Uint32Array.from(idx), n: P.length / 3, d };
+}
+
+/**
+ * Hours of direct sun over the local day of `day` (every `stepMin` minutes, sunrise to sunset) on the ground
+ * (every `stride`-th raster cell) and on building surface points (from surfaceSamples). Yields to the page now and
+ * then; onProgress(fraction). Returns { cells, nx, ny, stride, pts (hours per surface point), steps, hoursMax }
+ * or null if isStale() turned true.
+ */
+export async function sunHours(R, samples, day, site, { stepMin = 15, stride = 1, onProgress, isStale } = {}) {
+  const { lat, lng } = site.center, k = site.toOut;
+  const { rise, set } = sunTimes(day, lat, lng);
+  const gnx = Math.floor((R.nx - 1) / stride) + 1, gny = Math.floor((R.ny - 1) / stride) + 1;
+  const cells = new Float32Array(gnx * gny);
+  const nP = samples ? samples.n : 0, pts = new Float32Array(nP);
+  if (!rise || !set) return { cells, nx: gnx, ny: gny, stride, pts, steps: 0, hoursMax: 0 };
   const steps = [];
   for (let t = rise.getTime(); t <= set.getTime(); t += stepMin * 6e4) steps.push(new Date(t));
-  const dt = stepMin / 60;
+  const dt = stepMin / 60, off = R.s * 0.6;
   let lastYield = performance.now();
   for (let si = 0; si < steps.length; si++) {
     if (isStale?.()) return null;
     const pos = sunPosition(steps[si], lat, lng);
     if (pos.alt > 0.5) {
       const sv = sunVector(pos, site.convergence || 0, k);
-      const lit = shadeRaster(R, sv);
-      for (let q = 0; q < lit.length; q++) if (lit[q]) cells[q] += dt;
-      // Sun direction in native-XY / native-Z terms for the facing test.
+      const g = shadeRaster(R, sv, stride);
+      for (let q = 0; q < g.lit.length; q++) if (g.lit[q]) cells[q] += dt;
+      // Sun direction with the vertical in native units (k converts output → native via / k).
       const ca = Math.cos(pos.alt * RAD), sx = sv.dx * ca, sy = sv.dy * ca, sz = Math.sin(pos.alt * RAD);
-      for (let t = 0; t < nT; t++) {
-        let nx = N[t * 3], ny = N[t * 3 + 1], nz = N[t * 3 + 2];
+      const P = samples?.P, N = samples?.N;
+      for (let v = 0; v < nP; v++) {
+        let nx = N[v * 3], ny = N[v * 3 + 1];
+        const nz = N[v * 3 + 2];
         let dot = nx * sx + ny * sy + nz * sz;
-        if (nz < 0.05) { if (dot < 0) { nx = -nx; ny = -ny; dot = -dot; } }   // walls: the side toward the sun
+        if (nz < 0.2 && dot < 0) { nx = -nx; ny = -ny; dot = nx * sx + ny * sy + nz * sz; }   // walls: the side toward the sun
         if (dot <= 0.02) continue;
-        // Start just off the face (out of the building it belongs to) and march toward the sun.
-        const off = R.s * 1.6, x = C[t * 3] + nx * off, y = C[t * 3 + 1] + ny * off;
-        if (litAt(R, sv, x, y, C[t * 3 + 2] + 0.1, R.s * 0.5)) tH[t] += dt;
+        // Start just off the surface on the sunny side, skip the cell it sits in, march toward the sun.
+        if (litAt(R, sv, P[v * 3] + nx * off, P[v * 3 + 1] + ny * off, P[v * 3 + 2] + 0.2 + nz * 0.2, R.s * 0.9)) pts[v] += dt;
       }
     }
     onProgress?.((si + 1) / steps.length);
     if (performance.now() - lastYield > 120) { await new Promise(r => setTimeout(r, 0)); lastYield = performance.now(); }
   }
-  return { cells, tris: tH, steps: steps.length, hoursMax: (set - rise) / 36e5 };
+  return { cells, nx: gnx, ny: gny, stride, pts, steps: steps.length, hoursMax: (set - rise) / 36e5 };
 }
 
 /** Colour ramp for sun hours, 0 (deep blue-violet) → max (warm yellow). Returns [r, g, b] in 0–1. */
