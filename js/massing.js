@@ -144,6 +144,133 @@ export function clipHalf(P, a, b, c) {
   return out;
 }
 
+// ---------------------------------------------------------------- pitched roofs on L / T / U footprints
+//
+// A footprint that is square to its frame is split into its maximal rectangles (the "wings"); each wing gets its
+// own hip or gable, and the roof is the highest wing roof at every point. Where wings meet this gives the valleys
+// of a real cross-hipped / cross-gabled roof, and for a hip roof it equals the straight-skeleton roof of the
+// outline (height = distance to the nearest wall, measured square to it). Every roof piece is a convex, exactly
+// planar polygon, and the eaves sit on the walls.
+
+const sArea = P => { let a = 0; for (let i = 0, k = P.length - 1; i < P.length; k = i++) a += P[k][0] * P[i][1] - P[i][0] * P[k][1]; return a / 2; };
+
+/**
+ * Maximal axis-aligned rectangles covering a frame outline whose edges are all horizontal / vertical.
+ * Returns [{u0, u1, v0, v1}] or null when the outline isn't square to the frame or is too intricate.
+ */
+export function wingRects(R, tol = 0.05) {
+  for (let i = 0; i < R.length; i++) {
+    const p = R[i], q = R[(i + 1) % R.length];
+    if (Math.abs(p[0] - q[0]) > tol && Math.abs(p[1] - q[1]) > tol) return null;   // a diagonal edge
+  }
+  const uniq = a => { const s = a.slice().sort((x, y) => x - y), o = []; for (const x of s) if (!o.length || x - o[o.length - 1] > tol) o.push(x); return o; };
+  const us = uniq(R.map(p => p[0])), vs = uniq(R.map(p => p[1]));
+  if (us.length > 18 || vs.length > 18) return null;
+  const nu = us.length - 1, nv = vs.length - 1;
+  const inside = [];
+  for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) inside[j * nu + i] = inRing(R, (us[i] + us[i + 1]) / 2, (vs[j] + vs[j + 1]) / 2);
+  const full = (i0, i1, j0, j1) => { for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) if (!inside[j * nu + i]) return false; return true; };
+  const out = [];
+  for (let i0 = 0; i0 < nu; i0++) for (let i1 = i0; i1 < nu; i1++) for (let j0 = 0; j0 < nv; j0++) for (let j1 = j0; j1 < nv; j1++) {
+    if (!full(i0, i1, j0, j1)) continue;
+    // Maximal: can't grow by a column or row in any direction.
+    if ((i0 > 0 && full(i0 - 1, i0 - 1, j0, j1)) || (i1 < nu - 1 && full(i1 + 1, i1 + 1, j0, j1))
+      || (j0 > 0 && full(i0, i1, j0 - 1, j0 - 1)) || (j1 < nv - 1 && full(i0, i1, j1 + 1, j1 + 1))) continue;
+    out.push({ u0: us[i0], u1: us[i1 + 1], v0: vs[j0], v1: vs[j1 + 1] });
+    if (out.length > 40) return null;
+  }
+  return out.length ? out : null;
+}
+
+/**
+ * Distance terms of one wing's roof (each a·u + b·v + c, the distance to a wall it slopes up from).
+ * mode: 'hip' (all four sides), 'long' / 'short' (gable, ridge along the wing's long / short axis), 'u' / 'v'.
+ */
+function wingTerms(r, mode) {
+  const ridgeU = mode === 'u' || (mode === 'long' && r.u1 - r.u0 >= r.v1 - r.v0) || (mode === 'short' && r.u1 - r.u0 < r.v1 - r.v0);
+  const across = [[0, 1, -r.v0], [0, -1, r.v1]], along = [[1, 0, -r.u0], [-1, 0, r.u1]];
+  return mode === 'hip' ? [...across, ...along] : ridgeU ? across : along;
+}
+const lin = ([a, b, c], u, v) => a * u + b * v + c;
+const rectHs = r => [[1, 0, -r.u0], [-1, 0, r.u1], [0, 1, -r.v0], [0, -1, r.v1]];
+
+/** Roof height factor at (u, v): the highest wing roof (distance terms, so 0 at the eaves). */
+export function wingShape(rects, mode) {
+  const T = rects.map(r => wingTerms(r, mode)), e = 1e-6;
+  return (u, v) => {
+    let best = 0;
+    rects.forEach((r, i) => {
+      if (u < r.u0 - e || u > r.u1 + e || v < r.v0 - e || v > r.v1 + e) return;
+      const d = Math.min(...T[i].map(t => lin(t, u, v)));
+      if (d > best) best = d;
+    });
+    return best;
+  };
+}
+
+/**
+ * Roof pieces of the wing roof: [{ poly (convex, frame coords, counter-clockwise), term }] with height factor
+ * lin(term, u, v) on the piece. clip: extra half-planes every piece is cut to (a convex outline), or none.
+ */
+export function wingRoof(rects, mode, clip = []) {
+  const T = rects.map(r => wingTerms(r, mode)), eps = 1e-7, tiny = 1e-4;
+  const pieces = [];
+  rects.forEach((r, ri) => {
+    T[ri].forEach((t, k) => {
+      // This wing's face: the part of the wing where this side is the nearest one.
+      let P = [[r.u0, r.v0], [r.u1, r.v0], [r.u1, r.v1], [r.u0, r.v1]];
+      for (const h of [...clip, ...T[ri].filter((_, j) => j !== k).map(tj => [tj[0] - t[0], tj[1] - t[1], tj[2] - t[2]])]) {
+        P = clipHalf(P, ...h); if (P.length < 3) return;
+      }
+      if (Math.abs(sArea(P)) < tiny) return;
+      // Remove where another wing's roof is higher: inside that wing AND below every one of its terms.
+      let parts = [P];
+      rects.forEach((r2, rj) => {
+        if (rj === ri || !parts.length) return;
+        const hs = [...rectHs(r2)];
+        let empty = false;
+        for (const t2 of T[rj]) {
+          const h = [t2[0] - t[0], t2[1] - t[1], t2[2] - t[2]];         // > 0 where the other wing is higher
+          if (Math.abs(h[0]) < eps && Math.abs(h[1]) < eps) {
+            // Parallel planes: a constant difference; equal planes go to the earlier wing.
+            if (h[2] > eps || (Math.abs(h[2]) <= eps && rj < ri)) continue;
+            empty = true; break;
+          }
+          hs.push(h);
+        }
+        if (empty) return;
+        const next = [];
+        for (const Q of parts) {
+          let cur = Q;
+          for (const h of hs) {
+            const outside = clipHalf(cur, -h[0], -h[1], -h[2]);
+            if (outside.length >= 3 && Math.abs(sArea(outside)) > tiny) next.push(outside);
+            cur = clipHalf(cur, ...h);
+            if (cur.length < 3) break;
+          }
+        }
+        parts = next;
+      });
+      for (const Q of parts) pieces.push({ poly: sArea(Q) < 0 ? Q.slice().reverse() : Q, term: t });
+    });
+  });
+  return pieces;
+}
+
+/** Inward half-planes of a convex outline, or null if it isn't convex. */
+export function convexHalfplanes(R) {
+  const sg = Math.sign(sArea(R)), out = [];
+  for (let i = 0; i < R.length; i++) {
+    const p = R[i], q = R[(i + 1) % R.length], r = R[(i + 2) % R.length];
+    const cr = (q[0] - p[0]) * (r[1] - q[1]) - (q[1] - p[1]) * (r[0] - q[0]);
+    if (cr * sg < -1e-9) return null;
+    // Left of p→q is inside for a counter-clockwise ring.
+    const a = -(q[1] - p[1]) * sg, b = (q[0] - p[0]) * sg;
+    out.push([a, b, -(a * p[0] + b * p[1])]);
+  }
+  return out;
+}
+
 /**
  * One combined building layer: OpenStreetMap footprints (hand-mapped) first, then Microsoft footprints that don't
  * duplicate them; FEMA/ORNL footprints only on sites where neither has any. A footprint that would swallow several already-chosen

@@ -3,7 +3,7 @@
 // the browser with laz-perf (WASM), and turned into a roof surface per footprint. Heights are measured against the
 // lidar's own ground points next to each building, so the lidar's vertical datum never matters.
 
-import { orthogonalize, dominantAngle, prismMass, mergeMass, clipHalf, polyArea } from './massing.js?v=0.38.2';
+import { orthogonalize, dominantAngle, prismMass, mergeMass, polyArea, wingRects, wingShape, wingRoof, convexHalfplanes } from './massing.js?v=0.38.3';
 
 const RESOURCES = 'https://raw.githubusercontent.com/hobuinc/usgs-lidar/master/boundaries/resources.geojson';
 const R_EARTH = 6378137;
@@ -695,11 +695,22 @@ function cleanBuilding(b, idx, lid, g, gDem, zPerM, m, tris) {
     return { e, s: sl, rms: Math.sqrt(r / n) };
   };
   const flatRms = Math.sqrt(hs.reduce((a, h) => a + (h - p50) ** 2, 0) / hs.length);
+  // Wings: an L / T / U outline (square to the frame) is split into its overlapping rectangles, each with its own
+  // ridge; other outlines use their bounding box, cut to the outline when it is convex (else no pitched roof).
+  let wings = wingRects(RF), wclip = [];
+  if (!wings) {
+    wclip = convexHalfplanes(RF);
+    wings = wclip && areaM2 > 0.8 * (u1 - u0) * (v1 - v0) ? [{ u0, u1, v0, v1 }] : null;
+    if (!wings) wclip = [];
+  }
+  const shapes = wings ? { hip: wingShape(wings, 'hip'), long: wingShape(wings, 'long'), short: wingShape(wings, 'short') } : null;
   const models = [];
-  if (areaM2 < 2500 && Math.min(hu, hv) > 2) {
-    const gU = fitLin((u, v) => hv - Math.abs(v - vm)); if (gU) models.push({ kind: 'gable', axis: 'u', ...gU });
-    const gV = fitLin((u, v) => hu - Math.abs(u - um)); if (gV) models.push({ kind: 'gable', axis: 'v', ...gV });
-    const hp = fitLin((u, v) => Math.min(hv - Math.abs(v - vm), hu - Math.abs(u - um))); if (hp) models.push({ kind: 'hip', ...hp, rms: hp.rms * 1.03 });
+  if (shapes && areaM2 < 2500 && Math.min(hu, hv) > 2) {
+    for (const mode of ['long', 'short', 'hip']) {
+      if (mode === 'short' && wings.every(r => Math.abs((r.u1 - r.u0) - (r.v1 - r.v0)) < 0.5)) continue;
+      const f = fitLin(shapes[mode]);
+      if (f) models.push({ kind: mode === 'hip' ? 'hip' : 'gable', mode, ...f, rms: f.rms * (mode === 'hip' ? 1.03 : 1) });
+    }
   }
   const pitched = models.filter(md => md.s > Math.tan(8 * Math.PI / 180) && md.s < Math.tan(55 * Math.PI / 180) && md.e > 2)
     .sort((a2, b2) => a2.rms - b2.rms)[0];
@@ -710,58 +721,62 @@ function cleanBuilding(b, idx, lid, g, gDem, zPerM, m, tris) {
   // eave from the low returns, pitch kept between 4:12 and 12:12. From a distance that reads right.
   let chosen = pitched && pitched.rms < 0.7 * flatRms && pitched.rms < 1.2 ? pitched : null;
   if (!chosen && areaM2 < 600 && p90 < 15 && p90 - p10 >= 0.8 && models.length) {
-    const long = hu >= hv ? 'u' : 'v';
-    let pick = models.find(md => md.kind === 'gable' && md.axis === long) || models[0];
-    const other = models.find(md => md.kind === 'gable' && md.axis !== long), hipM = models.find(md => md.kind === 'hip');
+    let pick = models.find(md => md.mode === 'long') || models[0];
+    const other = models.find(md => md.mode === 'short'), hipM = models.find(md => md.mode === 'hip');
     if (other && other.rms < pick.rms * 0.85) pick = other;
     if (hipM && hipM.rms <= pick.rms * 1.02) pick = hipM;
-    const half = pick.kind === 'hip' ? Math.min(hu, hv) : pick.axis === 'u' ? hv : hu;
+    // Half-width of the widest wing across its ridge: the roof rises over this distance.
+    let half = 0;
+    for (const q of cells) half = Math.max(half, shapes[pick.mode](...at(q)));
+    half = Math.max(half, 0.5);
     const ridge = pct(hs, 0.95);
     let sl = (ridge - pct(hs, 0.1)) / half;
     sl = Math.min(Math.tan(45 * Math.PI / 180), Math.max(Math.tan(18.4 * Math.PI / 180), sl));
     let eave = ridge - sl * half;
     if (eave < 2.4) { eave = 2.4; sl = Math.max(0.05, (ridge - eave) / half); }
-    chosen = { kind: pick.kind, axis: pick.axis, e: eave, s: sl };
+    chosen = { kind: pick.kind, mode: pick.mode, e: eave, s: sl };
   }
   if (chosen) {
     const pitched = chosen;
     kind = pitched.kind;
     const e = pitched.e, sl = pitched.s;
-    const hF = pitched.kind === 'hip' ? (u, v) => e + sl * Math.min(hv - Math.abs(v - vm), hu - Math.abs(u - um))
-      : pitched.axis === 'u' ? (u, v) => e + sl * (hv - Math.abs(v - vm)) : (u, v) => e + sl * (hu - Math.abs(u - um));
-    // Roof pieces: the footprint clipped to each plane's zone (each piece is exactly planar).
-    const d = hv - hu;
-    const pieces = pitched.kind === 'hip'
-      ? [[[0, 1, -vm], [-1, 1, um - vm - d], [1, 1, -um - vm - d]],      // v ≥ vm side
-         [[0, -1, vm], [-1, -1, um + vm - d], [1, -1, -um + vm - d]],    // v ≤ vm side
-         [[1, 0, -um], [1, -1, -um + vm + d], [1, 1, -um - vm + d]],     // u ≥ um end
-         [[-1, 0, um], [-1, -1, um + vm + d], [-1, 1, um - vm + d]]]     // u ≤ um end
-      : pitched.axis === 'u' ? [[[0, 1, -vm]], [[0, -1, vm]]] : [[[1, 0, -um]], [[-1, 0, um]]];
+    const shape = shapes[pitched.mode];
+    const hF = (u, v) => e + sl * shape(u, v);
     mass = { v: [], f: [] };
-    // Walls: the outline with every crossing of a crease inserted, tops following the roof.
-    const creases = pitched.kind === 'hip'
-      ? [[0, 1, -vm], [1, 0, -um], [-1, 1, um - vm - d], [1, 1, -um - vm - d], [-1, 1, um - vm + d], [1, 1, -um - vm + d]]
-      : pitched.axis === 'u' ? [[0, 1, -vm]] : [[1, 0, -um]];
+    // Walls: the outline with the roof's kinks along each wall inserted (found by subdividing until the roof
+    // height is straight between points), tops following the roof — eaves are level, gable ends rise.
     const W = [];
     for (let i = 0; i < RF.length; i++) {
       const p = RF[i], q = RF[(i + 1) % RF.length];
-      W.push(p);
+      const at2 = t => [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
       const ts = [];
-      for (const [a2, b2, c2] of creases) { const fp = a2 * p[0] + b2 * p[1] + c2, fq = a2 * q[0] + b2 * q[1] + c2; if ((fp > 0) !== (fq > 0) && fp !== fq) ts.push(fp / (fp - fq)); }
-      ts.sort((x, y) => x - y).forEach(t => { if (t > 1e-3 && t < 1 - 1e-3) W.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]); });
+      const split = (t0, t1, z0, z1, depth) => {
+        const tm = (t0 + t1) / 2, zm = shape(...at2(tm));
+        if (depth > 9 || (Math.abs(zm - (z0 + z1) / 2) < 0.005 && Math.abs(shape(...at2(t0 + (t1 - t0) / 4)) - (z0 * 0.75 + z1 * 0.25)) < 0.005)) return;
+        split(t0, tm, z0, zm, depth + 1); ts.push(tm); split(tm, t1, zm, z1, depth + 1);
+      };
+      split(0, 1, shape(...p), shape(...q), 0);
+      W.push(p);
+      for (const t of ts) W.push(at2(t));
     }
-    const nW = W.length;
-    W.forEach(([u, v]) => mass.v.push([...fromF(u, v), b.base]));
-    W.forEach(([u, v]) => mass.v.push([...fromF(u, v), zOf(hF(u, v))]));
+    // Drop points that sit on a straight run of roof between their neighbours.
+    const Wk = W.filter((p, i) => {
+      const a2 = W[(i - 1 + W.length) % W.length], c2 = W[(i + 1) % W.length];
+      const col = Math.abs((p[0] - a2[0]) * (c2[1] - a2[1]) - (p[1] - a2[1]) * (c2[0] - a2[0])) < 1e-6;
+      if (!col || RF.includes(p)) return true;
+      const tt = Math.abs(c2[0] - a2[0]) > Math.abs(c2[1] - a2[1]) ? (p[0] - a2[0]) / (c2[0] - a2[0]) : (p[1] - a2[1]) / (c2[1] - a2[1]);
+      return Math.abs(shape(...p) - (shape(...a2) * (1 - tt) + shape(...c2) * tt)) > 0.005;
+    });
+    const nW = Wk.length;
+    Wk.forEach(([u, v]) => mass.v.push([...fromF(u, v), b.base]));
+    Wk.forEach(([u, v]) => mass.v.push([...fromF(u, v), zOf(hF(u, v))]));
     for (let i = 0; i < nW; i++) { const j = (i + 1) % nW; mass.f.push([i, j, nW + j, nW + i]); }
     const bot = RF.map(([u, v]) => { mass.v.push([...fromF(u, v), b.base]); return mass.v.length - 1; });
     for (const [a, b2, c2] of triF(RF)) mass.f.push([bot[c2], bot[b2], bot[a]]);
-    for (const hp of pieces) {
-      let P = RF.slice();
-      for (const [a2, b2, c2] of hp) { P = clipHalf(P, a2, b2, c2); if (P.length < 3) break; }
-      if (P.length < 3 || polyArea(P) < 0.05) continue;
-      const ids = P.map(([u, v]) => { mass.v.push([...fromF(u, v), zOf(hF(u, v))]); return mass.v.length - 1; });
-      for (const [a, b2, c2] of triF(P)) mass.f.push([ids[a], ids[b2], ids[c2]]);
+    // Roof: convex planar pieces, each fanned into triangles.
+    for (const pc of wingRoof(wings, pitched.mode, wclip)) {
+      const ids = pc.poly.map(([u, v]) => { mass.v.push([...fromF(u, v), zOf(hF(u, v))]); return mass.v.length - 1; });
+      for (let k = 1; k < ids.length - 1; k++) mass.f.push([ids[0], ids[k], ids[k + 1]]);
     }
     roofAt = (x, y) => { const [u, v] = toF(x, y); return zOf(hF(u, v)); };
   } else if (p90 - p10 > 3 && areaM2 > 150) {
