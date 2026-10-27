@@ -385,7 +385,16 @@ export class SiteView3D {
         geo.setAttribute('color', new THREE.BufferAttribute(opts.surf.col, 3));
         geo.setIndex(new THREE.BufferAttribute(opts.surf.idx, 1));
         geo.computeVertexNormals();
-        this.sunSurf = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+        // Unlit, so a colour reads exactly as the legend (lighting made sunny walls look dull) — with a light shade
+        // by orientation (roofs full, walls a little darker) so the forms stay readable.
+        const nrm = geo.attributes.normal.array, src = opts.surf.col, col = new Float32Array(src.length), lin = new THREE.Color();
+        for (let v = 0; v < n; v++) {
+          const f = 0.8 + 0.2 * Math.abs(nrm[v * 3 + 1]);
+          lin.setRGB(src[v * 3], src[v * 3 + 1], src[v * 3 + 2], THREE.SRGBColorSpace);
+          col[v * 3] = lin.r * f; col[v * 3 + 1] = lin.g * f; col[v * 3 + 2] = lin.b * f;
+        }
+        geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+        this.sunSurf = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }));
         this.scene.add(this.sunSurf);
         if (this.bldg) this.bldg.visible = false;
       }
