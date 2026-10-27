@@ -7,9 +7,9 @@
 // Del delete · Ctrl+Z / Ctrl+Y undo / redo · ↑ ↓ floors (massing) or slide rows (parking) · R roof form ·
 // [ ] turn parking rows · Enter / double-click finish an outline · Alt+drag duplicate · Alt+click a corner removes
 // it · Shift square corners / snap rotation.
-import { layoutLot, longestEdgeAngle, lanePoly } from './parking.js?v=0.42.0';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.42.0';
-import { massGeom, massMesh, heightAt, presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.42.0';
+import { layoutLot, longestEdgeAngle, lanePoly } from './parking.js?v=0.42.1';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.42.1';
+import { massGeom, massMesh, heightAt, presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.42.1';
 
 const TOOLS = [
   { id: 'select', key: 'V', label: 'Select', icon: '<path d="M5 3l14 8-6 1.5L10 19z"/>' },
@@ -373,7 +373,7 @@ export function createSketch(ctx) {
     map.getContainer().classList.toggle('sk-drawing', t !== 'select');
     sk.v3?.el.classList.toggle('sk-drawing', t !== 'select' && sk.active);
     sk.v3?.sketchNav(sk.active && t !== 'select');
-    const hint = HINTS[t] + (sk.v3 && t !== 'select' ? ' In 3D: right-drag orbits, Shift+right-drag pans.' : '');
+    const hint = HINTS[t] + (t !== 'select' ? (sk.v3 ? ' Wheel-drag pans, Shift+wheel-drag or right-drag orbits.' : ' Wheel-drag pans.') : '');
     if ($('sk-hint')) $('sk-hint').textContent = hint;
     draw();
   }

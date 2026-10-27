@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.42.0">
+  <link rel="stylesheet" href="css/app.css?v=0.42.1">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -624,7 +624,7 @@
           <button type="button" class="btn btn-quiet v3-btn" id="v3-reset">Reset view</button>
         </div>
         <div class="v3-stage" id="v3-stage"></div>
-        <p class="v3-hint">Drag to orbit · right-drag to pan · wheel to zoom</p>
+        <p class="v3-hint">Wheel-drag to pan · Shift+wheel-drag to orbit · wheel to zoom (left-drag also orbits, right-drag pans)</p>
         <p class="v3-msg" id="v3-msg" hidden></p>
       </div>
     </main>
@@ -635,6 +635,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.42.0"></script>
+  <script type="module" src="js/app.js?v=0.42.1"></script>
 </body>
 </html>

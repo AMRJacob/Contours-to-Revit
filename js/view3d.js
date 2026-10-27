@@ -23,6 +23,7 @@ export class SiteView3D {
     this.setSpeed(1);
     this.controls.maxPolarAngle = Math.PI * 0.495;
     this.controls.screenSpacePanning = false;
+    this.sketchNav(false);
     this.scene.add(new THREE.HemisphereLight(0xf2f5ff, 0x3b3226, 0.85));
     const sun = new THREE.DirectionalLight(0xffffff, 1.35);
     sun.position.set(-0.6, 1, 0.45);
@@ -524,10 +525,11 @@ export class SiteView3D {
     if (!hit) return null;
     return { id: m.userData.ids[hit.faceIndex], at: this.native(hit.point) };
   }
-  /** While a sketch drawing tool is on, the left button is the pen: right-drag orbits, Shift+right-drag pans. */
+  /** Mouse buttons: wheel-drag pans and Shift+wheel-drag orbits (Revit-style) everywhere. Otherwise left-drag
+   *  orbits and right-drag pans — except while a sketch drawing tool is on, when left is the pen and right orbits. */
   sketchNav(on) {
     this.controls.mouseButtons = on ? { LEFT: -1, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }
-      : { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+      : { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN };
   }
 
   /** Navigation speed multiplier (1 = default). */
