@@ -220,15 +220,24 @@ export class SiteView3D {
       geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
       geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
       geo.computeVertexNormals();
-      const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, flatShading: true }));
+      const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, flatShading: true, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
       m.name = 'sketchMass';
       m.userData.ids = mass.ids || [];
+      m.userData.faces = mass.fis || [];
       g.add(m);
       if (mass.lines?.length) {
         const lp = new Float32Array(mass.lines.length);
         for (let i = 0; i < mass.lines.length; i += 3) lp.set(P(mass.lines[i], mass.lines[i + 1], mass.lines[i + 2]), i);
         const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(lp, 3));
         g.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x1f2937, transparent: true, opacity: 0.35 })));
+      }
+      if (mass.edges?.length) {                                 // crisp outlines, like a SketchUp model
+        const ep = new Float32Array(mass.edges.length);
+        for (let i = 0; i < mass.edges.length; i += 3) ep.set(P(mass.edges[i], mass.edges[i + 1], mass.edges[i + 2]), i);
+        const eg = new THREE.BufferGeometry(); eg.setAttribute('position', new THREE.BufferAttribute(ep, 3));
+        const el = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color: 0x111827, transparent: true, opacity: 0.85 }));
+        el.name = 'sketchEdges';
+        g.add(el);
       }
     }
     if (park?.lines?.length) {
@@ -510,6 +519,11 @@ export class SiteView3D {
     }
     return null;
   }
+  /** Two points on the cursor ray, as native XY + output Z (as displayed). */
+  rayPoints(sx, sy) {
+    const { ray } = this._ray(sx, sy);
+    return [this.native(ray.origin), this.native(ray.origin.clone().addScaledVector(ray.direction, this.camera.far * 0.1))];
+  }
   /** Point on the horizontal plane at output elevation z under the cursor (native XY), or null. */
   pickPlane(sx, sy, z) {
     const { ray } = this._ray(sx, sy), o = ray.origin, d = ray.direction, Y = (z - this.z0) * this.ex;
@@ -523,7 +537,7 @@ export class SiteView3D {
     if (!m) return null;                       // (still pickable while sun hours hide it behind the coloured copy)
     const hit = this._ray(sx, sy).intersectObject(m, false)[0];
     if (!hit) return null;
-    return { id: m.userData.ids[hit.faceIndex], at: this.native(hit.point) };
+    return { id: m.userData.ids[hit.faceIndex], face: m.userData.faces[hit.faceIndex], at: this.native(hit.point) };
   }
   /** Mouse buttons: wheel-drag pans and Shift+wheel-drag orbits (Revit-style) everywhere. Otherwise left-drag
    *  orbits and right-drag pans — except while a sketch drawing tool is on, when left is the pen and right orbits. */

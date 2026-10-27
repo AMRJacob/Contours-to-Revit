@@ -561,7 +561,7 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .sketch-mode .leaflet-draw { display: none; }
 .sketch-bar { user-select: none; -webkit-user-select: none; position: absolute; z-index: 1002; left: 10px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 4px;
   background: rgba(28,34,38,0.92); border-radius: 10px; padding: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
-.sk-tool { position: relative; width: 52px; height: 52px; border: 0; border-radius: 8px; background: transparent; color: #e7e4dd; cursor: pointer;
+.sk-tool { position: relative; width: 52px; height: 46px; border: 0; border-radius: 8px; background: transparent; color: #e7e4dd; cursor: pointer;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; padding: 0; }
 .sk-tool svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linejoin: round; stroke-linecap: round; }
 .sk-tool span { font-size: 9.5px; line-height: 1; color: #c8cdd1; }
@@ -585,10 +585,14 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .sk-card .seg { flex-wrap: nowrap; }
 .sk-card .seg label span { padding: 3px 7px; }
 .skc-chk { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
-.sk-shapes { position: absolute; left: calc(100% + 6px); top: 62px; display: flex; gap: 3px; padding: 4px;
-  background: rgba(28,34,38,0.92); border-radius: 9px; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
-.sk-shapes[hidden] { display: none; }
-.sk-shapes .sk-tool { width: 40px; height: 40px; }
+.sk-fly { position: absolute; left: calc(100% + 6px); top: 62px; display: flex; align-items: center; gap: 3px; padding: 4px;
+  background: rgba(28,34,38,0.92); border-radius: 9px; box-shadow: 0 4px 14px rgba(0,0,0,.35); color: #e7e4dd; font-size: 12px; white-space: nowrap; }
+.sk-fly[hidden] { display: none; }
+.sk-fly .sk-tool { width: 40px; height: 40px; }
+.sk-num { padding: 6px 9px; gap: 6px; }
+.sk-num input { width: 64px; background: #2b3338; color: #e7e4dd; border: 1px solid #3c464c; border-radius: 4px; font: inherit; padding: 3px 5px; }
+.skc-note { color: #fcd9b6; font-size: 11px; max-width: 250px; white-space: normal; }
+#sk-hint.sk-warn { color: #b45309; font-weight: 600; }
 .view3d .sketch-canvas { z-index: 1; }
 .v3-stage.sk-drawing canvas { cursor: crosshair; }
 .sk-big { display: grid; grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); gap: 6px; margin: 8px 0; }

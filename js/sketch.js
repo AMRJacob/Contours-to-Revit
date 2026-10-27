@@ -1,19 +1,24 @@
-// Sketch tab: a light brainstorming tool on the real site — massing blocks, parking lots with planter islands and
-// drive aisles (arrows, regions, labels and trees come next). Everything updates live: floor area, parking
-// provided vs required, accessible spaces, and the 3D / sun views. Works on the map and in the 3D view.
+// Sketch tab: a light brainstorming and massing tool on the real site — solids you can push and pull like SketchUp,
+// quick massing shapes, parking lots with planter islands and drive aisles. Everything updates live: floor area,
+// parking provided vs required, accessible spaces, and the 3D / sun views. Works on the map and in the 3D view.
 // Colours come from an editable scheme that travels with the project.
 //
-// Hotkeys: V select · M massing (1–5 shape) · P parking · I island · D drive aisle · Esc cancel / select ·
-// Del delete · Ctrl+Z / Ctrl+Y undo / redo · ↑ ↓ floors (massing) or slide rows (parking) · R roof form ·
-// [ ] turn parking rows · Enter / double-click finish an outline · Alt+drag duplicate · Alt+click a corner removes
-// it · Shift square corners / snap rotation.
-import { layoutLot, longestEdgeAngle, lanePoly } from './parking.js?v=0.42.1';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.42.1';
-import { massGeom, massMesh, heightAt, presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.42.1';
+// Hotkeys: V select · M massing shapes (1–5) · L draw (ground or any face) · U push/pull · S slope · P parking ·
+// I island · D drive aisle · Esc cancel / select · Del delete · Ctrl+Z / Ctrl+Y undo / redo · ↑ ↓ floors or slide
+// rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
+// Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
+// Shift: square corners, snap rotation, free (unsnapped) push/pull.
+import { layoutLot, longestEdgeAngle, lanePoly } from './parking.js?v=0.43.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.43.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.43.0';
+import * as SO from './solid.js?v=0.43.0';
 
 const TOOLS = [
   { id: 'select', key: 'V', label: 'Select', icon: '<path d="M5 3l14 8-6 1.5L10 19z"/>' },
-  { id: 'mass', key: 'M', label: 'Massing', icon: '<path d="M4 9l8-4 8 4v9l-8 4-8-4z"/><path d="M4 9l8 4 8-4M12 13v9" opacity=".6"/>' },
+  { id: 'mass', key: 'M', label: 'Shapes', icon: '<path d="M4 9l8-4 8 4v9l-8 4-8-4z"/><path d="M4 9l8 4 8-4M12 13v9" opacity=".6"/>' },
+  { id: 'pen', key: 'L', label: 'Draw', icon: '<path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3" opacity=".6"/>' },
+  { id: 'push', key: 'U', label: 'Push/Pull', icon: '<path d="M5 14h14v6H5z"/><path d="M12 12V3M8.5 6.5L12 3l3.5 3.5"/>' },
+  { id: 'slope', key: 'S', label: 'Slope', icon: '<path d="M3 19L21 9v10z"/><path d="M6 15l9-5M12 9.5l3 .5-1 3" opacity=".8"/>' },
   { id: 'lot', key: 'P', label: 'Parking', icon: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v6M11 4v6M15 4v6M7 20v-6M11 20v-6M15 20v-6" opacity=".7"/>' },
   { id: 'island', key: 'I', label: 'Island', icon: '<rect x="3" y="8" width="18" height="8" rx="4"/><path d="M9 12h6" opacity=".7"/>' },
   { id: 'drive', key: 'D', label: 'Drive aisle', icon: '<path d="M5 21L10 3M19 21L14 3"/><path d="M12 5v3M12 11v3M12 17v3" opacity=".7"/>' },
@@ -26,8 +31,11 @@ const SHAPES = [
   { id: 'court', key: '5', label: 'Courtyard', icon: '<rect x="4" y="4" width="16" height="16"/><rect x="9" y="9" width="6" height="6"/>' },
 ];
 const HINTS = {
-  select: 'Click to edit · drag to move · drag corners to reshape, edge dots to add a corner, ⟳ to rotate, ⤡ to scale · Alt+click a corner removes it · Alt+drag duplicates.',
-  mass: 'Drag a shape (1–5 picks box, round, L, U, courtyard), or click corners and double-click to finish. ↑ ↓ floors · R roof.',
+  select: 'Click to edit · drag to move · ⟳ rotate, ⤡ scale · Ctrl+drag a point, edge or face to move it (add Shift to move it up or down) · Alt+drag duplicates.',
+  mass: 'Drag a quick block (1–5: box, round, L, U, courtyard), or click corners and double-click. ↑ ↓ floors · R roof.',
+  pen: 'On the ground: drag a rectangle or click an outline — it becomes a flat shape to pull up. On a face: drag a rectangle inside it, or click from edge to edge to split it.',
+  push: 'Drag a face in or out. Tops snap to whole floors (Shift = free). Ctrl = always make new sides. Type an exact distance in the box.',
+  slope: 'Drag across a face toward its high side to tilt it at the pitch in the box (walls lean out). The back edge stays put.',
   lot: 'Drag a rectangle, or click corners and double-click to finish. [ ] turn the rows, ↑ ↓ slide them.',
   island: 'Drag or click out a planter island inside a lot — the stalls under it go away.',
   drive: 'Drag a straight drive aisle, or click points and double-click to finish. Stalls it crosses are cleared.',
@@ -39,15 +47,16 @@ const DEFAULT_RATIOS = {   // examples only — every jurisdiction sets its own
 };
 const LISTS = { mass: 'masses', lot: 'lots', island: 'islands', drive: 'drives' };
 const svg = i => `<svg viewBox="0 0 24 24">${i}</svg>`;
+const ORANGE = '#e8913f';
 
 export function createSketch(ctx) {
   const { map, $, escapeHtml } = ctx;
   const sk = {
-    model: blank(), tool: 'select', shape: 'box', sel: null, drag: null, draw: null, undo: [], redo: [], ver: 0,
-    site: null, key: null, layouts: new Map(), geoms: new Map(), active: false, v3: null,
+    model: blank(), tool: 'select', shape: 'box', sel: null, drag: null, draw: null, op: null, hov: null, undo: [], redo: [], ver: 0,
+    site: null, key: null, layouts: new Map(), infos: new Map(), active: false, v3: null, pitch: 6,
   };
   function blank() {
-    return { v: 2, masses: [], lots: [], islands: [], drives: [], scheme: JSON.parse(JSON.stringify(BUILTIN_SCHEMES[0])), ratios: JSON.parse(JSON.stringify(DEFAULT_RATIOS)) };
+    return { v: 3, masses: [], lots: [], islands: [], drives: [], scheme: JSON.parse(JSON.stringify(BUILTIN_SCHEMES[0])), ratios: JSON.parse(JSON.stringify(DEFAULT_RATIOS)) };
   }
   const scheme = () => sk.model.scheme;
   const uid = () => Math.random().toString(36).slice(2, 9);
@@ -55,7 +64,9 @@ export function createSketch(ctx) {
   const sfPerNative2 = () => 1 / perFt() ** 2;
   const metric = () => sk.site?.outUnit === 'm';
   const outPerFt = () => (metric() ? 0.3048 : 1);
+  const kz = () => perFt() / outPerFt();                                   // native units per output unit
   const uLen = () => (metric() ? 'm' : 'ft');
+  const fmtLen = n => `${(n / kz()).toFixed(Math.abs(n / kz()) < 10 ? 1 : 0)} ${uLen()}`;   // native length → text
   const fmtArea = sf => (metric() ? `${Math.round(sf * 0.092903).toLocaleString()} m²` : `${Math.round(sf).toLocaleString()} sf`);
   const centroid = P => { let x = 0, y = 0; for (const p of P) { x += p[0]; y += p[1]; } return [x / P.length, y / P.length]; };
   const bbox = P => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const [x, y] of P) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; } return [x0, y0, x1, y1]; };
@@ -64,24 +75,39 @@ export function createSketch(ctx) {
   const ex3 = () => (sk.v3 ? ctx.ex3d?.() || 1 : 1);
   const zGround = p => { const z = ctx.zAt(p[0], p[1]); return Number.isFinite(z) ? z : 0; };
   const closed = kind => kind !== 'drive';
+  const massById = id => sk.model.masses.find(m => m.id === id);
 
-  // ---------------------------------------------------------------- model helpers
-  function geom(m) {
-    const key = JSON.stringify([m.pts, m.floors, m.ftf, m.court, m.step, m.roof, perFt(), outPerFt()]);
-    const c = sk.geoms.get(m.id);
-    if (c && c.key === key) return c.G;
-    const G = massGeom(m, perFt(), outPerFt());
-    sk.geoms.set(m.id, { key, G });
-    return G;
+  // ---------------------------------------------------------------- solids
+  const ftfN = m => m.ftf * kz();
+  /** Rebuild a preset block's solid from its parameters. */
+  function regen(m) { if (!m.prm) return; const S = SO.fromParams(m.prm, perFt(), ftfN(m)); m.v = S.v; m.f = S.f; }
+  /** Hand edits turn a preset block into a free solid (its roof / courtyard / step settings are baked in). */
+  const freeze = m => { delete m.prm; };
+  /** Everything derived from a solid (cached): triangles, floor plates, area, top surface, outline, base elevation. */
+  function info(m) {
+    const key = JSON.stringify([m.v, m.f, m.ftf, kz()]);
+    const c = sk.infos.get(m.id);
+    if (c && c.key === key && !(sk.baseLock?.id === m.id)) return c.I;
+    const tris = SO.solidTris(m), P = SO.plates(m, ftfN(m), tris);
+    const xy = m.v.map(p => [p[0], p[1]]), foot = m.v.filter(p => p[2] < 1e-6).map(p => [p[0], p[1]]);
+    const F = foot.length >= 3 ? foot : xy;
+    let base;
+    if (sk.baseLock?.id === m.id) base = sk.baseLock.base;
+    else { let lo = Infinity; for (const p of [...F, centroid(F)]) { const z = ctx.zAt(...p); if (Number.isFinite(z) && z < lo) lo = z; } base = Number.isFinite(lo) ? lo : 0; }
+    const I = { tris, P, floors: P.length, gfa: P.reduce((a, p) => a + p.area, 0), zmax: SO.zMax(m), top: SO.topAt(m, tris), edges: SO.edgesOf(m),
+      c: centroid(xy), bb: bbox(xy), base, sheet: SO.isSheet(m), foot: F };
+    sk.infos.set(m.id, { key, I });
+    return I;
   }
-  const massGfa = m => geom(m).fa * sfPerNative2();
-  function massBase(m) {
-    let lo = Infinity;
-    for (const p of [...m.pts, centroid(m.pts)]) { const z = ctx.zAt(...p); if (Number.isFinite(z) && z < lo) lo = z; }
-    return Number.isFinite(lo) ? lo : 0;
-  }
-  const massHeight = m => m.floors * m.ftf;
-  const massTop = m => massBase(m) + massHeight(m);
+  const massGfa = m => info(m).gfa * sfPerNative2();
+  const massBase = m => info(m).base;
+  const massTop = m => massBase(m) + info(m).zmax / kz();
+  /** Output elevation (as drawn in the current view) of a solid-space point. */
+  const zOut = (m, z) => massBase(m) + z / kz() / ex3() + (info(m).sheet ? 0.15 : 0);
+  const P3 = (m, p) => scr([p[0], p[1]], zOut(m, p[2]));
+  const outline = o => o.pts || o.prm?.pts || info(o).foot;
+
+  // ---------------------------------------------------------------- lots
   function lotOpts(l) {
     const bb = bbox(l.pts);
     const islands = sk.model.islands.filter(i => overlap(bbox(i.pts), bb)).map(i => i.pts);
@@ -105,7 +131,7 @@ export function createSketch(ctx) {
   function nearestMass(l) {
     const c = centroid(l.pts);
     let best = null, bd = Infinity;
-    for (const m of sk.model.masses) { const mc = centroid(m.pts), d = Math.hypot(mc[0] - c[0], mc[1] - c[1]); if (d < bd) { bd = d; best = mc; } }
+    for (const m of sk.model.masses) { if (info(m).sheet) continue; const mc = info(m).c, d = Math.hypot(mc[0] - c[0], mc[1] - c[1]); if (d < bd) { bd = d; best = mc; } }
     return best;
   }
   function stats() {
@@ -139,21 +165,32 @@ export function createSketch(ctx) {
   }
   /** Quick refresh of the 3D blocks while dragging (the full rebuild waits until the drag pauses). */
   function live() { if (!sk.v3 || sk.liveQ) return; sk.liveQ = requestAnimationFrame(() => { sk.liveQ = 0; ctx.onLive?.(); }); }
+  function dragged() { sk.ver++; draw(); panel(); live(); clearTimeout(sk.softT); sk.softT = setTimeout(() => ctx.onChange?.(), 160); }
   async function save() { if (sk.key) await ctx.idb.set(sk.key, sk.model).catch(() => {}); }
   const findSel = () => (sk.sel ? list(sk.sel.kind)?.find(o => o.id === sk.sel.id) : null);
 
   // ---------------------------------------------------------------- site
+  /** Older saves: blocks were outlines with floors → preset solids. */
+  function migrate(m) {
+    for (const k of SAVED) if (!m[k]) m[k] = [];
+    for (const b of m.masses) {
+      if (b.v) continue;
+      b.prm = { pts: b.pts, floors: b.floors || 3, court: b.court || 0, step: b.step || null, roof: b.roof || null };
+      for (const k of ['pts', 'floors', 'court', 'step', 'roof']) delete b[k];
+      regen(b);
+    }
+    m.v = 3;
+  }
   async function onSite(site, pending) {
-    sk.site = site; sk.sel = null; sk.draw = null; sk.layouts.clear(); sk.geoms.clear(); sk.undo = []; sk.redo = [];
+    sk.site = site; sk.sel = null; sk.draw = null; sk.op = null; sk.layouts.clear(); sk.infos.clear(); sk.undo = []; sk.redo = [];
     if (!site) { sk.key = null; sk.model = blank(); draw(); panel(); return; }
     const b = site.box;
     sk.key = `sketch:${site.zone.code}:${[b.xmin, b.ymin, b.xmax, b.ymax].map(v => Math.round(v / 10)).join(',')}`;
     let m = pending || await ctx.idb.get(sk.key).catch(() => null);
     if (!m || !m.masses) m = blank();
-    for (const k of SAVED) if (!m[k]) m[k] = [];
     if (!m.scheme) m.scheme = JSON.parse(JSON.stringify(BUILTIN_SCHEMES[0]));
     if (!m.ratios) m.ratios = JSON.parse(JSON.stringify(DEFAULT_RATIOS));
-    m.v = 2;
+    migrate(m);
     sk.model = m;
     if (pending) save();
     sk.ver++;
@@ -174,10 +211,13 @@ export function createSketch(ctx) {
   const visible = () => (sk.v3 ? sk.active : showOnMap());
   /** Blocks and lots show on the map in the Sketch tab and on the Existing site tab (not while sculpting grades). */
   function showOnMap() { return sk.active || ctx.mode() === 'existing'; }
-  /** Elevation at which a block's handles sit (its outline top in 3D; the ground for everything else). */
+  /** Elevation at which a selection's handles sit. */
   function handleZ(kind, o) {
     if (!sk.v3) return () => 0;
-    if (kind === 'mass') { const z = massBase(o) + geom(o).tiers[0].h1 / ex3(); return () => z; }
+    if (kind === 'mass') {
+      const st = o.prm?.step, h = o.prm ? (st?.at > 0 ? st.at : o.prm.floors) * o.ftf : 0, z = massBase(o) + h / ex3() + 0.2;
+      return () => z;
+    }
     return p => zGround(p) + 0.2;
   }
 
@@ -193,14 +233,27 @@ export function createSketch(ctx) {
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     if (sk.v3) drawLabels3d(g); else drawPlan(g);
     drawSelection(g);
+    drawHover(g);
     drawInProgress(g);
+    drawOp(g);
   }
   /** Screen path of a ring (null if any corner is behind the camera). */
-  function sPath(g, P, zf, close = true) {
+  function sPath(g, P, zf, close = true, begin = true) {
     const Q = P.map(p => scr(p, zf ? zf(p) : undefined));
     if (Q.some(q => !q)) return false;
-    g.beginPath(); Q.forEach((q, i) => (i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])));
+    if (begin) g.beginPath();
+    Q.forEach((q, i) => (i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])));
     if (close) g.closePath();
+    return true;
+  }
+  /** Screen path of a solid's face (outline + holes). */
+  function facePath(g, m, fi) {
+    g.beginPath();
+    for (const L of SO.faceLoops(m, fi)) {
+      const Q = L.map(i => P3(m, m.v[i]));
+      if (Q.some(q => !q)) return false;
+      Q.forEach((q, i) => (i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]))); g.closePath();
+    }
     return true;
   }
   function drawPlan(g) {
@@ -222,45 +275,49 @@ export function createSketch(ctx) {
         }
       }
       for (const isl of L.islands || []) { path(isl); g.fillStyle = green; g.fill(); g.strokeStyle = 'rgba(20,83,45,0.6)'; g.lineWidth = 1; g.stroke(); }
-      path(l.pts); g.lineWidth = sel ? 2.5 : 1.5; g.strokeStyle = sel ? '#e8913f' : 'rgba(30,41,59,0.85)'; g.stroke();
+      path(l.pts); g.lineWidth = sel ? 2.5 : 1.5; g.strokeStyle = sel ? ORANGE : 'rgba(30,41,59,0.85)'; g.stroke();
     }
     for (const d of sk.model.drives) {
       const w = (d.w || 24) * perFt();
       for (let i = 0; i < d.pts.length - 1; i++) { path(lanePoly(d.pts[i], d.pts[i + 1], w)); g.fillStyle = colorOf(scheme(), 'lot'); g.globalAlpha = 0.9; g.fill(); g.globalAlpha = 1; }
       path(d.pts, false); g.setLineDash([8, 6]); g.strokeStyle = '#fde047'; g.lineWidth = 1.5; g.stroke(); g.setLineDash([]);
     }
-    for (const isl of sk.model.islands) { path(isl.pts); g.fillStyle = green; g.fill(); g.strokeStyle = sk.sel?.id === isl.id ? '#e8913f' : 'rgba(20,83,45,0.8)'; g.lineWidth = sk.sel?.id === isl.id ? 2.5 : 1.2; g.stroke(); }
+    for (const isl of sk.model.islands) { path(isl.pts); g.fillStyle = green; g.fill(); g.strokeStyle = sk.sel?.id === isl.id ? ORANGE : 'rgba(20,83,45,0.8)'; g.lineWidth = sk.sel?.id === isl.id ? 2.5 : 1.2; g.stroke(); }
     for (const l of sk.model.lots) {
       const L = lotLayout(l);
       label(g, scr(centroid(l.pts)), `${L.total} spaces`, L.acc ? `${L.acc} accessible${L.van ? ` (${L.van} van)` : ''}${L.short ? ` · ${L.short} short` : ''}` : '');
     }
-    // Massing, lowest first, each with its courtyard, step-back and roof lines.
+    // Solids from above: their upward faces, lowest first, shaded a little by slope; roof and step lines show.
     const ms = sk.model.masses.slice().sort((a, b) => massTop(a) - massTop(b));
     for (const m of ms) {
-      const sel = sk.sel?.id === m.id, col = colorOf(scheme(), m.use), G = geom(m);
-      g.beginPath();
-      for (const R of [G.tiers[0].ring, G.tiers[0].hole].filter(Boolean)) {
-        R.forEach((p, i) => { const [x, y] = toS(M, p); if (i) g.lineTo(x, y); else g.moveTo(x, y); });
-        g.closePath();
+      const I = info(m), sel = sk.sel?.id === m.id, col = colorOf(scheme(), m.use);
+      const up = m.f.map((_, fi) => ({ fi, n: SO.faceNormal(m, fi), z: SO.faceVerts(m, fi).reduce((a, i) => a + m.v[i][2], 0) / SO.faceVerts(m, fi).length }))
+        .filter(o => o.n[2] > 0.05).sort((a, b) => a.z - b.z);
+      for (const o of up) {
+        if (!facePath(g, m, o.fi)) continue;
+        g.fillStyle = col; g.globalAlpha = I.sheet ? 0.5 : 0.9; g.fill('evenodd');
+        if (o.n[2] < 0.97) { g.fillStyle = o.n[1] > 0 || o.n[0] < 0 ? '#ffffff' : '#000000'; g.globalAlpha = 0.12; g.fill('evenodd'); }
+        g.globalAlpha = 1; g.lineWidth = 1; g.strokeStyle = 'rgba(17,24,39,0.5)'; g.stroke();
       }
-      g.fillStyle = col; g.globalAlpha = 0.88; g.fill('evenodd'); g.globalAlpha = 1;
-      g.lineWidth = sel ? 2.5 : 1.25; g.strokeStyle = sel ? '#e8913f' : 'rgba(17,24,39,0.8)'; g.stroke();
-      g.lineWidth = 1; g.strokeStyle = 'rgba(17,24,39,0.45)';
-      for (const t of G.tiers.slice(1)) { path(t.ring); g.stroke(); }
-      if (G.roof) for (const pc of G.roof.pieces) { path(pc); g.stroke(); }
+      const F = I.foot;
+      if (F.length >= 3) {
+        const P = m.prm?.pts || null;
+        if (P) { path(P); g.lineWidth = sel ? 2.5 : 1.25; g.strokeStyle = sel ? ORANGE : 'rgba(17,24,39,0.85)'; if (I.sheet) g.setLineDash([6, 4]); g.stroke(); g.setLineDash([]); }
+        else if (sel) for (const [a, b] of I.edges) if (m.v[a][2] < 1e-6 && m.v[b][2] < 1e-6) { g.beginPath(); g.moveTo(...scr(m.v[a])); g.lineTo(...scr(m.v[b])); g.lineWidth = 2.5; g.strokeStyle = ORANGE; g.stroke(); }
+      }
     }
-    for (const m of ms) {
-      const u = scheme().uses.find(x => x.key === m.use);
-      label(g, scr(labelPt(m)), `${u?.label || m.use} · ${m.floors} fl`, fmtArea(massGfa(m)));
-    }
+    for (const m of ms) label(g, scr(labelPt(m)), massTitle(m), massSub(m));
   }
-  /** A label spot inside the block (not over a courtyard). */
+  const useLabel = m => scheme().uses.find(x => x.key === m.use)?.label || m.use;
+  const massTitle = m => (info(m).sheet ? `${useLabel(m)} · flat shape` : `${useLabel(m)} · ${info(m).floors} fl`);
+  const massSub = m => (info(m).sheet ? 'pull it up (U)' : fmtArea(massGfa(m)));
+  /** A label spot on top of the block (not over a courtyard). */
   function labelPt(m) {
-    const c = centroid(m.pts), G = geom(m);
-    if (!G.tiers[0].hole && inPoly(m.pts, ...c)) return c;
-    // Middle of the first wing: halfway between the first outline edge and the matching courtyard edge.
-    const R = m.pts, H = G.tiers[0].hole || R;
-    return [(R[0][0] + R[1][0] + H[0][0] + H[1][0]) / 4, (R[0][1] + R[1][1] + H[0][1] + H[1][1]) / 4];
+    const I = info(m);
+    if (I.top(...I.c)) return I.c;
+    let best = null, ba = -1;
+    m.f.forEach((f, fi) => { if (SO.faceNormal(m, fi)[2] <= 0.05) return; const P = f.o.map(i => m.v[i]); const a = Math.abs(area(P)); if (a > ba) { ba = a; best = centroid(P); } });
+    return best || I.c;
   }
   function drawLabels3d(g) {
     for (const l of sk.model.lots) {
@@ -268,8 +325,8 @@ export function createSketch(ctx) {
       label(g, scr(c, zGround(c) + 1), `${L.total} spaces`, L.acc ? `${L.acc} accessible${L.van ? ` (${L.van} van)` : ''}` : '');
     }
     for (const m of sk.model.masses) {
-      const u = scheme().uses.find(x => x.key === m.use), c = labelPt(m);
-      label(g, scr(c, massBase(m) + (massHeight(m) + (geom(m).roof ? 6 : 2)) / ex3()), `${u?.label || m.use} · ${m.floors} fl`, fmtArea(massGfa(m)));
+      const c = labelPt(m), I = info(m), t = I.top(...c);
+      label(g, scr(c, zOut(m, (t ? t.z : I.zmax)) + 3 / ex3()), massTitle(m), massSub(m));
     }
   }
   function label(g, q, a, b) {
@@ -282,13 +339,24 @@ export function createSketch(ctx) {
     g.fillStyle = '#111827'; g.fillText(a, x, b ? y - 7 : y);
     if (b) { g.font = '11px system-ui, sans-serif'; g.fillStyle = '#374151'; g.fillText(b, x, y + 8); }
   }
+  function tag(g, q, text) {
+    if (!q) return;
+    g.font = '600 12px system-ui, sans-serif'; g.textAlign = 'left'; g.textBaseline = 'middle';
+    const w = g.measureText(text).width + 10;
+    g.fillStyle = 'rgba(28,34,38,0.92)'; g.beginPath(); g.roundRect(q[0] + 12, q[1] - 22, w, 20, 4); g.fill();
+    g.fillStyle = '#fde7cf'; g.fillText(text, q[0] + 17, q[1] - 12);
+  }
 
   // ---------------------------------------------------------------- selection handles
-  /** Handles of the selection: corners (v), edge midpoints (m, drag to add a corner), rotate (r), scale (s). */
+  /** Handles of the selection: corners (v), edge midpoints (m), rotate (r), scale (s). Free solids: rotate and scale. */
   function handles(kind, o) {
-    const zf = handleZ(kind, o), out = [], P = o.pts, n = P.length, cl = closed(kind);
-    P.forEach((p, i) => out.push({ t: 'v', i, p, z: zf(p) }));
-    if (n <= 16) for (let i = 0; i < (cl ? n : n - 1); i++) { const a = P[i], b = P[(i + 1) % n], p = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; out.push({ t: 'm', i, p, z: zf(p) }); }
+    const zf = handleZ(kind, o), out = [];
+    const editable = kind !== 'mass' || o.prm;
+    const P = outline(o), n = P.length, cl = closed(kind);
+    if (editable) {
+      P.forEach((p, i) => out.push({ t: 'v', i, p, z: zf(p) }));
+      if (n <= 16) for (let i = 0; i < (cl ? n : n - 1); i++) { const a = P[i], b = P[(i + 1) % n], p = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; out.push({ t: 'm', i, p, z: zf(p) }); }
+    }
     if (cl) {
       const c = centroid(P), bb = bbox(P), r = Math.max(...P.map(p => Math.hypot(p[0] - c[0], p[1] - c[1])));
       const rp = [c[0], c[1] + r * 1.18 + 6 * perFt()], sp = [bb[2] + 8 * perFt(), bb[1] - 8 * perFt()];   // scale sits off the corner
@@ -299,44 +367,56 @@ export function createSketch(ctx) {
   function drawSelection(g) {
     const o = findSel(); if (!o) return;
     const kind = sk.sel.kind, zf = handleZ(kind, o);
-    if (sk.v3) {      // outline of the selection, so it reads against the model
-      if (sPath(g, o.pts, zf, closed(kind))) { g.lineWidth = 2.5; g.strokeStyle = '#e8913f'; g.stroke(); }
+    if (sk.v3) {
+      if (kind === 'mass') { g.lineWidth = 2; g.strokeStyle = ORANGE; for (const [a, b] of info(o).edges) { const p = P3(o, o.v[a]), q = P3(o, o.v[b]); if (!p || !q) continue; g.beginPath(); g.moveTo(...p); g.lineTo(...q); g.stroke(); } }
+      else if (sPath(g, o.pts, zf, closed(kind))) { g.lineWidth = 2.5; g.strokeStyle = ORANGE; g.stroke(); }
     }
     for (const h of handles(kind, o)) {
       const q = scr(h.p, h.z); if (!q) continue;
       const [x, y] = q;
       g.beginPath();
-      if (h.t === 'v') { g.rect(x - 4, y - 4, 8, 8); g.fillStyle = '#fff'; g.fill(); g.strokeStyle = '#e8913f'; g.lineWidth = 1.5; g.stroke(); }
+      if (h.t === 'v') { g.rect(x - 4, y - 4, 8, 8); g.fillStyle = '#fff'; g.fill(); g.strokeStyle = ORANGE; g.lineWidth = 1.5; g.stroke(); }
       else if (h.t === 'm') { g.arc(x, y, 3.2, 0, Math.PI * 2); g.fillStyle = 'rgba(232,145,63,0.85)'; g.fill(); }
       else {
         const cq = scr(h.c, h.z);
         if (h.t === 'r' && cq) { g.save(); g.setLineDash([3, 3]); g.strokeStyle = 'rgba(232,145,63,0.8)'; g.lineWidth = 1; g.beginPath(); g.moveTo(...cq); g.lineTo(x, y); g.stroke(); g.restore(); g.beginPath(); }
-        g.arc(x, y, 8, 0, Math.PI * 2); g.fillStyle = '#1c2226'; g.fill(); g.strokeStyle = '#e8913f'; g.lineWidth = 1.5; g.stroke();
-        g.fillStyle = '#e8913f'; g.font = '700 11px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+        g.arc(x, y, 8, 0, Math.PI * 2); g.fillStyle = '#1c2226'; g.fill(); g.strokeStyle = ORANGE; g.lineWidth = 1.5; g.stroke();
+        g.fillStyle = ORANGE; g.font = '700 11px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
         g.fillText(h.t === 'r' ? '⟳' : '⤡', x, y + 0.5);
       }
     }
   }
+  /** Highlight of the face / edge / point under the cursor for the face tools and Ctrl-move. */
+  function drawHover(g) {
+    const h = sk.hov; if (!h || sk.op) return;
+    const m = massById(h.id); if (!m) return;
+    g.save();
+    if (h.t === 'f') { if (facePath(g, m, h.fi)) { g.fillStyle = 'rgba(232,145,63,0.28)'; g.fill('evenodd'); g.strokeStyle = ORANGE; g.lineWidth = 2; g.stroke(); } }
+    else if (h.t === 'e') { const p = P3(m, m.v[h.a]), q = P3(m, m.v[h.b]); if (p && q) { g.beginPath(); g.moveTo(...p); g.lineTo(...q); g.strokeStyle = ORANGE; g.lineWidth = 4; g.stroke(); } }
+    else if (h.t === 'v') { const p = P3(m, m.v[h.i]); if (p) { g.beginPath(); g.arc(p[0], p[1], 6, 0, Math.PI * 2); g.fillStyle = ORANGE; g.fill(); g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.stroke(); } }
+    g.restore();
+  }
   function drawInProgress(g) {
     const d = sk.draw; if (!d) return;
+    if (d.face) return drawPenFace(g, d);
     const P = drawPts();
     if (P.length > 1) {
       const cl = d.kind !== 'drive' && (d.rect || P.length > 2);
       const zf = sk.v3 ? (p => zGround(p) + 0.3) : null;
       if (sPath(g, P, zf, cl)) {
-        if (cl) { g.fillStyle = d.kind === 'mass' ? colorOf(scheme(), sk.last?.use || scheme().uses[0].key) : d.kind === 'island' ? colorOf(scheme(), 'green') : colorOf(scheme(), 'lot'); g.globalAlpha = 0.45; g.fill(); g.globalAlpha = 1; }
-        g.setLineDash([6, 4]); g.strokeStyle = '#e8913f'; g.lineWidth = d.kind === 'drive' ? 3 : 2; g.stroke(); g.setLineDash([]);
+        if (cl) { g.fillStyle = d.kind === 'mass' || d.kind === 'sheet' ? colorOf(scheme(), sk.last?.use || scheme().uses[0].key) : d.kind === 'island' ? colorOf(scheme(), 'green') : colorOf(scheme(), 'lot'); g.globalAlpha = 0.45; g.fill(); g.globalAlpha = 1; }
+        g.setLineDash([6, 4]); g.strokeStyle = ORANGE; g.lineWidth = d.kind === 'drive' ? 3 : 2; g.stroke(); g.setLineDash([]);
       }
       if (cl) {
         const ar = area(P) * sfPerNative2(), c = centroid(P);
-        if (ar > 1) label(g, scr(c, zf ? zf(c) : undefined), fmtArea(ar), d.kind === 'mass' ? `${sk.last?.floors || 3} floors → ${fmtArea(ar * (sk.last?.floors || 3))}` : '');
+        if (ar > 1) label(g, scr(c, zf ? zf(c) : undefined), fmtArea(ar), d.kind === 'mass' ? `${sk.last?.floors || 3} floors → ${fmtArea(ar * (sk.last?.floors || 3))}` : d.kind === 'sheet' ? 'then pull it up (U)' : '');
       } else {
-        let len = 0; for (let i = 1; i < P.length; i++) len += Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]);
+        let L = 0; for (let i = 1; i < P.length; i++) L += Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]);
         const c = P[P.length - 1];
-        label(g, scr(c, zf ? zf(c) : undefined), `${Math.round(len / perFt() * outPerFt())} ${uLen()}`, '');
+        label(g, scr(c, zf ? zf(c) : undefined), fmtLen(L), '');
       }
     }
-    for (const p of d.pts || []) { const q = scr(p, sk.v3 ? zGround(p) + 0.3 : undefined); if (!q) continue; g.beginPath(); g.arc(q[0], q[1], 3.5, 0, Math.PI * 2); g.fillStyle = '#e8913f'; g.fill(); }
+    for (const p of d.pts || []) { const q = scr(p, sk.v3 ? zGround(p) + 0.3 : undefined); if (!q) continue; g.beginPath(); g.arc(q[0], q[1], 3.5, 0, Math.PI * 2); g.fillStyle = ORANGE; g.fill(); }
   }
   const rectPts = (a, b) => [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]];
   function drawPts() {
@@ -355,7 +435,9 @@ export function createSketch(ctx) {
   bar.innerHTML = TOOLS.map(t => `<button type="button" class="sk-tool" data-tool="${t.id}" title="${t.label} (${t.key})" aria-label="${t.label}">${svg(t.icon)}<kbd>${t.key}</kbd><span>${t.label}</span></button>`).join('')
     + '<div class="sk-sep"></div><button type="button" class="sk-tool sk-mini" data-act="undo" title="Undo (Ctrl+Z)" aria-label="Undo"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg><kbd>^Z</kbd></button>'
     + '<button type="button" class="sk-tool sk-mini" data-act="redo" title="Redo (Ctrl+Y)" aria-label="Redo"><svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h3"/></svg><kbd>^Y</kbd></button>'
-    + `<div class="sk-shapes" hidden>${SHAPES.map(s => `<button type="button" class="sk-tool sk-mini" data-shape="${s.id}" title="${s.label} (${s.key})" aria-label="${s.label}">${svg(s.icon)}<kbd>${s.key}</kbd></button>`).join('')}</div>`;
+    + `<div class="sk-fly" data-for="mass" hidden>${SHAPES.map(s => `<button type="button" class="sk-tool sk-mini" data-shape="${s.id}" title="${s.label} (${s.key})" aria-label="${s.label}">${svg(s.icon)}<kbd>${s.key}</kbd></button>`).join('')}</div>`
+    + '<div class="sk-fly sk-num" data-for="push" hidden><span>Distance</span><input type="number" step="0.5" data-fly="dist" title="Type an exact distance for the last push/pull"><span class="sk-u"></span></div>'
+    + '<div class="sk-fly sk-num" data-for="slope" hidden><span>Pitch</span><input type="number" step="0.5" min="0" max="48" value="6" data-fly="pitch" title="Rise per 12 of run"><span>: 12</span></div>';
   map.getContainer().appendChild(bar);
   L.DomEvent.disableClickPropagation(bar); L.DomEvent.disableScrollPropagation(bar);
   bar.addEventListener('click', e => {
@@ -365,15 +447,26 @@ export function createSketch(ctx) {
     if (b.dataset.act === 'undo') doUndo();
     if (b.dataset.act === 'redo') doRedo();
   });
+  bar.addEventListener('change', e => {
+    const t = e.target, v = Number(t.value);
+    if (t.dataset.fly === 'pitch') { sk.pitch = Math.max(0, Math.min(48, Number.isFinite(v) ? v : 6)); redoLast('slope'); }
+    if (t.dataset.fly === 'dist' && Number.isFinite(v)) redoLast('push', v * kz());
+  });
   function setTool(t) {
-    sk.tool = t; sk.draw = null;
+    sk.tool = t; sk.draw = null; sk.hov = null;
+    card();
     bar.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
-    bar.querySelector('.sk-shapes').hidden = t !== 'mass';
+    bar.querySelectorAll('.sk-fly').forEach(f => {
+      f.hidden = f.dataset.for !== t;
+      if (!f.hidden) { const b = bar.querySelector(`[data-tool="${t}"]`); f.style.top = `${b.offsetTop}px`; }
+    });
+    bar.querySelector('.sk-u').textContent = uLen();
     setShape(sk.shape, true);
-    map.getContainer().classList.toggle('sk-drawing', t !== 'select');
-    sk.v3?.el.classList.toggle('sk-drawing', t !== 'select' && sk.active);
-    sk.v3?.sketchNav(sk.active && t !== 'select');
-    const hint = HINTS[t] + (t !== 'select' ? (sk.v3 ? ' Wheel-drag pans, Shift+wheel-drag or right-drag orbits.' : ' Wheel-drag pans.') : '');
+    const drawing = t !== 'select';
+    map.getContainer().classList.toggle('sk-drawing', drawing);
+    sk.v3?.el.classList.toggle('sk-drawing', drawing && sk.active);
+    sk.v3?.sketchNav(sk.active && drawing);
+    const hint = HINTS[t] + (drawing ? (sk.v3 ? ' Wheel-drag pans, Shift+wheel-drag or right-drag orbits.' : ' Wheel-drag pans.') : '');
     if ($('sk-hint')) $('sk-hint').textContent = hint;
     draw();
   }
@@ -393,14 +486,17 @@ export function createSketch(ctx) {
   const num = (k, v, min, max, step, w = 46) => `<input type="number" data-k="${k}" min="${min}" max="${max}" step="${step}" value="${v}" style="width:${w}px">`;
   function cardHtml(kind, o) {
     if (kind === 'mass') {
-      const r = o.roof || { type: 'flat', pitch: 6 }, st = o.step || { at: 0, inset: 10 };
-      return `<div class="skc-row"><select data-k="use">${scheme().uses.map(u => `<option value="${u.key}"${u.key === o.use ? ' selected' : ''}>${escapeHtml(u.label)}</option>`).join('')}</select>
-          <button type="button" data-k="del" title="Delete (Del)">🗑</button></div>
-        <div class="skc-row"><span>Floors</span><button type="button" data-k="fl-">−</button><output data-o="floors"></output><button type="button" data-k="fl+">+</button>
-          <span>@</span>${num('ftf', o.ftf, 2, 40, 0.5)}<span>${uLen()}</span></div>
+      const head = `<div class="skc-row"><select data-k="use">${scheme().uses.map(u => `<option value="${u.key}"${u.key === o.use ? ' selected' : ''}>${escapeHtml(u.label)}</option>`).join('')}</select>
+          <button type="button" data-k="del" title="Delete (Del)">🗑</button></div>`;
+      const floors = `<div class="skc-row"><span>Floors</span><button type="button" data-k="fl-" title="↓">−</button><output data-o="floors"></output><button type="button" data-k="fl+" title="↑">+</button>
+          <span>@</span>${num('ftf', o.ftf, 2, 40, 0.5)}<span>${uLen()}</span></div>`;
+      if (info(o).sheet) return `${head}<div class="skc-row skc-note">Flat shape — pull it up with Push/Pull (U).</div><div class="skc-row skc-read" data-o="read"></div>`;
+      if (!o.prm) return `${head}${floors}<div class="skc-row skc-note">Edited by hand — shape it with Draw, Push/Pull, Slope and Ctrl+drag.</div><div class="skc-row skc-read" data-o="read"></div>`;
+      const r = o.prm.roof || { type: 'flat', pitch: 6 }, st = o.prm.step || { at: 0, inset: 10 };
+      return `${head}${floors}
         <div class="skc-row seg seg-dark" title="Roof form (R)">${ROOFS.map(([k, l]) => `<label><input type="radio" name="skc-roof" value="${k}"${r.type === k ? ' checked' : ''}><span>${l}</span></label>`).join('')}</div>
         ${r.type !== 'flat' ? `<div class="skc-row"><span>Pitch</span>${num('pitch', r.pitch, 0.5, 24, 0.5, 42)}<span>: 12</span>${r.type === 'shed' ? '<button type="button" data-k="flip" title="Turn the slope around">⇄</button>' : ''}</div>` : ''}
-        <div class="skc-row"><span title="Open courtyard: building depth around it (0 = solid)">Courtyard ring</span>${num('court', o.court || 0, 0, 500, 5)}<span>${uLen()} deep</span></div>
+        <div class="skc-row"><span title="Open courtyard: building depth around it (0 = solid)">Courtyard ring</span>${num('court', o.prm.court || 0, 0, 500, 5)}<span>${uLen()} deep</span></div>
         <div class="skc-row"><span title="Upper floors step back from the outline">Step back above floor</span>${num('stepAt', st.at || 0, 0, 120, 1, 40)}<span>by</span>${num('stepIn', st.inset, 1, 200, 1, 40)}<span>${uLen()}</span></div>
         <div class="skc-row skc-read" data-o="read"></div>`;
     }
@@ -422,37 +518,42 @@ export function createSketch(ctx) {
   }
   function card() {
     const o = findSel();
-    if (!o || !sk.active || !sk.site || sk.drag || sk.draw || (sk.v3 && !sk.v3.visible)) { cardEl.hidden = true; return; }
-    const kind = sk.sel.kind, zf = handleZ(kind, o);
+    if (!o || !sk.active || !sk.site || sk.drag || sk.draw || sk.op || ['pen', 'push', 'slope'].includes(sk.tool) || (sk.v3 && !sk.v3.visible)) { cardEl.hidden = true; return; }
+    const kind = sk.sel.kind;
     let x1 = -Infinity, y0 = Infinity;
-    for (const p of o.pts) { const q = scr(p, zf(p)); if (!q) continue; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; }
+    const pts = kind === 'mass' ? o.v.map(p => P3(o, p)) : o.pts.map(p => scr(p, handleZ(kind, o)(p)));
+    for (const q of pts) { if (!q) continue; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; }
     if (!Number.isFinite(x1)) { cardEl.hidden = true; return; }
     const W = cardEl.parentElement.clientWidth, H = cardEl.parentElement.clientHeight;
-    const sig = `${kind}:${o.id}:${sk.cardVer || 0}:${JSON.stringify([o.roof?.type, o.stall, o.endIslands, o.court, o.step, o.roof?.pitch, o.ftf, o.setback, o.islandEvery, o.w, o.use])}`;
+    const sig = `${kind}:${o.id}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use])}`;
     if (cardEl.dataset.sig !== sig && !cardEl.contains(document.activeElement)) { cardEl.dataset.sig = sig; cardEl.innerHTML = cardHtml(kind, o); }
     const read = cardEl.querySelector('[data-o="read"]');
     if (kind === 'mass') {
-      cardEl.querySelector('[data-o="floors"]').textContent = String(o.floors);
-      const G = geom(o), roofH = G.roof ? Math.max(...o.pts.map(p => G.roof.at(...p)), ...G.roof.pieces.flat().map(p => G.roof.at(...p))) : 0;
-      read.textContent = `${fmtArea(area(o.pts) * sfPerNative2())} footprint · ${fmtArea(massGfa(o))} total · ${(massHeight(o) + roofH).toFixed(0)} ${uLen()} tall`;
+      const I = info(o), fl = cardEl.querySelector('[data-o="floors"]');
+      if (fl) fl.textContent = String(I.floors);
+      read.textContent = I.sheet ? fmtArea(area(I.foot) * sfPerNative2()) : `${fmtArea(massGfa(o))} total · ${I.floors ? `${fmtArea(I.P[0].area * sfPerNative2())} ground floor · ` : ''}${fmtLen(I.zmax)} tall`;
     } else if (kind === 'lot') {
       const Lr = lotLayout(o);
       read.textContent = `${Lr.total} spaces (${Lr.acc} accessible${Lr.van ? `, ${Lr.van} van` : ''}) · ${Math.round(area(o.pts) * sfPerNative2() / Math.max(1, Lr.total))} sf per space`;
     } else if (kind === 'drive') {
-      let len = 0; for (let i = 1; i < o.pts.length; i++) len += Math.hypot(o.pts[i][0] - o.pts[i - 1][0], o.pts[i][1] - o.pts[i - 1][1]);
-      read.textContent = `${Math.round(len / perFt() * outPerFt())} ${uLen()} long · stalls it crosses are cleared`;
+      let Ln = 0; for (let i = 1; i < o.pts.length; i++) Ln += Math.hypot(o.pts[i][0] - o.pts[i - 1][0], o.pts[i][1] - o.pts[i - 1][1]);
+      read.textContent = `${fmtLen(Ln)} long · stalls it crosses are cleared`;
     } else read.textContent = fmtArea(area(o.pts) * sfPerNative2());
     cardEl.hidden = false;
     const cw = cardEl.offsetWidth || 240, ch = cardEl.offsetHeight || 120;
     cardEl.style.left = `${Math.max(8, Math.min(W - cw - 8, x1 + 14))}px`;
     cardEl.style.top = `${Math.max(56, Math.min(H - ch - 8, y0 - 4))}px`;
   }
+  function floorsBy(o, dir) {
+    if (o.prm) { o.prm.floors = Math.max(1, Math.min(120, o.prm.floors + dir)); if (o.prm.step && o.prm.step.at >= o.prm.floors) o.prm.step = null; regen(o); return true; }
+    return SO.shiftTop(o, ftfN(o), dir, info(o).P);
+  }
   cardEl.addEventListener('click', e => {
     const b = e.target.closest('button[data-k]'); const o = findSel(); if (!b || !o) return;
     const k = b.dataset.k;
     if (k === 'del') { removeSel(); return; }
-    if (k === 'fl-' || k === 'fl+') { before(); o.floors = Math.max(1, Math.min(120, o.floors + (k === 'fl+' ? 1 : -1))); remember(o); changed(true); }
-    if (k === 'flip') { before(); o.roof = { ...o.roof, flip: !o.roof?.flip }; changed(true); }
+    if (k === 'fl-' || k === 'fl+') { before(); if (floorsBy(o, k === 'fl+' ? 1 : -1)) { remember(o); changed(true); } else sk.undo.pop(); }
+    if (k === 'flip') { before(); o.prm.roof = { ...o.prm.roof, flip: !o.prm.roof?.flip }; regen(o); changed(true); }
     if (k.startsWith('rot') || k.startsWith('sh')) {
       before();
       const cur = o.angle ?? longestEdgeAngle(o.pts);
@@ -463,17 +564,20 @@ export function createSketch(ctx) {
   });
   cardEl.addEventListener('change', e => {
     const o = findSel(); if (!o) return;
-    const t = e.target, k = t.dataset.k, v = Number(t.value);
+    const t = e.target, k = t.dataset.k, v = Number(t.value), p = o.prm;
     before();
     if (k === 'use') o.use = t.value;
-    if (k === 'ftf') o.ftf = Math.max(2, v || o.ftf);
-    if (t.name === 'skc-roof') o.roof = { pitch: o.roof?.pitch || 6, ...o.roof, type: t.value };
-    if (k === 'pitch') o.roof = { ...o.roof, pitch: Math.max(0.5, Math.min(24, v || 6)) };
-    if (k === 'court') o.court = Math.max(0, v || 0);
-    if (k === 'stepAt' || k === 'stepIn') {
-      const st = o.step || { at: 0, inset: 10 };
-      if (k === 'stepAt') st.at = Math.max(0, Math.min(o.floors - 1, Math.round(v) || 0)); else st.inset = Math.max(1, v || 10);
-      o.step = st.at > 0 ? st : (k === 'stepIn' ? st : null);
+    if (k === 'ftf') { o.ftf = Math.max(2, v || o.ftf); regen(o); }
+    if (p) {
+      if (t.name === 'skc-roof') p.roof = { pitch: p.roof?.pitch || 6, ...p.roof, type: t.value };
+      if (k === 'pitch') p.roof = { ...p.roof, pitch: Math.max(0.5, Math.min(24, v || 6)) };
+      if (k === 'court') p.court = Math.max(0, v || 0);
+      if (k === 'stepAt' || k === 'stepIn') {
+        const st = p.step || { at: 0, inset: 10 };
+        if (k === 'stepAt') st.at = Math.max(0, Math.min(p.floors - 1, Math.round(v) || 0)); else st.inset = Math.max(1, v || 10);
+        p.step = st.at > 0 ? st : (k === 'stepIn' ? st : null);
+      }
+      regen(o);
     }
     if (t.name === 'skc-ang') { o.stall = v; sk.lastStall = v; }
     if (k === 'setback') o.setback = Math.max(0, v || 0);
@@ -484,7 +588,7 @@ export function createSketch(ctx) {
     cardEl.dataset.sig = '';
     changed();
   });
-  function remember(o) { sk.last = { use: o.use, floors: o.floors, ftf: o.ftf, roof: o.roof?.type || 'flat' }; }
+  function remember(o) { sk.last = { use: o.use, floors: o.prm?.floors || info(o).floors || 3, ftf: o.ftf, roof: o.prm?.roof?.type || sk.last?.roof || 'flat' }; }
   function removeSel() {
     if (!sk.sel) return;
     before();
@@ -492,10 +596,50 @@ export function createSketch(ctx) {
     sk.sel = null; changed();
   }
 
-  // ---------------------------------------------------------------- pointer (shared by the map and the 3D view)
-  // ev: { sx, sy (px in the view), xy (ground point, native) , at(z) (point on the plane at elevation z), shift, alt }
+  // ---------------------------------------------------------------- picking
+  // ev: { sx, sy (px in the view), xy (ground point, native), at(z) (point on the plane at output elevation z),
+  //       ray (two native points [x, y, zOut] on the cursor ray), shift, alt, ctrl }
   const ortho = (a, b) => (Math.abs(b[0] - a[0]) > Math.abs(b[1] - a[1]) ? [b[0], a[1]] : [a[0], b[1]]);
   const distSeg = (p, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy || 1; const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2)); return Math.hypot(p[0] - a[0] - dx * t, p[1] - a[1] - dy * t); };
+  const segT = (p, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy || 1; return Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2)); };
+  /** The cursor ray in a solid's own space (x, y native; z native above its base). */
+  function rayIn(m, ev) {
+    const r = ev.ray(); if (!r) return null;
+    const base = massBase(m), k = kz(), e = ex3(), sheet = info(m).sheet ? 0.15 : 0;
+    const S = p => [p[0], p[1], (p[2] - base - sheet) * e * k];
+    const o = S(r[0]), q = S(r[1]);
+    return { o, d: SO.unit(SO.sub(q, o)) };
+  }
+  /** Face of a solid under the cursor: { id, fi, p (solid-space point) } or null. */
+  function pickFace(ev) {
+    if (sk.v3) {
+      const h = sk.v3.pickSketch(ev.sx, ev.sy);
+      if (!h?.id) return null;
+      const m = massById(h.id); if (!m) return null;
+      const r = rayIn(m, ev), p = r && SO.rayFace(m, h.face, r.o, r.d);
+      return p ? { id: m.id, fi: h.face, p } : null;
+    }
+    const xy = ev.xy; if (!xy) return null;
+    const ms = sk.model.masses.slice().sort((a, b) => massTop(b) - massTop(a));
+    for (const m of ms) { const t = info(m).top(...xy); if (t) return { id: m.id, fi: t.fi, p: [xy[0], xy[1], t.z] }; }
+    return null;
+  }
+  /** Point, edge or face of a solid under the cursor (Ctrl-move). */
+  function pickElement(ev) {
+    let best = null;
+    for (const m of sk.model.masses) {
+      m.v.forEach((p, i) => { const q = P3(m, p); if (!q) return; const d = Math.hypot(q[0] - ev.sx, q[1] - ev.sy); if (d < 9 && (!best || d < best.d)) best = { id: m.id, t: 'v', i, d }; });
+    }
+    if (best) return best;
+    for (const m of sk.model.masses) for (const [a, b] of info(m).edges) {
+      const p = P3(m, m.v[a]), q = P3(m, m.v[b]); if (!p || !q) continue;
+      const d = distSeg([ev.sx, ev.sy], p, q);
+      if (d < 6 && (!best || d < best.d)) best = { id: m.id, t: 'e', a, b, d };
+    }
+    if (best) return best;
+    const f = pickFace(ev);
+    return f ? { id: f.id, t: 'f', fi: f.fi, p: f.p } : null;
+  }
   function hit(ev) {
     const o = findSel();
     if (o) for (const h of handles(sk.sel.kind, o)) { const q = scr(h.p, h.z); if (q && Math.hypot(q[0] - ev.sx, q[1] - ev.sy) < (h.t === 'r' || h.t === 's' ? 10 : 7)) return { kind: sk.sel.kind, id: o.id, h, z: h.z }; }
@@ -504,7 +648,7 @@ export function createSketch(ctx) {
     const zg = zGround(xy);
     if (!sk.v3) {
       const ms = sk.model.masses.slice().sort((a, b) => massTop(b) - massTop(a));
-      for (const m of ms) if (Number.isFinite(heightAt(geom(m), ...xy))) return { kind: 'mass', id: m.id, z: 0 };
+      for (const m of ms) if (info(m).top(...xy)) return { kind: 'mass', id: m.id, z: 0 };
     }
     const tol = sk.v3 ? 0 : 4 / ctx.affine(sk.site).scale;
     for (const d of sk.model.drives) for (let i = 0; i < d.pts.length - 1; i++) if (distSeg(xy, d.pts[i], d.pts[i + 1]) < (d.w || 24) * perFt() / 2 + tol) return { kind: 'drive', id: d.id, z: zg };
@@ -512,38 +656,256 @@ export function createSketch(ctx) {
     for (const l of sk.model.lots) if (inPoly(l.pts, ...xy)) return { kind: 'lot', id: l.id, z: zg };
     return null;
   }
+
+  // ---------------------------------------------------------------- creating things on the ground
   function finishDraw(pts) {
     const d = sk.draw;
     sk.draw = null;
     const kind = d.kind;
     if (kind === 'drive') {
-      let len = 0; for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
-      if (pts.length < 2 || len / perFt() < 10) { draw(); return; }
+      let Ln = 0; for (let i = 1; i < pts.length; i++) Ln += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+      if (pts.length < 2 || Ln / perFt() < 10) { draw(); return; }
     } else if (pts.length < 3 || area(pts) * sfPerNative2() < 50) { draw(); return; }
     before();
-    const o = { id: uid(), pts };
-    if (kind === 'mass') {
-      Object.assign(o, { use: sk.last?.use || scheme().uses[0].key, floors: sk.last?.floors || 3, ftf: sk.last?.ftf || (metric() ? 3.6 : 12) });
-      if (sk.last?.roof && sk.last.roof !== 'flat') o.roof = { type: sk.last.roof, pitch: 6 };
-      if (d.shape === 'court' && d.rect) { const bb = bbox(pts); o.court = Math.max(10, Math.round(Math.min(bb[2] - bb[0], bb[3] - bb[1]) * 0.3 / perFt() * outPerFt() / 5) * 5); }
-    } else if (kind === 'lot') Object.assign(o, { stall: sk.lastStall || 90, shift: 0, angle: null, setback: 0, endIslands: false, islandEvery: 0 });
-    else if (kind === 'drive') o.w = 24;
-    list(kind).push(o);
-    sk.sel = { kind, id: o.id };
+    let o = { id: uid() };
+    if (kind === 'mass' || kind === 'sheet') {
+      Object.assign(o, { use: sk.last?.use || scheme().uses[0].key, ftf: sk.last?.ftf || (metric() ? 3.6 : 12) });
+      if (kind === 'sheet') Object.assign(o, SO.sheet(pts));
+      else {
+        o.prm = { pts, floors: sk.last?.floors || 3, court: 0, step: null, roof: sk.last?.roof && sk.last.roof !== 'flat' ? { type: sk.last.roof, pitch: 6 } : null };
+        if (d.shape === 'court' && d.rect) { const bb = bbox(pts); o.prm.court = Math.max(10, Math.round(Math.min(bb[2] - bb[0], bb[3] - bb[1]) * 0.3 / perFt() * outPerFt() / 5) * 5); }
+        regen(o);
+      }
+      sk.model.masses.push(o);
+      sk.sel = { kind: 'mass', id: o.id };
+    } else {
+      o.pts = pts;
+      if (kind === 'lot') Object.assign(o, { stall: sk.lastStall || 90, shift: 0, angle: null, setback: 0, endIslands: false, islandEvery: 0 });
+      else if (kind === 'drive') o.w = 24;
+      list(kind).push(o);
+      sk.sel = { kind, id: o.id };
+    }
     changed();
   }
+
+  // ---------------------------------------------------------------- drawing on a face (Draw tool)
+  /** Snap a solid-space point on face fi to its corners / edges (screen tolerance). */
+  function snapOnFace(m, fi, p) {
+    const q = P3(m, p); if (!q) return { p };
+    let best = null;
+    for (const L of SO.faceLoops(m, fi)) for (let k = 0; k < L.length; k++) {
+      const i = L[k], s = P3(m, m.v[i]); if (!s) continue;
+      const d = Math.hypot(s[0] - q[0], s[1] - q[1]);
+      if (d < 10 && (!best || best.t !== 'v' || d < best.d)) best = { t: 'v', i, p: m.v[i].slice(), d, outer: L === m.f[fi].o };
+    }
+    if (best) return best;
+    for (const L of SO.faceLoops(m, fi)) for (let k = 0; k < L.length; k++) {
+      const a = L[k], b = L[(k + 1) % L.length], sa = P3(m, m.v[a]), sb = P3(m, m.v[b]); if (!sa || !sb) continue;
+      const d = distSeg(q, sa, sb);
+      if (d < 8 && (!best || d < best.d)) {
+        let t = segT(q, sa, sb);
+        const mid = Math.abs(t - 0.5) * Math.hypot(sb[0] - sa[0], sb[1] - sa[1]) < 6; if (mid) t = 0.5;      // midpoints snap
+        best = { t: 'e', a, b, p: SO.add(m.v[a], SO.mul(SO.sub(m.v[b], m.v[a]), t)), d, mid, outer: L === m.f[fi].o };
+      }
+    }
+    return best || { p };
+  }
+  function penFacePoint(ev) {
+    const d = sk.draw, m = massById(d.id); if (!m) return null;
+    const r = rayIn(m, ev); if (!r) return null;
+    const p = SO.rayFace(m, d.fi, r.o, r.d); if (!p) return null;
+    return snapOnFace(m, d.fi, p);
+  }
+  function penRect(d, m) {
+    const F = SO.faceFrame(m, d.fi), a = d.pts[0].p, b = d.b.p;
+    const du = SO.dot(SO.sub(b, a), F.u), dv = SO.dot(SO.sub(b, a), F.v);
+    return [a, SO.add(a, SO.mul(F.u, du)), SO.add(SO.add(a, SO.mul(F.u, du)), SO.mul(F.v, dv)), SO.add(a, SO.mul(F.v, dv))];
+  }
+  function drawPenFace(g, d) {
+    const m = massById(d.id); if (!m) return;
+    if (facePath(g, m, d.fi)) { g.fillStyle = 'rgba(232,145,63,0.12)'; g.fill('evenodd'); }
+    const P = d.rect ? penRect(d, m) : [...d.pts.map(s => s.p), ...(d.hover ? [d.hover.p] : [])];
+    const Q = P.map(p => P3(m, p));
+    if (Q.length > 1 && Q.every(Boolean)) {
+      g.beginPath(); Q.forEach((q, i) => (i ? g.lineTo(...q) : g.moveTo(...q))); if (d.rect) g.closePath();
+      const ok = !d.rect || P.every(p => SO.inFace(m, d.fi, p));
+      g.setLineDash([6, 4]); g.strokeStyle = ok ? ORANGE : '#ef4444'; g.lineWidth = 2; g.stroke(); g.setLineDash([]);
+    }
+    for (const s of [...d.pts, ...(d.hover ? [d.hover] : [])]) {
+      const q = P3(m, s.p); if (!q) continue;
+      g.beginPath();
+      if (s.t === 'v') g.rect(q[0] - 5, q[1] - 5, 10, 10); else g.arc(q[0], q[1], s.t === 'e' ? 5 : 3.5, 0, Math.PI * 2);
+      g.fillStyle = s.t === 'v' ? '#22c55e' : s.t === 'e' ? (s.mid ? '#06b6d4' : '#ef4444') : ORANGE; g.fill();
+    }
+    if (d.rect) { const R = penRect(d, m); const w = SO.len(SO.sub(R[1], R[0])), h = SO.len(SO.sub(R[3], R[0])); tag(g, P3(m, d.b.p), `${fmtLen(w)} × ${fmtLen(h)}`); }
+    else if (d.hover && d.pts.length) tag(g, P3(m, d.hover.p), fmtLen(SO.len(SO.sub(d.hover.p, d.pts[d.pts.length - 1].p))));
+  }
+  /** Vertex index for a snapped point on face fi (adds a vertex on an edge when needed). */
+  function vertexFor(m, fi, s) {
+    if (s.t === 'v') return s.i;
+    if (s.t === 'e') {
+      for (const L of SO.faceLoops(m, fi)) for (let k = 0; k < L.length; k++) {
+        const a = L[k], b = L[(k + 1) % L.length], A = m.v[a], B = m.v[b];
+        const ab = SO.sub(B, A), t = SO.dot(SO.sub(s.p, A), ab) / (SO.dot(ab, ab) || 1);
+        if (t <= 1e-6 || t >= 1 - 1e-6) continue;
+        if (SO.len(SO.sub(SO.add(A, SO.mul(ab, t)), s.p)) < 1e-4 * (1 + SO.len(ab))) return SO.splitEdge(m, a, b, s.p);
+      }
+    }
+    m.v.push(s.p.slice()); return m.v.length - 1;
+  }
+  function penFinish(kindOf) {
+    const d = sk.draw, m = massById(d.id); sk.draw = null;
+    if (!m) { draw(); return; }
+    before();
+    let ok = false;
+    if (kindOf === 'rect') {
+      const R = penRect(d, m);
+      if (SO.len(SO.sub(R[1], R[0])) > 0.5 * perFt() && SO.len(SO.sub(R[3], R[0])) > 0.5 * perFt() && R.every(p => SO.inFace(m, d.fi, p))) { freeze(m); const nf = SO.innerFace(m, d.fi, R); sk.hov = { id: m.id, t: 'f', fi: nf }; ok = true; }
+      else flash('Draw the rectangle inside the face — or click from edge to edge to cut across it.');
+    } else if (kindOf === 'loop') {
+      if (d.pts.length >= 3 && d.pts.every(s => SO.inFace(m, d.fi, s.p))) { freeze(m); SO.innerFace(m, d.fi, d.pts.map(s => s.p)); ok = true; }
+    } else {   // split: first and last on the outline
+      freeze(m);
+      const idx = d.pts.map(s => vertexFor(m, d.fi, s));
+      ok = SO.splitFace(m, d.fi, idx) >= 0;
+      if (!ok) flash('Couldn’t split that face — start and end on its outer edges.');
+    }
+    if (ok) { sk.sel = { kind: 'mass', id: m.id }; changed(); } else { sk.undo.pop(); draw(); }
+  }
+  function flash(text) {
+    if (!$('sk-hint')) return;
+    const h = $('sk-hint'); h.textContent = text; h.classList.add('sk-warn');
+    clearTimeout(sk.flashT); sk.flashT = setTimeout(() => { h.classList.remove('sk-warn'); h.textContent = HINTS[sk.tool]; }, 3500);
+  }
+
+  // ---------------------------------------------------------------- push/pull, Ctrl-move, slope
+  /** Distance along a solid-space direction from where the drag started, measured on screen. */
+  function along(m, op, ev, dir) {
+    const Lr = 10 * perFt(), s0 = P3(m, op.p0), s1 = P3(m, SO.add(op.p0, SO.mul(dir, Lr)));
+    if (!s0 || !s1) return 0;
+    const vx = s1[0] - s0[0], vy = s1[1] - s0[1], L2 = vx * vx + vy * vy;
+    if (L2 < 9) return -(ev.sy - op.sy) / (sk.v3 ? 4 : ctx.affine(sk.site).scale) * (dir[2] >= 0 ? 1 : -1);   // looking straight along it
+    return ((ev.sx - op.sx) * vx + (ev.sy - op.sy) * vy) / L2 * Lr;
+  }
+  function startOp(type, m, extra, ev) {
+    sk.op = { type, id: m.id, orig: JSON.stringify({ v: m.v, f: m.f, prm: m.prm }), sx: ev.sx, sy: ev.sy, ...extra };
+    sk.baseLock = { id: m.id, base: massBase(m) };
+    sk.hov = null; card();
+  }
+  function resetOp(m) { const o = JSON.parse(sk.op.orig); m.v = o.v; m.f = o.f; if (o.prm) m.prm = o.prm; else delete m.prm; }
+  function moveOp(ev) {
+    const op = sk.op, m = massById(op.id); if (!m) return;
+    resetOp(m);
+    if (op.type === 'push' || (op.type === 'move' && op.el.t === 'f')) {
+      const n = SO.faceNormal(m, op.fi);
+      let d = along(m, op, ev, n);
+      if (!ev.shift) {
+        if (Math.abs(n[2]) > 0.9) { const z0 = op.p0[2], f = ftfN(m); d = (Math.round((z0 + d * n[2]) / f) * f - z0) * n[2]; }
+        else d = Math.round(d / perFt()) * perFt();
+      }
+      op.d = d;
+      if (op.type === 'push') SO.pushPull(m, op.fi, d, op.makeNew); else SO.moveVerts(m, SO.faceVerts(m, op.fi), SO.mul(n, d));
+    } else if (op.type === 'move') {
+      const ids = op.el.t === 'v' ? [op.el.i] : [op.el.a, op.el.b];
+      let delta;
+      if (ev.shift) { const dz = along(m, op, ev, [0, 0, 1]); delta = [0, 0, Math.round(dz / perFt()) * perFt()]; }
+      else {
+        const zo = zOut(m, op.p0[2]), xy = sk.v3 ? ev.at(zo) : ev.xy;
+        if (!xy) return;
+        delta = [xy[0] - op.p0[0], xy[1] - op.p0[1], 0];
+      }
+      op.d = SO.len(delta);
+      SO.moveVerts(m, ids, delta);
+    } else if (op.type === 'slope') {
+      const r = rayIn(m, ev), p = r && SO.rayFace(m, op.fi, r.o, r.d);
+      if (!p) return;
+      op.p1 = p;
+      const dir = SO.sub(p, op.p0);
+      if (SO.len(dir) > 2 * perFt()) SO.slopeFace(m, op.fi, dir, sk.pitch / 12);
+    }
+    freeze(m);
+    dragged();
+  }
+  function endOp() {
+    const op = sk.op; sk.op = null; sk.baseLock = null;
+    const m = massById(op.id);
+    if (!m) return;
+    if (!op.moved) { resetOp(m); sk.undo.pop(); draw(); card(); return; }
+    sk.lastOp = { ...op };
+    if (op.type === 'push') { const inp = bar.querySelector('[data-fly="dist"]'); if (inp) inp.value = (op.d / kz()).toFixed(1); }
+    sk.infos.delete(m.id);
+    changed();
+  }
+  /** Re-apply the last push/pull (exact distance typed) or slope (new pitch). */
+  function redoLast(type, d) {
+    const op = sk.lastOp, m = op && massById(op.id);
+    if (!m || op.type !== type) return;
+    before();
+    const o = JSON.parse(op.orig); m.v = o.v; m.f = o.f; freeze(m);
+    if (type === 'push') { SO.pushPull(m, op.fi, d, op.makeNew); op.d = d; }
+    else if (op.p1) SO.slopeFace(m, op.fi, SO.sub(op.p1, op.p0), sk.pitch / 12);
+    changed();
+  }
+  function drawOp(g) {
+    const op = sk.op; if (!op) return;
+    const m = massById(op.id); if (!m) return;
+    if (op.type === 'push' || op.type === 'move') {
+      if (op.type === 'push' || op.el.t === 'f') { if (facePath(g, m, op.fi)) { g.strokeStyle = ORANGE; g.lineWidth = 2.5; g.stroke(); } }
+      tag(g, [op.sx, op.sy], `${op.d < 0 ? '−' : ''}${fmtLen(Math.abs(op.d || 0))}${op.type === 'push' && Math.abs(SO.faceNormal(m, op.fi)[2]) > 0.9 ? ` · ${info(m).floors} fl` : ''}`);
+    } else if (op.type === 'slope' && op.p1) {
+      const a = P3(m, op.p0), b = P3(m, op.p1); if (!a || !b) return;
+      g.strokeStyle = ORANGE; g.lineWidth = 3; g.beginPath(); g.moveTo(...a); g.lineTo(...b); g.stroke();
+      const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+      g.beginPath(); g.moveTo(...b); g.lineTo(b[0] - 12 * Math.cos(ang - 0.4), b[1] - 12 * Math.sin(ang - 0.4)); g.lineTo(b[0] - 12 * Math.cos(ang + 0.4), b[1] - 12 * Math.sin(ang + 0.4)); g.closePath(); g.fillStyle = ORANGE; g.fill();
+      tag(g, b, `${sk.pitch} : 12`);
+    }
+  }
+
+  // ---------------------------------------------------------------- pointer (shared by the map and the 3D view)
   /** Pointer down; true when the sketch took it (so the map / 3D camera shouldn't). */
   function down(ev) {
     if (!sk.active || !sk.site) return false;
-    if (sk.tool !== 'select') {
+    const t = sk.tool;
+    // Face tools.
+    if (t === 'push' || t === 'slope' || (t === 'select' && ev.ctrl)) {
+      const el = t === 'select' ? pickElement(ev) : (() => { const f = pickFace(ev); return f && { ...f, t: 'f' }; })();
+      if (!el) return t !== 'select';
+      const m = massById(el.id);
+      before();
+      const p0 = el.t === 'f' ? el.p : el.t === 'v' ? m.v[el.i].slice() : SO.add(m.v[el.a], SO.mul(SO.sub(m.v[el.b], m.v[el.a]), 0.5));
+      startOp(t === 'select' ? 'move' : t, m, { fi: el.fi, el, p0, makeNew: t === 'push' && ev.ctrl, d: 0 }, ev);
+      sk.sel = { kind: 'mass', id: m.id };
+      return true;
+    }
+    if (t === 'pen') {
+      if (sk.draw?.face) {                       // clicking out a line on a face
+        const s = penFacePoint(ev); if (!s) return true;
+        const d = sk.draw, first = d.pts[0];
+        if (!first.t && d.pts.length >= 3) { const q0 = P3(massById(d.id), first.p), q = [ev.sx, ev.sy]; if (q0 && Math.hypot(q0[0] - q[0], q0[1] - q[1]) < 10) { penFinish('loop'); return true; } }
+        d.pts.push(s);
+        if (first.t && s.t && first.outer && s.outer && d.pts.length >= 2) penFinish('split');
+        else draw();
+        return true;
+      }
+      if (!sk.draw) {
+        const f = pickFace(ev);
+        if (f) {
+          const m = massById(f.id), s = snapOnFace(m, f.fi, f.p);
+          sk.draw = { face: true, id: f.id, fi: f.fi, pts: [s], b: s, cp: [ev.sx, ev.sy], pending: true };
+          sk.hov = null; card(); draw();
+          return true;
+        }
+      }
+    }
+    if (t !== 'select') {
       const xy = ev.xy; if (!xy) return true;
-      if (sk.draw?.pts) {      // outline in progress
+      if (sk.draw?.pts && !sk.draw.face) {      // outline in progress
         const q = scr(sk.draw.pts[0], sk.v3 ? zGround(sk.draw.pts[0]) + 0.3 : undefined);
-        if (sk.tool !== 'drive' && sk.draw.pts.length >= 3 && q && Math.hypot(q[0] - ev.sx, q[1] - ev.sy) < 10) { finishDraw(sk.draw.pts); return true; }
+        if (sk.draw.kind !== 'drive' && sk.draw.pts.length >= 3 && q && Math.hypot(q[0] - ev.sx, q[1] - ev.sy) < 10) { finishDraw(sk.draw.pts); return true; }
         sk.draw.pts.push(ev.shift ? ortho(sk.draw.pts.at(-1), xy) : xy);
         draw(); return true;
       }
-      sk.draw = { kind: sk.tool, shape: sk.tool === 'mass' ? sk.shape : 'box', a: xy, b: xy, cp: [ev.sx, ev.sy], rect: false, pending: true };
+      sk.draw = { kind: t === 'pen' ? 'sheet' : t, shape: t === 'mass' ? sk.shape : 'box', a: xy, b: xy, cp: [ev.sx, ev.sy], rect: false, pending: true };
       card();
       return true;
     }
@@ -551,7 +913,8 @@ export function createSketch(ctx) {
     if (!h) { sk.clickEmpty = [ev.sx, ev.sy]; return false; }
     const src = list(h.kind).find(o => o.id === h.id);
     if (ev.alt && h.h?.t === 'v') {                         // Alt+click a corner: remove it
-      if (src.pts.length > (closed(h.kind) ? 3 : 2)) { before(); src.pts.splice(h.h.i, 1); changed(); }
+      const P = outline(src);
+      if (P.length > (closed(h.kind) ? 3 : 2)) { before(); P.splice(h.h.i, 1); if (src.prm) regen(src); changed(); }
       return true;
     }
     let target = h, obj = src;
@@ -565,34 +928,61 @@ export function createSketch(ctx) {
     const start = ev.at(h.z) || ev.xy; if (!start) return true;
     // Moving a lot takes its islands and drive aisles along.
     const carry = h.kind === 'lot' && (!h.h || h.h.t === 'r') ? [...sk.model.islands, ...sk.model.drives].filter(q => inPoly(src.pts, ...centroid(q.pts))).map(q => ({ q, orig: JSON.parse(JSON.stringify(q.pts)) })) : [];
-    sk.drag = { kind: target.kind, id: target.id, h: h.h, z: h.z, start, orig: JSON.parse(JSON.stringify(obj.pts)), angle0: obj.angle, carry, pushed, sx: ev.sx, sy: ev.sy };
+    sk.drag = { kind: target.kind, id: target.id, h: h.h, z: h.z, start, orig: JSON.stringify(obj), angle0: obj.angle, carry, pushed, sx: ev.sx, sy: ev.sy };
+    if (target.kind === 'mass') sk.baseLock = null;
     sk.sel = { kind: target.kind, id: target.id };
     draw(); panel(); card();
     return true;
   }
+  /** Apply fn to every XY of an object (outline, solid vertices, preset outline). */
+  function mapObj(o, fn) {
+    if (o.pts) o.pts = o.pts.map(fn);
+    if (o.v) SO.mapXY(o, fn);
+    if (o.prm) o.prm.pts = o.prm.pts.map(fn);
+  }
   function move(ev) {
     if (!sk.active || !sk.site) return;
+    if (sk.op) { sk.op.moved = sk.op.moved || Math.hypot(ev.sx - sk.op.sx, ev.sy - sk.op.sy) > 3; if (sk.op.moved) moveOp(ev); return; }
     const d = sk.draw;
+    if (d?.face) {
+      const s = penFacePoint(ev); if (!s) return;
+      if (d.pending && Math.hypot(ev.sx - d.cp[0], ev.sy - d.cp[1]) > 6) { d.pending = false; d.rect = true; }
+      if (d.rect) d.b = s; else if (!d.pending) d.hover = s;
+      draw(); return;
+    }
     if (d && d.pending !== undefined && !d.pts) {
       if (d.pending && Math.hypot(ev.sx - d.cp[0], ev.sy - d.cp[1]) > 6) { d.pending = false; d.rect = true; }
       if (d.rect) {
         const xy = ev.xy; if (!xy) return;
         let b = xy;
-        if (ev.shift && d.kind !== 'drive' && d.shape !== 'circle') { const m = Math.max(Math.abs(xy[0] - d.a[0]), Math.abs(xy[1] - d.a[1])); b = [d.a[0] + Math.sign(xy[0] - d.a[0]) * m, d.a[1] + Math.sign(xy[1] - d.a[1]) * m]; }
+        if (ev.shift && d.kind !== 'drive' && d.shape !== 'circle') { const mm = Math.max(Math.abs(xy[0] - d.a[0]), Math.abs(xy[1] - d.a[1])); b = [d.a[0] + Math.sign(xy[0] - d.a[0]) * mm, d.a[1] + Math.sign(xy[1] - d.a[1]) * mm]; }
         if (ev.shift && d.kind === 'drive') b = ortho(d.a, xy);
         d.b = b; draw();
       }
       return;
     }
     if (d?.pts) { const xy = ev.xy; if (xy) { d.hover = ev.shift ? ortho(d.pts.at(-1), xy) : xy; draw(); } return; }
-    if (!sk.drag) return;
+    if (!sk.drag) {                                   // hover feedback for the face tools / Ctrl-move
+      const want = sk.tool === 'push' || sk.tool === 'slope' || sk.tool === 'pen' || (sk.tool === 'select' && ev.ctrl);
+      const h = want ? (sk.tool === 'select' ? pickElement(ev) : (() => { const f = pickFace(ev); return f && { id: f.id, t: 'f', fi: f.fi }; })()) : null;
+      const key = h ? JSON.stringify([h.id, h.t, h.fi, h.i, h.a, h.b]) : '';
+      if (key !== (sk.hovKey || '')) { sk.hov = h; sk.hovKey = key; draw(); }
+      return;
+    }
     const g = sk.drag, o = list(g.kind).find(q => q.id === g.id);
     if (!o) return;
     const cur = ev.at(g.z); if (!cur) return;
     if (!g.pushed) { before(); g.pushed = true; }
     const dx = cur[0] - g.start[0], dy = cur[1] - g.start[1];
-    const P = g.orig.map(p => p.slice()), n = P.length, t = g.h?.t;
-    if (t === 'm' && !g.inserted) { g.inserted = true; g.h = { t: 'v', i: g.h.i + 1 }; P.splice(g.h.i, 0, g.start.slice()); g.orig = P.map(p => p.slice()); return move(ev); }
+    const orig = JSON.parse(g.orig);
+    for (const k of ['pts', 'v', 'f', 'prm', 'angle']) if (k in orig) o[k] = orig[k];
+    const P = outline(o), n = P.length, t = g.h?.t;
+    if (t === 'm' && !g.inserted) {
+      g.inserted = true; g.h = { t: 'v', i: g.h.i + 1 };
+      P.splice(g.h.i, 0, g.start.slice());
+      if (o.prm) regen(o);
+      g.orig = JSON.stringify(o); return move(ev);
+    }
     if (t === 'v') {
       const i = g.h.i;
       let p = [P[i][0] + dx, P[i][1] + dy];
@@ -600,36 +990,41 @@ export function createSketch(ctx) {
       // A rectangle stays a rectangle when a corner is dragged (its two neighbours follow).
       if (n === 4 && closed(g.kind) && isRect(P)) { const a = (i + 1) % 4, c = (i + 3) % 4, opp = P[(i + 2) % 4]; P[i] = p; if (Math.abs(P[a][0] - opp[0]) < 1e-6) { P[a] = [opp[0], p[1]]; P[c] = [p[0], opp[1]]; } else { P[a] = [p[0], opp[1]]; P[c] = [opp[0], p[1]]; } }
       else P[i] = p;
-      o.pts = P;
+      if (o.prm) regen(o);
     } else if (t === 'r' || t === 's') {
       const c = g.h.c;
       if (t === 'r') {
         let a = Math.atan2(cur[1] - c[1], cur[0] - c[0]) - Math.atan2(g.start[1] - c[1], g.start[0] - c[0]);
         if (ev.shift) a = Math.round(a / (Math.PI / 12)) * Math.PI / 12;
         const cs = Math.cos(a), sn = Math.sin(a), rot = ([x, y]) => [c[0] + (x - c[0]) * cs - (y - c[1]) * sn, c[1] + (x - c[0]) * sn + (y - c[1]) * cs];
-        o.pts = g.orig.map(rot);
+        mapObj(o, rot);
         if (g.kind === 'lot' && g.angle0 != null) o.angle = g.angle0 + a;
         for (const cq of g.carry) cq.q.pts = cq.orig.map(rot);
       } else {
         const f = Math.max(0.05, Math.hypot(cur[0] - c[0], cur[1] - c[1]) / Math.max(1e-9, Math.hypot(g.start[0] - c[0], g.start[1] - c[1])));
-        o.pts = g.orig.map(([x, y]) => [c[0] + (x - c[0]) * f, c[1] + (y - c[1]) * f]);
+        mapObj(o, ([x, y]) => [c[0] + (x - c[0]) * f, c[1] + (y - c[1]) * f]);
       }
     } else {
-      o.pts = g.orig.map(([x, y]) => [x + dx, y + dy]);
+      mapObj(o, ([x, y]) => [x + dx, y + dy]);
       for (const cq of g.carry) cq.q.pts = cq.orig.map(([x, y]) => [x + dx, y + dy]);
     }
     g.moved = true;
-    draw(); panel(); live();
-    clearTimeout(sk.softT); sk.softT = setTimeout(() => ctx.onChange?.(), 160);
+    dragged();
   }
   const isRect = P => P.length === 4 && [0, 1, 2, 3].every(i => { const a = P[i], b = P[(i + 1) % 4]; return Math.abs(a[0] - b[0]) < 1e-6 || Math.abs(a[1] - b[1]) < 1e-6; });
   function up(ev) {
     if (!sk.active) return;
+    if (sk.op) { endOp(); return; }
     if (sk.clickEmpty) {
       const [x, y] = sk.clickEmpty; sk.clickEmpty = null;
       if (ev && Math.hypot(ev.sx - x, ev.sy - y) < 5) { sk.sel = null; draw(); panel(); card(); }
     }
     const d = sk.draw;
+    if (d?.face) {
+      if (d.rect) { penFinish('rect'); return; }
+      if (d.pending) { d.pending = false; draw(); }       // a click: carry on clicking points
+      return;
+    }
     if (d && !d.pts) {
       if (d.rect) { finishDraw(drawPts()); return; }
       sk.draw = { kind: d.kind, shape: d.shape, pts: [d.a] }; draw(); return;   // a click without dragging starts an outline
@@ -637,19 +1032,24 @@ export function createSketch(ctx) {
     if (sk.drag) { const moved = sk.drag.moved; sk.drag = null; if (moved) changed(true); else card(); }
   }
   function finishOutline() {
-    if (!sk.draw?.pts) return;
-    const P = sk.draw.pts.slice();
+    const d = sk.draw;
+    if (d?.face) { if (d.pts.length >= 3 && !d.pts[0].t) penFinish('loop'); return; }
+    if (!d?.pts) return;
+    const P = d.pts.slice();
     if (P.length > 2 && Math.hypot(P.at(-1)[0] - P.at(-2)[0], P.at(-1)[1] - P.at(-2)[1]) < 1e-6) P.pop();
-    if (P.length >= (sk.draw.kind === 'drive' ? 2 : 3)) finishDraw(P);
+    if (P.length >= (d.kind === 'drive' ? 2 : 3)) finishDraw(P);
   }
 
   // Map events.
-  const mapEv = e => { const xy = ctx.toNative(e.latlng); return { sx: e.containerPoint.x, sy: e.containerPoint.y, xy, at: () => xy, shift: e.originalEvent.shiftKey, alt: e.originalEvent.altKey }; };
+  const mapEv = e => {
+    const xy = ctx.toNative(e.latlng), oe = e.originalEvent;
+    return { sx: e.containerPoint.x, sy: e.containerPoint.y, xy, at: () => xy, ray: () => [[xy[0], xy[1], 1e5], [xy[0], xy[1], 0]], shift: oe.shiftKey, alt: oe.altKey, ctrl: oe.ctrlKey || oe.metaKey };
+  };
   map.on('mousedown', e => { if (sk.v3 || e.originalEvent.button !== 0) return; if (down(mapEv(e))) map.dragging.disable(); });
   map.on('mousemove', e => { if (!sk.v3) move(mapEv(e)); });
   map.on('mouseup', e => { if (!sk.v3 && sk.active) { map.dragging.enable(); up(mapEv(e)); } });
   document.addEventListener('mouseup', e => {
-    if (sk.v3 || !(sk.drag || (sk.draw && !sk.draw.pts))) return;
+    if (sk.v3 || !(sk.drag || sk.op || (sk.draw && !sk.draw.pts))) return;
     map.dragging.enable();
     const r = map.getContainer().getBoundingClientRect();
     up({ sx: e.clientX - r.left, sy: e.clientY - r.top });
@@ -669,7 +1069,7 @@ export function createSketch(ctx) {
       const r = stage.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
       let gxy;
       return { sx, sy, get xy() { if (gxy === undefined) { const p = sk.v3?.pickGround(sx, sy); gxy = p ? p.slice(0, 2) : null; } return gxy; },
-        at: z => sk.v3?.pickPlane(sx, sy, z) || null, shift: e.shiftKey, alt: e.altKey };
+        at: z => sk.v3?.pickPlane(sx, sy, z) || null, ray: () => sk.v3?.rayPoints(sx, sy) || null, shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey };
     };
     stage.addEventListener('pointerdown', e => {
       if (sk.v3 !== v3 || !sk.active || e.button !== 0) return;
@@ -677,7 +1077,8 @@ export function createSketch(ctx) {
     }, true);
     window.addEventListener('pointermove', e => {
       if (sk.v3 !== v3 || !sk.active) return;
-      if (sk.drag || sk.draw) { if (sk.drag || e.target === stage || stage.contains(e.target)) move(ev3(e)); }
+      if (e.buttons & 6) return;                       // orbiting / panning with the other buttons
+      if (sk.drag || sk.op || e.target === stage || stage.contains(e.target)) move(ev3(e));
     });
     window.addEventListener('pointerup', e => {
       if (sk.v3 !== v3 || !sk.active) return;
@@ -689,7 +1090,7 @@ export function createSketch(ctx) {
   function attach3d(v3) {
     if (sk.v3 && sk.v3 !== v3) { delete sk.v3.frames.sketch; sk.v3.sketchNav(false); sk.v3.el.classList.remove('sk-drawing'); }
     sk.v3 = v3 || null;
-    sk.draw = null; sk.drag = null;
+    sk.draw = null; sk.drag = null; sk.op = null; sk.hov = null; sk.baseLock = null;
     if (v3) {
       wire3d(v3);
       v3.el.appendChild(canvas);
@@ -710,10 +1111,15 @@ export function createSketch(ctx) {
     if (!sk.active) return;
     if (onKey(e)) e.stopPropagation();
   }, true);
+  document.addEventListener('keyup', e => { if (sk.active && (e.key === 'Control' || e.key === 'Meta') && sk.tool === 'select' && sk.hov) { sk.hov = null; sk.hovKey = ''; draw(); } });
   function onKey(e) {
     if (typing(e)) { if (e.key === 'Escape' || e.key === 'Enter') e.target.blur(); return false; }
     const k = e.key;
-    if (k === 'Escape') { if (sk.draw) { sk.draw = null; draw(); } else if (sk.tool !== 'select') setTool('select'); else { sk.sel = null; draw(); panel(); card(); } return true; }
+    if (k === 'Escape') {
+      if (sk.op) { const m = massById(sk.op.id); if (m) resetOp(m); sk.op = null; sk.baseLock = null; sk.undo.pop(); changed(true); }
+      else if (sk.draw) { sk.draw = null; draw(); } else if (sk.tool !== 'select') setTool('select'); else { sk.sel = null; draw(); panel(); card(); }
+      return true;
+    }
     if (k === 'Enter' && sk.draw?.pts) { e.preventDefault(); finishOutline(); return true; }
     if (k === 'Backspace' && sk.draw?.pts) { e.preventDefault(); sk.draw.pts.pop(); if (!sk.draw.pts.length) sk.draw = null; draw(); return true; }
     if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return true; }
@@ -727,11 +1133,11 @@ export function createSketch(ctx) {
     if (!o) return false;
     const kind = sk.sel.kind;
     if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); removeSel(); return true; }
-    if (kind === 'mass' && (k === 'ArrowUp' || k === 'ArrowDown')) { e.preventDefault(); before(); o.floors = Math.max(1, Math.min(120, o.floors + (k === 'ArrowUp' ? 1 : -1))); remember(o); changed(true); return true; }
-    if (kind === 'mass' && k.toLowerCase() === 'r') {
+    if (kind === 'mass' && (k === 'ArrowUp' || k === 'ArrowDown')) { e.preventDefault(); before(); if (floorsBy(o, k === 'ArrowUp' ? 1 : -1)) { remember(o); changed(true); } else sk.undo.pop(); return true; }
+    if (kind === 'mass' && k.toLowerCase() === 'r' && o.prm) {
       e.preventDefault(); before();
-      const i = ROOFS.findIndex(r => r[0] === (o.roof?.type || 'flat'));
-      o.roof = { pitch: o.roof?.pitch || 6, ...o.roof, type: ROOFS[(i + 1) % ROOFS.length][0] }; remember(o); changed(true); return true;
+      const i = ROOFS.findIndex(r => r[0] === (o.prm.roof?.type || 'flat'));
+      o.prm.roof = { pitch: o.prm.roof?.pitch || 6, ...o.prm.roof, type: ROOFS[(i + 1) % ROOFS.length][0] }; regen(o); remember(o); changed(true); return true;
     }
     if (kind === 'lot' && (k === 'ArrowUp' || k === 'ArrowDown')) { e.preventDefault(); before(); o.shift = (o.shift || 0) + (k === 'ArrowUp' ? -3 : 3); changed(true); return true; }
     if (kind === 'lot' && (k === '[' || k === ']')) { e.preventDefault(); before(); o.angle = (o.angle ?? longestEdgeAngle(o.pts)) + (k === ']' ? 1 : -1) * Math.PI / 36; changed(true); return true; }
@@ -752,17 +1158,17 @@ export function createSketch(ctx) {
     const diff = st.prov - st.req;
     $('sk-stats').innerHTML = `
       <div class="sk-big"><div><small>Floor area</small><b>${fmtArea(st.gfa)}</b></div><div><small>Blocks</small><b>${sk.model.masses.length}</b></div></div>
-      ${useRows || '<p class="hint">Draw a block with the Massing tool (M).</p>'}
+      ${useRows || '<p class="hint">Drag a block with Shapes (M), or draw on the ground (L) and pull it up (U).</p>'}
       <div class="sk-big sk-park ${st.req ? (diff >= 0 ? 'ok' : 'short') : ''}">
         <div><small>Parking provided</small><b>${st.prov}</b></div><div><small>Required</small><b>${st.req || '—'}</b></div>
         <div><small>${diff >= 0 ? 'Surplus' : 'Short'}</small><b>${st.req ? Math.abs(diff) : '—'}</b></div></div>
-      <p class="hint">${st.acc} accessible provided (${st.accReq} required${st.van ? `, ${st.van} van` : ''})${st.short ? ` — <strong>${st.short} short: a row is too short for the accessible group</strong>` : ''}. Accessible counts per lot by the 2010 ADA Standards (Table 208.2, 208.2.4).</p>`;
+      <p class="hint">${st.acc} accessible provided (${st.accReq} required${st.van ? `, ${st.van} van` : ''})${st.short ? ` — <strong>${st.short} short: a row is too short for the accessible group</strong>` : ''}. Accessible counts per lot by the 2010 ADA Standards (Table 208.2, 208.2.4). Floors are counted every floor-to-floor height where at least half the floor has full headroom.</p>`;
     schemeUi(); ratiosUi(); listUi();
   }
   function listUi() {
     const el = $('sk-list'); if (!el) return;
     const rows = [
-      ...sk.model.masses.map(m => ({ kind: 'mass', o: m, t: `${scheme().uses.find(u => u.key === m.use)?.label || m.use} · ${m.floors} fl · ${fmtArea(massGfa(m))}`, c: colorOf(scheme(), m.use) })),
+      ...sk.model.masses.map(m => ({ kind: 'mass', o: m, t: `${useLabel(m)} · ${info(m).sheet ? 'flat shape' : `${info(m).floors} fl · ${fmtArea(massGfa(m))}`}`, c: colorOf(scheme(), m.use) })),
       ...sk.model.lots.map(l => ({ kind: 'lot', o: l, t: `Parking · ${lotLayout(l).total} spaces · ${l.stall}°`, c: colorOf(scheme(), 'lot') })),
       ...sk.model.drives.map(d => ({ kind: 'drive', o: d, t: `Drive aisle · ${d.w || 24} ${uLen()}`, c: colorOf(scheme(), 'lot') })),
       ...sk.model.islands.map(i => ({ kind: 'island', o: i, t: `Island · ${fmtArea(area(i.pts) * sfPerNative2())}`, c: colorOf(scheme(), 'green') })),
@@ -836,24 +1242,27 @@ export function createSketch(ctx) {
   }
 
   // ---------------------------------------------------------------- outputs for the rest of the app
-  /** Massing as building-like objects (for the sun / shadow raster), roofs, step-backs and courtyards included. */
+  /** Solids as building-like objects for the sun / shadow raster (top surface per point; courtyards open). */
   function buildings() {
-    return sk.model.masses.map(m => {
-      const base = massBase(m), G = geom(m);
-      return { ring: m.pts, massRing: m.pts, base, top: base + massHeight(m), roofAt: (x, y) => base + heightAt(G, x, y), sketch: true };
+    return sk.model.masses.filter(m => !info(m).sheet).map(m => {
+      const I = info(m), base = I.base, [x0, y0, x1, y1] = I.bb;
+      return { ring: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], massRing: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], base, top: base + I.zmax / kz(),
+        roofAt: (x, y) => { const t = I.top(x, y); return t ? base + t.z / kz() : NaN; }, sketch: true };
     });
   }
-  /** Massing triangles (flat [x, y, z × 3 …], native XY, output Z), a colour and a block id per triangle, and floor
-   *  lines. ex: vertical exaggeration of the 3D view (heights above each block's base are divided by it so blocks
-   *  stay true-scale). */
+  /** Solid triangles (flat [x, y, z × 3 …], native XY, output Z), a colour, block id and face per triangle, floor
+   *  lines and outline edges. ex: vertical exaggeration of the 3D view (heights above each block's base are divided
+   *  by it so blocks stay true-scale). */
   function tris(ex = 1) {
-    const out = [], col = [], ids = [], lines = [];
+    const out = [], col = [], ids = [], fis = [], lines = [], edges = [];
     for (const m of sk.model.masses) {
-      const base = massBase(m), G = geom(m), c = colorOf(scheme(), m.use);
-      const Z = p => [p[0], p[1], base + p[2] / ex];
-      massMesh(m, G, ctx.triangulate, (a, b, d) => { out.push(...Z(a), ...Z(b), ...Z(d)); col.push(c); ids.push(m.id); }, (a, b) => lines.push(...Z(a), ...Z(b)));
+      const I = info(m), c = colorOf(scheme(), m.use), lift = I.sheet ? 0.15 : 0;
+      const Z = p => [p[0], p[1], I.base + p[2] / kz() / ex + lift];
+      for (const t of I.tris) { out.push(...Z(m.v[t.a]), ...Z(m.v[t.b]), ...Z(m.v[t.c])); col.push(c); ids.push(m.id); fis.push(t.fi); }
+      for (const pl of I.P.slice(1)) for (const [a, b] of pl.segs) lines.push(...Z([...a, pl.z]), ...Z([...b, pl.z]));
+      for (const [a, b] of I.edges) edges.push(...Z(m.v[a]), ...Z(m.v[b]));
     }
-    return { tris: out, colors: col, ids, lines };
+    return { tris: out, colors: col, ids, fis, lines, edges };
   }
   /** Parking for 3D: stall lines, accessible stalls, islands (low planters) and drive aisles draped on the ground. */
   function parking3d() {
@@ -868,8 +1277,8 @@ export function createSketch(ctx) {
     };
     // A strip a→b, w wide, cut into short pieces so it follows the ground.
     const drape = (a, b, w, outArr) => {
-      const L = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.max(1, Math.ceil(L / (8 * perFt())));
-      const nx = -(b[1] - a[1]) / (L || 1) * w / 2, ny = (b[0] - a[0]) / (L || 1) * w / 2;
+      const Ln = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.max(1, Math.ceil(Ln / (8 * perFt())));
+      const nx = -(b[1] - a[1]) / (Ln || 1) * w / 2, ny = (b[0] - a[0]) / (Ln || 1) * w / 2;
       for (let i = 0; i < n; i++) {
         const p = [a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n], q = [a[0] + (b[0] - a[0]) * (i + 1) / n, a[1] + (b[1] - a[1]) * (i + 1) / n];
         const c = [[p[0] + nx, p[1] + ny], [q[0] + nx, q[1] + ny], [q[0] - nx, q[1] - ny], [p[0] - nx, p[1] - ny]].map(r => [...r, z(...r) + 0.05]);
@@ -901,13 +1310,13 @@ export function createSketch(ctx) {
     onSite,
     setActive(on) {
       sk.active = on; canvas.hidden = !visible(); bar.hidden = !on;
-      if (!on) { sk.draw = null; cardEl.hidden = true; map.getContainer().classList.remove('sk-drawing'); sk.v3?.el.classList.remove('sk-drawing'); sk.v3?.sketchNav(false); }
+      if (!on) { sk.draw = null; sk.op = null; sk.hov = null; cardEl.hidden = true; map.getContainer().classList.remove('sk-drawing'); sk.v3?.el.classList.remove('sk-drawing'); sk.v3?.sketchNav(false); }
       else setTool(sk.tool);
       draw(); card(); panel();
     },
     attach3d,
     redraw() { draw(); card(); },
-    buildings, tris, parking3d, stats, wirePanel, panel,
+    buildings, tris, parking3d, stats, wirePanel, panel, info,
     hasContent: () => sk.model.masses.length + sk.model.lots.length + sk.model.islands.length + sk.model.drives.length > 0,
     refreshVisibility() { canvas.hidden = !visible(); draw(); },
     _sk: sk,
