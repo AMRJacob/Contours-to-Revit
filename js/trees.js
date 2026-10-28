@@ -96,6 +96,15 @@ export function findTrees(lid, box, nativePerM, buildings = [], opts = {}) {
       if (best >= 0) lab[q] = best;
     }
   }
+  // Evergreen or not (a heuristic): USGS prefers leaf-off collections, when a bare deciduous crown lets most pulses
+  // through to the ground while a pine or cedar crown stops them. ev = share of the crown's returns in its upper half.
+  const up = new Float64Array(tops.length), all = new Float64Array(tops.length);
+  for (let k = 0; k < lid.n; k++) {
+    const c = lid.c[k]; if (NOISE.has(c) || c === BUILDING) continue;
+    const q = idx(lid.x[k], lid.y[k]); if (q < 0) continue;
+    const t = lab[q]; if (t < 0) continue;
+    all[t]++; if (lid.z[k] - G[q] > 0.5 * topH[t]) up[t]++;
+  }
   const area = new Float64Array(tops.length);
   let canopy = 0;
   for (let q = 0; q < N; q++) if (lab[q] >= 0) { area[lab[q]]++; canopy++; }
@@ -103,7 +112,8 @@ export function findTrees(lid, box, nativePerM, buildings = [], opts = {}) {
   tops.forEach((q, t) => {
     const a = area[t] * cellM * cellM; if (a < 3) return;
     const i = q % nx, j = (q / nx) | 0;
-    trees.push({ x: box.xmin + (i + 0.5) * cs, y: box.ymin + (j + 0.5) * cs, h: Math.round(H[q] * 10) / 10 || Math.round(topH[t] * 10) / 10, r: Math.round(Math.sqrt(a / Math.PI) * 10) / 10 });
+    trees.push({ x: box.xmin + (i + 0.5) * cs, y: box.ymin + (j + 0.5) * cs, h: Math.round(H[q] * 10) / 10 || Math.round(topH[t] * 10) / 10, r: Math.round(Math.sqrt(a / Math.PI) * 10) / 10,
+      ev: all[t] >= 8 ? Math.round(up[t] / all[t] * 100) / 100 : null });
   });
   trees.sort((a, b) => b.h - a.h);
   return { trees: trees.slice(0, 40000), canopy: canopy / N, hasGround, cell: cellM };

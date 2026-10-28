@@ -1,25 +1,25 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.58.0';
-import { fetchElevation, sample } from './dem.js?v=0.58.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.58.0';
-import { Dxf } from './dxf.js?v=0.58.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.58.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.58.0';
-import { Flow } from './flow.js?v=0.58.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.59.0';
+import { fetchElevation, sample } from './dem.js?v=0.59.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.59.0';
+import { Dxf } from './dxf.js?v=0.59.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.59.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.59.0';
+import { Flow } from './flow.js?v=0.59.0';
 import { placeAt } from './parking-codes.js?v=0.51.1';
-import { createSketch } from './sketch.js?v=0.58.0';
-import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.58.0';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.58.0';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.58.0';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.58.0';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.58.0';
-import { loadLidar, applyLidar } from './lidar.js?v=0.58.0';
-import { findTrees } from './trees.js?v=0.58.0';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.58.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.58.0';
+import { createSketch } from './sketch.js?v=0.59.0';
+import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.59.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.59.0';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.59.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.59.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.59.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.59.0';
+import { findTrees } from './trees.js?v=0.59.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.59.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.59.0';
 
-const VERSION = '0.58.0';
+const VERSION = '0.59.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -637,7 +637,7 @@ async function generate() {
       await tick();
       const rings = ['bldgBest', 'buildings', 'bldgMs', 'bldgOsm'].flatMap(k => ((k === 'buildings' ? context.buildings : context[k]) || []).map(b => b.ring)).filter(r => r?.length > 2);
       const T = findTrees(lidT, box, nativePerM, rings);
-      context.trees = T.trees.map(t => ({ x: t.x, y: t.y, z: zAt(t.x, t.y), h: t.h * zPerM, hM: t.h, r: t.r * nativePerM, rM: t.r })).filter(t => Number.isFinite(t.z));
+      context.trees = T.trees.map(t => ({ x: t.x, y: t.y, z: zAt(t.x, t.y), h: t.h * zPerM, hM: t.h, r: t.r * nativePerM, rM: t.r, ev: t.ev })).filter(t => Number.isFinite(t.z));
       context.treeInfo = { name: lidT.name, year: lidT.year, canopy: T.canopy, hasGround: T.hasGround, mb: lidT.mb };
     } catch (err) {
       console.error(err);
@@ -1065,7 +1065,7 @@ function showResults(site) {
     if (site.ctxInclude.b) html += `<div>Footprints — USA Structures: ${nb}${dates.length ? ` (imagery ${escapeHtml(dates[0].slice(0, 4))}${dates.length > 1 && dates.at(-1).slice(0, 4) !== dates[0].slice(0, 4) ? '–' + escapeHtml(dates.at(-1).slice(0, 4)) : ''})` : ''}, ${nh} with heights · Microsoft: ${(site.context.bldgMs || []).length}, ${(site.context.bldgMs || []).filter(b => b.heightKnown).length} with estimated heights · OpenStreetMap: ${(site.context.bldgOsm || []).length}, ${(site.context.bldgOsm || []).filter(b => b.heightKnown).length} with heights</div>`;
     if (site.lidar) html += `<div>${lidarSummary(site, true)}</div>`;
     const ti = site.context.treeInfo;
-    if (ti) html += `<div>${ti.error ? `Trees: not found (${escapeHtml(ti.error)})` : `${(site.context.trees || []).length} trees from USGS lidar ${escapeHtml(ti.name)} — ${Math.round(ti.canopy * 100)}% canopy cover; positions, heights and crown spread are estimates`}</div>`;
+    if (ti) html += `<div>${ti.error ? `Trees: not found (${escapeHtml(ti.error)})` : `${(site.context.trees || []).length} trees from USGS lidar ${escapeHtml(ti.name)} — ${Math.round(ti.canopy * 100)}% canopy cover${(() => { const n = (site.context.trees || []).filter(t => t.ev >= 0.6).length; return n ? `, ${n} likely evergreen (pine / cedar, from crown density — assumes a leaf-off flight)` : ''; })()}; positions, heights and crown spread are estimates`}</div>`;
     if (site.ctxInclude.r) html += `<div>${nr} road segment${nr === 1 ? '' : 's'}${np ? `, ${np} path${np === 1 ? '' : 's'}` : ''} (${site.roadsSource === 'tiger' ? 'US Census TIGER' : 'OpenStreetMap'}) — centerlines only; no source publishes pavement edges</div>`;
     if (site.ctxInclude.p) {
       const npc = site.context.parcels.length;

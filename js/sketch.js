@@ -8,13 +8,13 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, roundEach, driveJoins } from './parking.js?v=0.58.0';
-import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.58.0';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.58.0';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.58.0';
-import * as SO from './solid.js?v=0.58.0';
-import { noteGeom, WIDTHS } from './notes.js?v=0.58.0';
-import { booleanSolids } from './bool.js?v=0.58.0';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, roundEach, driveJoins } from './parking.js?v=0.59.0';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.59.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.59.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.59.0';
+import * as SO from './solid.js?v=0.59.0';
+import { noteGeom, WIDTHS } from './notes.js?v=0.59.0';
+import { booleanSolids } from './bool.js?v=0.59.0';
 import { CODES, codeFor, spacesFor } from './parking-codes.js?v=0.51.1';
 
 const TOOLS = [
@@ -735,7 +735,7 @@ export function createSketch(ctx) {
     }
     if (kind === 'walk') return `<div class="skc-row"><span>Sidewalk</span>${num('w', o.w || 5, 2, 40, 0.5, 42)}<span>${uLen()} wide</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div><div class="skc-row skc-read" data-o="read"></div>`;
     if (kind === 'plant') return `<div class="skc-row"><span>Planting</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div><div class="skc-row skc-read" data-o="read"></div>`;
-    if (kind === 'tree') return `<div class="skc-row"><span>Tree</span><span>crown ⌀</span>${num('d', o.d, 3, 120, 1, 42)}<span>height</span>${num('h', o.h, 5, 150, 1, 42)}<span>${uLen()}</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div>`;
+    if (kind === 'tree') return `<div class="skc-row"><select data-k="form">${[['broadleaf', 'Broadleaf'], ['pine', 'Pine'], ['cedar', 'Cedar']].map(([k, l]) => `<option value="${k}"${(o.form || 'broadleaf') === k ? ' selected' : ''}>${l}</option>`).join('')}</select><span>crown ⌀</span>${num('d', o.d, 3, 120, 1, 42)}<span>height</span>${num('h', o.h, 5, 150, 1, 42)}<span>${uLen()}</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div>`;
     return `<div class="skc-row"><span>Planter island</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div>
       <div class="skc-row skc-note">Round its corners with the Radius tool (F).</div><div class="skc-row skc-read" data-o="read"></div>`;
   }
@@ -748,7 +748,7 @@ export function createSketch(ctx) {
     for (const q of pts) { if (!q) continue; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; }
     if (!Number.isFinite(x1)) { cardEl.hidden = true; return; }
     const W = cardEl.parentElement.clientWidth, H = cardEl.parentElement.clientHeight;
-    const sig = `${kind}:${o.id}:${sk.sel2?.id || ''}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use, o.color, o.stand, o.curve, o.size, o.r, o.cut, o.islandR, !!o.accAt, o.d, o.h])}`;
+    const sig = `${kind}:${o.id}:${sk.sel2?.id || ''}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use, o.color, o.stand, o.curve, o.size, o.r, o.cut, o.islandR, !!o.accAt, o.d, o.h, o.form])}`;
     if (cardEl.dataset.sig !== sig && !cardEl.contains(document.activeElement)) { cardEl.dataset.sig = sig; cardEl.innerHTML = cardHtml(kind, o); }
     const read = cardEl.querySelector('[data-o="read"]') || {};
     if (kind === 'note') { /* nothing to read out */ } else if (kind === 'mass') {
@@ -824,6 +824,7 @@ export function createSketch(ctx) {
     if (k === 'w') o.w = sk.sel.kind === 'walk' ? Math.max(2, Math.min(40, v || 5)) : Math.max(10, Math.min(60, v || 24));
     if (k === 'd' && sk.sel.kind === 'tree') o.d = Math.max(3, Math.min(120, v || o.d));
     if (k === 'h' && sk.sel.kind === 'tree') o.h = Math.max(5, Math.min(150, v || o.h));
+    if (k === 'form' && sk.sel.kind === 'tree') { o.form = t.value; sk.treeForm = t.value; }
     if (k === 'r') o.r = Math.max(0, Number.isFinite(v) ? v : 0);
     if (k === 'cut') o.cut = t.checked;
     if (k === 'islandR') o.islandR = Math.max(0, Number.isFinite(v) ? v : 0);
@@ -1904,7 +1905,7 @@ export function createSketch(ctx) {
     if (d?.treeDraw) {
       sk.draw = null; before();
       const D = Math.round(d.r * 2 / perFt());
-      const o = { id: uid(), pts: [d.c.slice()], d: D, h: Math.round(Math.max(12, Math.min(80, D * 1.2))) };
+      const o = { id: uid(), pts: [d.c.slice()], d: D, h: Math.round(Math.max(12, Math.min(80, D * 1.2))), form: sk.treeForm || 'broadleaf' };
       sk.model.trees.push(o); if (d.sized) sk.treeD = D;
       const inp = bar.querySelector('[data-fly="treeD"]'); if (inp) inp.value = String(sk.treeD);
       changed(); return;
@@ -2267,7 +2268,7 @@ export function createSketch(ctx) {
 
   /** New trees for the 3D view (same form as lidar trees): { x, y, z (ground), h (output units), r (native), sketch }. */
   function trees3d() {
-    return sk.model.trees.map(t => ({ x: t.pts[0][0], y: t.pts[0][1], z: zGround(t.pts[0]), h: t.h * outPerFt(), r: t.d / 2 * perFt(), sketch: true }));
+    return sk.model.trees.map(t => ({ x: t.pts[0][0], y: t.pts[0][1], z: zGround(t.pts[0]), h: t.h * outPerFt(), r: t.d / 2 * perFt(), form: t.form || 'broadleaf', sketch: true }));
   }
   return {
     trees3d,

@@ -300,9 +300,15 @@ export class SiteView3D {
     const hash = t => { const v = Math.sin(t.x * 12.9898 + t.y * 78.233) * 43758.5453; return v - Math.floor(v); };
     // Pick a form per tree.
     const byForm = new Map();
+    // Forms for Arkansas: mostly broadleaf crowns; pines (shortleaf / loblolly: tall bare trunk, open crown on top) and
+    // eastern red cedar (dense narrow teardrop) where the lidar says evergreen (t.ev ≥ 0.6, leaf-off density), or —
+    // without that — only for very slender trees.
     list.forEach(t => {
-      const u = hash(t), ratio = t.h / Math.max(0.1, 2 * t.r * this.k);
-      const form = ratio > 1.9 ? (u < 0.6 ? 'cone' : 'column') : ratio < 0.95 ? (u < 0.6 ? 'spread' : 'round') : ['round', 'oval', 'cluster', 'lumpy'][Math.floor(u * 4)];
+      const u = hash(t), ratio = t.h / Math.max(0.1, 2 * t.r * this.k), ev = t.ev == null ? null : t.ev >= 0.6;
+      const form = t.form === 'pine' || t.form === 'cedar' ? t.form : t.form === 'broadleaf' ? (ratio < 0.95 ? 'spread' : ['round', 'oval', 'cluster', 'lumpy'][Math.floor(u * 4)])
+        : ev === true ? (ratio > 2.2 && u < 0.5 ? 'cedar' : 'pine')
+        : ev == null && ratio > 2.6 ? (u < 0.5 ? 'cedar' : 'pine')
+        : ratio < 0.95 ? (u < 0.6 ? 'spread' : 'round') : ['round', 'oval', 'cluster', 'lumpy'][Math.floor(u * 4)];
       if (!byForm.has(form)) byForm.set(form, []);
       byForm.get(form).push(t);
     });
@@ -312,11 +318,11 @@ export class SiteView3D {
     let ti = 0;
     for (const [form, L] of byForm) {
       const geo = F[form], crowns = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true }), L.length);
-      const conifer = form === 'cone' || form === 'column';
+      const conifer = form === 'cedar' || form === 'pine';
       L.forEach((t, i) => {
         const u = hash(t), X = (t.x - this.cx) * this.k, Z = -(t.y - this.cy) * this.k, Y0 = (t.z - this.z0) * this.ex;
         const r = Math.max(0.6, t.r * this.k), h = Math.max(1.5, t.h);
-        const crownH = conifer ? h * (0.78 + 0.1 * u) : form === 'spread' ? Math.min(h * 0.5, r * 1.1) : Math.min(h * (0.62 + 0.12 * u), r * 2.2);
+        const crownH = form === 'cedar' ? h * (0.82 + 0.1 * u) : form === 'pine' ? h * (0.42 + 0.14 * u) : form === 'spread' ? Math.min(h * 0.5, r * 1.1) : Math.min(h * (0.62 + 0.12 * u), r * 2.2);
         const trunkH = h - crownH;
         q.setFromAxisAngle(up, u * Math.PI * 2);
         // Crown width = the lidar crown diameter, top = the lidar tree height (variety comes from form and turn only).
@@ -325,10 +331,11 @@ export class SiteView3D {
         const painted = dg && opt.paint?.(t);
         if (painted) c.set(painted);
         else if (dg) c.setHSL(hsl.h, hsl.s, Math.max(0, Math.min(1, hsl.l + (u - 0.5) * 0.06)));
-        else if (conifer) c.setHSL(0.36 + 0.04 * u, 0.38, 0.18 + 0.06 * u);
+        else if (form === 'cedar') c.setHSL(0.33 + 0.04 * u, 0.32, 0.17 + 0.05 * u);
+        else if (form === 'pine') c.setHSL(0.27 + 0.05 * u, 0.36, 0.22 + 0.06 * u);
         else c.setHSL(0.24 + 0.08 * u, 0.40 + 0.12 * u, 0.24 + 0.10 * ((u * 7) % 1));
         crowns.setColorAt(i, c);
-        const tr = Math.max(0.2, r * (conifer ? 0.06 : 0.08));
+        const tr = Math.max(0.2, r * (form === 'pine' ? 0.1 : conifer ? 0.06 : 0.08));
         M.compose(new THREE.Vector3(X, Y0 + (trunkH + crownH * 0.3) / 2, Z), q, new THREE.Vector3(tr, trunkH + crownH * 0.3, tr));
         trunks.setMatrixAt(ti++, M);
       });
@@ -748,22 +755,19 @@ function treeForms() {
     const s = size * (0.75 + 0.4 * rnd());
     return blob(Math.cos(a) * d, (rnd() - 0.4) * spreadY, Math.sin(a) * d, s, s * (0.85 + 0.3 * rnd()), s, 1, 0.2);
   }));
-  const cone = (tiers) => merge(Array.from({ length: tiers }, (_, i) => {
-    const g = new THREE.ConeGeometry(1 - i * 0.22, 1.1 - i * 0.12, 7, 1).toNonIndexed();
-    g.rotateY(rnd() * Math.PI); g.translate(0, i * 0.62, 0);
-    return g;
-  }));
   const F = {
     round: cluster(5, 0.55, 0.5, 0.62),
     oval: merge([blob(0, 0, 0, 0.8, 1.2, 0.8, 1, 0.2), blob(0.25, 0.55, 0.1, 0.55, 0.6, 0.55, 1, 0.2), blob(-0.3, -0.35, -0.1, 0.6, 0.55, 0.6, 1, 0.2)]),
     cluster: cluster(7, 0.75, 0.7, 0.5),
     lumpy: merge([blob(0, 0, 0, 1, 0.9, 1, 2, 0.28)]),
     spread: merge([...Array.from({ length: 6 }, (_, i) => { const a = i / 6 * Math.PI * 2 + rnd(); return blob(Math.cos(a) * 0.75, (rnd() - 0.5) * 0.25, Math.sin(a) * 0.75, 0.55, 0.32, 0.55, 1, 0.22); }), blob(0, 0.15, 0, 0.7, 0.4, 0.7, 1, 0.2)]),
-    cone: cone(3),
-    column: merge([blob(0, 0, 0, 0.55, 1.4, 0.55, 1, 0.22), blob(0.12, 0.8, 0.05, 0.4, 0.7, 0.4, 1, 0.22)]),
+    // Eastern red cedar: one dense, slightly lumpy teardrop.
+    cedar: (() => { const g = new THREE.ConeGeometry(1, 2.2, 9, 4).toNonIndexed(), p = g.attributes.position; for (let i = 0; i < p.count; i++) { const y = p.getY(i), k = 1 + (rnd() - 0.5) * 0.18, bulge = 1 + 0.25 * Math.sin((y + 1.1) / 2.2 * Math.PI); p.setXYZ(i, p.getX(i) * k * bulge, y, p.getZ(i) * k * bulge); } return merge([g]); })(),
+    // Pine: an open, flat-topped crown of a few irregular clumps (the tall bare trunk comes from the crown height).
+    pine: merge([blob(0, 0.2, 0, 0.8, 0.45, 0.75, 1, 0.25), blob(0.55, -0.15, 0.25, 0.5, 0.32, 0.5, 1, 0.25), blob(-0.5, -0.05, -0.3, 0.55, 0.35, 0.5, 1, 0.25), blob(0.1, -0.35, -0.45, 0.42, 0.28, 0.42, 1, 0.25)]),
     trunk: (() => { const g = new THREE.CylinderGeometry(0.65, 1, 1, 6); g.userData.shared = true; return g; })(),
   };
   F.edges = {};
-  for (const k of ['round', 'oval', 'cluster', 'lumpy', 'spread', 'cone', 'column']) F.edges[k] = new THREE.EdgesGeometry(F[k], 35);
+  for (const k of ['round', 'oval', 'cluster', 'lumpy', 'spread', 'cedar', 'pine']) F.edges[k] = new THREE.EdgesGeometry(F[k], 35);
   return F;
 }
