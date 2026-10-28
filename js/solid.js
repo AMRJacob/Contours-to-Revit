@@ -4,7 +4,7 @@
 // single face is a flat "sheet" (a shape drawn on the ground, waiting to be pulled up).
 // Floors aren't stored as geometry: they come from slicing the solid every floor-to-floor height.
 import earcut from '../lib/earcut.js';
-import { massGeom } from './sketchmass.js?v=0.61.2';
+import { massGeom } from './sketchmass.js?v=0.62.0';
 
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];

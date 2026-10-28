@@ -364,8 +364,8 @@ function sendForm(site, P, snapBtn) {
       const parts = [sh.blocks.length ? `${sh.blocks.length} block${sh.blocks.length === 1 ? '' : 's'}` : '', ...['paving', 'island', 'walk', 'planting'].filter(k => sh.surfaces[k].length).map(k => ({ paving: 'parking', island: 'islands', walk: 'sidewalks', planting: 'planting' }[k])), tr.planted.length ? `${tr.planted.length} new tree${tr.planted.length === 1 ? '' : 's'}` : ''].filter(Boolean);
       return `<label class="check"><input type="checkbox" id="rv-sk" ${o.sk && parts.length ? 'checked' : ''} ${parts.length ? '' : 'disabled'}><span><strong>Sketch design</strong>${parts.length ? ` — ${parts.join(', ')}` : ''}
       <small class="rv-state">${parts.length ? 'Blocks as masses coloured by use; parking, islands, sidewalks and planting as model surfaces; trees as planting. Replaces what was sent before.' : 'Draw blocks, parking, sidewalks, planting or trees in the Sketch tab first.'}</small></span></label>
-      <label class="check"><input type="checkbox" id="rv-trees" ${o.trees && tr.lidar.length ? 'checked' : ''} ${tr.lidar.length ? '' : 'disabled'}><span><strong>Existing trees</strong>${tr.lidar.length ? ` — ${tr.lidar.length} from lidar` : ''}
-      <small class="rv-state">${tr.lidar.length ? 'Simple tree shapes at their measured height and crown, existing phase. Replaces those sent before.' : 'Turn on the Trees layer (found in the lidar) first.'}</small></span></label>`;
+      <label class="check"><input type="checkbox" id="rv-trees" ${o.trees && tr.lidar.length ? 'checked' : ''} ${tr.lidar.length ? '' : 'disabled'}><span><strong>Existing trees</strong>${tr.lidar.length ? ` — ${tr.lidar.length} from lidar${tr.removed?.size ? `, ${tr.removed.size} removed by the site design` : ''}` : ''}
+      <small class="rv-state">${tr.lidar.length ? `Simple tree shapes at their measured height and crown, existing phase${tr.removed?.size ? '; the ones the site design removes are demolished in the proposed grading phase' : ''}. Replaces those sent before.` : 'Turn on the Trees layer (found in the lidar) first.'}</small></span></label>`;
     })() : ''}
     <label class="check"><input type="checkbox" id="rv-dxf" ${o.dxf ? 'checked' : ''}><span><strong>Contours &amp; context</strong> — DXF link (the map's shown layers)
       <small class="rv-state">${dxf ? 'Reloads the existing link.' : 'Linked and pinned at the Project Base Point.'}</small></span></label>
@@ -847,16 +847,26 @@ function shapesJob(site, o, date) {
     groups.push({ role: 'sketch-trees', category: 'OST_Planting', phase: phP, items: tp.flatMap((t, i) => treeItems(site, t, `New tree ${i + 1}`, T, M, comment('new tree'))) });
   }
   if (o.trees) {
-    const lid = api.trees(site).lidar;
-    // Many trees: one crown shape and one trunk shape for the lot (fast in Revit).
-    const crowns = { v: [], f: [] }, trunks = { v: [], f: [] };
-    for (const t of lid) {
-      const m = treeMesh(site, t);
-      for (const [dst, src] of [[crowns, m.crown], [trunks, m.trunk]]) { const off = dst.v.length / 3; for (let i = 0; i < src.v.length; i += 3) dst.v.push(...T(src.v[i], src.v[i + 1], src.v[i + 2])); for (const f of src.f) dst.f.push(f.map(q => q + off)); }
-    }
-    groups.push({ role: 'lidar-trees', category: 'OST_Planting', phase: phE, items: lid.length ? [
-      { id: 'crowns', name: `Existing trees (${lid.length}) — crowns`, ...crowns, mat: M('Tree foliage', '#5a7f45'), comment: comment('existing trees from USGS lidar, estimated') },
-      { id: 'trunks', name: `Existing trees (${lid.length}) — trunks`, ...trunks, mat: M('Tree trunk', '#5e4633'), comment: comment('existing trees from USGS lidar, estimated') }] : [] });
+    const TR = api.trees(site), all = TR.lidar, gone = TR.removed || new Set();
+    // Many trees: one crown shape and one trunk shape per group (fast in Revit). Trees the site design removes go in
+    // their own group: existing phase, demolished in the proposed-grading phase (Revit shows them as demolished).
+    const merged = list => {
+      const crowns = { v: [], f: [] }, trunks = { v: [], f: [] };
+      for (const t of list) {
+        const m = treeMesh(site, t);
+        for (const [dst, src] of [[crowns, m.crown], [trunks, m.trunk]]) { const off = dst.v.length / 3; for (let i = 0; i < src.v.length; i += 3) dst.v.push(...T(src.v[i], src.v[i + 1], src.v[i + 2])); for (const f of src.f) dst.f.push(f.map(q => q + off)); }
+      }
+      return { crowns, trunks };
+    };
+    const keep = all.filter(t => !gone.has(TR.key(t))), demo = all.filter(t => gone.has(TR.key(t)));
+    const items = (list, what, note) => {
+      if (!list.length) return [];
+      const { crowns, trunks } = merged(list);
+      return [{ id: 'crowns', name: `${what} (${list.length}) — crowns`, ...crowns, mat: M('Tree foliage', '#5a7f45'), comment: comment(note) },
+        { id: 'trunks', name: `${what} (${list.length}) — trunks`, ...trunks, mat: M('Tree trunk', '#5e4633'), comment: comment(note) }];
+    };
+    groups.push({ role: 'lidar-trees', category: 'OST_Planting', phase: phE, items: items(keep, 'Existing trees', 'existing trees from USGS lidar, estimated') });
+    groups.push({ role: 'lidar-trees-removed', category: 'OST_Planting', phase: phE, phaseDemolished: phP, items: items(demo, 'Trees to remove', 'existing trees removed by the site design (USGS lidar, estimated)') });
   }
   return { materials, groups };
 }

@@ -24,6 +24,8 @@ export class Design {
     this.delta = new Float32Array(n);         // total change = brush + features
     this.z = Float32Array.from(grid.z);       // proposed = existing + delta
     this.features = [];                       // [{id, type, geom, p, out}]
+    this.treesOut = new Set();                // existing trees removed by hand (tree keys "x,y")
+    this.treesKeep = new Set();               // trees kept even though the grade changes under them
     this.undo = [];
     this.redo = [];
     this.stroke = null;
@@ -36,6 +38,9 @@ export class Design {
   }
 
   get changed() { return this.features.length > 0 || this.brush.some(v => v !== 0); }
+  /** Anything in the design: grading, or trees removed / kept. */
+  get edited() { return this.changed || this.treesOut.size > 0 || this.treesKeep.size > 0; }
+  _trees(saved) { this.treesOut = new Set(saved?.treesOut || []); this.treesKeep = new Set(saved?.treesKeep || []); }
   grid() { return { ...this.g, z: this.z }; }
 
   _markDirty(i0, j0, i1, j1) {
@@ -57,19 +62,19 @@ export class Design {
   proposedAt(x, y) { return this.sample(this.z, x, y); }
 
   // ----- Undo (snapshots of brush layer + features) -----
-  _snap() { return { b: Float32Array.from(this.brush), f: JSON.stringify(this.features.map(({ out, ...r }) => r)) }; }
+  _snap() { return { b: Float32Array.from(this.brush), f: JSON.stringify(this.features.map(({ out, ...r }) => r)), to: [...this.treesOut], tk: [...this.treesKeep] }; }
   checkpoint() {
     this.undo.push(this._snap());
     if (this.undo.length > 30) this.undo.shift();
     this.redo = [];
   }
-  _restore(s) { this.brush = Float32Array.from(s.b); this.features = JSON.parse(s.f); this.rebuild(); }
+  _restore(s) { this.brush = Float32Array.from(s.b); this.features = JSON.parse(s.f); this._trees({ treesOut: s.to, treesKeep: s.tk }); this.treeVer = (this.treeVer || 0) + 1; this.rebuild(); }
   doUndo() { if (!this.undo.length) return false; this.redo.push(this._snap()); this._restore(this.undo.pop()); return true; }
   doRedo() { if (!this.redo.length) return false; this.undo.push(this._snap()); this._restore(this.redo.pop()); return true; }
   reset() {
-    if (!this.changed) return false;
+    if (!this.edited) return false;
     this.checkpoint();
-    this.brush.fill(0); this.features = [];
+    this.brush.fill(0); this.features = []; this._trees(null); this.treeVer = (this.treeVer || 0) + 1;
     this.rebuild();
     return true;
   }
@@ -95,18 +100,20 @@ export class Design {
     }
     this.brush = B;
     this.features = saved.v === 2 ? (saved.features || []) : [];
+    this._trees(saved);
     for (const f of this.features) nextId = Math.max(nextId, (f.id || 0) + 1);
     this.rebuild();
     return true;
   }
 
-  serialize() { return { v: 2, brush: this.brush, features: this.features.map(({ out, ...r }) => r) }; }
+  serialize() { return { v: 2, brush: this.brush, features: this.features.map(({ out, ...r }) => r), treesOut: [...this.treesOut], treesKeep: [...this.treesKeep] }; }
   /** Restore { brush, features } (v2) or a bare delta array (older saves). */
   load(saved) {
     const b = saved?.brush || saved?.delta || saved;
     if (!b || b.length !== this.brush.length) return false;
     this.brush = Float32Array.from(b);
     this.features = saved.v === 2 ? (saved.features || []) : [];
+    this._trees(saved);
     for (const f of this.features) nextId = Math.max(nextId, (f.id || 0) + 1);
     this.rebuild();
     return true;

@@ -9,7 +9,7 @@ namespace ContoursToRevit
     /// <summary>
     /// Things drawn in the web app (Sketch blocks, parking paving, islands, sidewalks, planting beds, trees) as
     /// DirectShapes. The page sends groups: { role, category (BuiltInCategory name), phase, items: [{ id, name, v (flat
-    /// x,y,z internal feet), f (index triangles/quads), mat (index into materials), comment, meta }] } plus
+    /// x,y,z internal feet), f (index triangles/quads), mat (index into materials), comment, meta }], phaseDemolished? } plus
     /// materials: [{ name, rgb: [r,g,b], transparency (0-100) }]. Each role replaces what was sent before.
     /// </summary>
     internal static class Shapes
@@ -29,6 +29,7 @@ namespace ContoursToRevit
                 if (old.Count > 0) { try { doc.Delete(old); removed += old.Count; } catch (Exception ex) { warnings.Add($"Couldn't remove the previous {role}: {ex.Message}"); } }
                 var cat = Category(doc, g.Str("category"));
                 var phase = g.Id("phase");
+                var demolished = g.Id("phaseDemolished");
                 var n = 0;
                 foreach (var it in g.Arr("items"))
                 {
@@ -47,6 +48,11 @@ namespace ContoursToRevit
                         {
                             var p = ds.get_Parameter(BuiltInParameter.PHASE_CREATED);
                             if (p != null && !p.IsReadOnly) p.Set(phase);
+                        }
+                        if (demolished != ElementId.InvalidElementId)
+                        {
+                            var p = ds.get_Parameter(BuiltInParameter.PHASE_DEMOLISHED);
+                            if (p != null && !p.IsReadOnly) p.Set(demolished);
                         }
                         Storage.Tag(ds, role, it.Str("meta"));
                         n++;

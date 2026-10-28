@@ -141,6 +141,46 @@ export class SiteView3D {
     if (fresh || opts.resetView) this.resetView();
   }
 
+  /**
+   * The original ground ghosted over the proposed ("Both"): see-through blue-grey where the grade changes, and the
+   * existing major contours. opts: { z (existing, output units), delta, seg: { major, majorLv } } or null to clear.
+   */
+  setGhost(opts) {
+    if (this.ghost) { this.scene.remove(this.ghost); this.ghost.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); this.ghost = null; }
+    if (!opts || !this.mesh || !this.g) return;
+    const g = this.g, step = this.step, { cols, rows } = this.mesh.userData, n = cols * rows, D = opts.delta;
+    const pos = new Float32Array(n * 3), col = new Float32Array(n * 4);
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const i = c * step, j = r * step, gi = j * g.nx + i, q = r * cols + c;
+      let zz = opts.z[gi]; if (Number.isNaN(zz)) zz = this.zmin;
+      pos[q * 3] = (g.x0 + i * g.s - this.cx) * this.k; pos[q * 3 + 1] = (zz - this.z0) * this.ex + 0.02; pos[q * 3 + 2] = -(g.y0 + j * g.s - this.cy) * this.k;
+      const d = Math.abs(D ? D[gi] : 0);
+      col[q * 4] = 0.55; col[q * 4 + 1] = 0.68; col[q * 4 + 2] = 0.85; col[q * 4 + 3] = d < 0.05 ? 0 : Math.min(0.5, 0.18 + d * 0.06);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 4));
+    geo.setIndex(this.mesh.geometry.index.clone());
+    geo.computeVertexNormals();
+    const grp = new THREE.Group();
+    const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide }));
+    mesh.renderOrder = 2; grp.add(mesh);
+    const seg = opts.seg?.major, lv = opts.seg?.majorLv;
+    if (seg?.length) {
+      const p = new Float32Array(seg.length / 4 * 6);
+      for (let a = 0, w = 0, m = 0; a < seg.length; a += 4, m++) {
+        const y = (lv[m] - this.z0) * this.ex + 0.15 * this.ex;
+        p[w++] = (seg[a] - this.cx) * this.k; p[w++] = y; p[w++] = -(seg[a + 1] - this.cy) * this.k;
+        p[w++] = (seg[a + 2] - this.cx) * this.k; p[w++] = y; p[w++] = -(seg[a + 3] - this.cy) * this.k;
+      }
+      const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(p, 3));
+      const lines = new THREE.LineSegments(lg, new THREE.LineDashedMaterial({ color: 0xc8d4e6, transparent: true, opacity: 0.7, dashSize: 1.2, gapSize: 0.8 }));
+      lines.computeLineDistances(); lines.renderOrder = 2; grp.add(lines);
+    }
+    grp.name = 'ghost';
+    this.ghost = grp; this.scene.add(grp);
+  }
+
   _contours(seg, lv) {
     if (this.lines) { this.scene.remove(this.lines); this.lines.geometry.dispose(); this.lines = null; }
     if (!seg?.length) return;
@@ -295,6 +335,9 @@ export class SiteView3D {
     if (this.trees) { this.scene.remove(this.trees); this.trees.traverse(o => { if (o.geometry && !o.geometry.userData.shared) o.geometry.dispose(); o.material?.dispose(); }); this.trees = null; }
     this._treeList = list;
     if (!list?.length || !this.g) return;
+    // Trees the design removes (t.ghost): see-through red, no shadow — the demolition look.
+    const ghosts = list.filter(t => t.ghost);
+    if (ghosts.length) list = list.filter(t => !t.ghost);
     const F = (this._treeForms ||= treeForms());
     const g = new THREE.Group(), dg = !!this.diagram;
     const hash = t => { const v = Math.sin(t.x * 12.9898 + t.y * 78.233) * 43758.5453; return v - Math.floor(v); };
@@ -351,6 +394,19 @@ export class SiteView3D {
     }
     trunks.castShadow = true;
     g.add(trunks);
+    if (ghosts.length) {
+      const gm = new THREE.MeshLambertMaterial({ color: 0xe0524a, transparent: true, opacity: 0.32, depthWrite: false });
+      const gc = new THREE.InstancedMesh(F.round, gm, ghosts.length), gt = new THREE.InstancedMesh(F.trunk, gm.clone(), ghosts.length);
+      ghosts.forEach((t, i) => {
+        const X = (t.x - this.cx) * this.k, Z = -(t.y - this.cy) * this.k, Y0 = (t.z - this.z0) * this.ex;
+        const r = Math.max(0.6, t.r * this.k), h = Math.max(1.5, t.h), crownH = Math.min(h * 0.68, r * 2.2), trunkH = h - crownH;
+        M.compose(new THREE.Vector3(X, Y0 + trunkH + crownH / 2, Z), q.identity(), new THREE.Vector3(r, crownH / 2, r)); gc.setMatrixAt(i, M);
+        const tr = Math.max(0.2, r * 0.08);
+        M.compose(new THREE.Vector3(X, Y0 + trunkH / 2, Z), q, new THREE.Vector3(tr, trunkH, tr)); gt.setMatrixAt(i, M);
+      });
+      gc.renderOrder = gt.renderOrder = 3; gc.name = 'ghost-trees';
+      g.add(gc, gt);
+    }
     g.name = 'trees';
     this.trees = g; this.scene.add(g);
   }
