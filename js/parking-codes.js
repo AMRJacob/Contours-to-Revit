@@ -17,7 +17,7 @@ export const CODES = [
     notes: [
       'Fractions are rounded down to the nearest whole space — Sec. 36-502(a).',
       'Spaces for two or more uses on one site add up — Sec. 36-503.',
-      'Downtown: no off-street parking is required in the UU Urban Use district (Sec. 36-342.1, per the Parking Reform Network\'s summary of the code; check the district text). The app can\'t tell the zoning district, so set the ratios to 0 there.',
+      'Downtown UU Urban Use district: "No off-street parking shall be required", and the Sec. 36-502 minimums become the maximum allowed — Sec. 36-342.1, Parking requirements. The app can\'t tell the zoning district; set the ratios to 0 for a UU site.',
       'Uses not listed take the ratio of the most similar listed use — Sec. 36-502(c).',
     ],
     uses: {

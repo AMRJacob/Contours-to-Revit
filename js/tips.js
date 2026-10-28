@@ -52,11 +52,12 @@ export const TIPS = {
 
   // ---- Sketch
   sketch: { t: '1 · Sketch', b: 'Live totals for what you\'ve drawn. Tools are on the map\'s toolbar — hover each for its keys. Drawing ' + term('snap', 'snaps') + '. Floors: ' + term('floors', 'how they\'re counted') + '. Accessible spaces: ' + term('ada', 'how they\'re counted') + '. Sketches save with the site and with projects.' },
-  'sk-select': { t: 'Select', k: 'V', b: 'Click to edit; drag to move; ⟳ rotate, ⤡ scale; drag corners and edge dots. ' + K('Shift') + '+click a second block to join, intersect or cut the two. ' + K('Ctrl') + '+drag a point, edge or face to move it (add ' + K('Shift') + ' for up / down). ' + K('Alt') + '+drag duplicates; ' + K('Alt') + '+click a corner removes it. ' + K('↑ ↓') + ' floors or slide rows · ' + K('Del') + ' delete.' },
+  'sk-select': { t: 'Select', k: 'V', b: 'Click to edit; drag to move; ⟳ rotate, ⤡ scale; drag a corner or an edge of the selection to reshape it ('+K('Shift')+' = any direction). ' + K('Shift') + '+click a second block to join, intersect or cut the two. ' + K('Ctrl') + '+drag a point, edge or face to move it (add ' + K('Shift') + ' for up / down). ' + K('Alt') + '+drag duplicates; ' + K('Alt') + '+click a corner removes it. ' + K('↑ ↓') + ' floors or slide rows · ' + K('Del') + ' delete.' },
   'bool-join': { t: 'Join', b: 'One block from both: everything either covers. Overlapping floors are counted once.' },
   'bool-intersect': { t: 'Intersect', b: 'Keeps only where the two blocks overlap.' },
   'bool-cut': { t: 'Cut', b: 'Takes the dashed (second) block out of the orange one — notches, courtyards, arcades, a tower carved out of a podium. The cutter is used up; Ctrl+Z brings it back.' },
   'sk-mass': { t: 'Shapes', k: 'M', b: 'Quick blocks: drag a box, round, L, U or courtyard (' + K('1 2 3 4 5') + '), or click an outline and double-click. ' + K('R') + ' changes the roof. They\'re ' + term('solid', 'solids') + ' you can keep shaping.' },
+  'sk-point': { t: 'Add point', k: 'A', b: 'Click any edge — a block, lot, island or aisle — to put a new corner there. Keep the button down to drag it into place.' },
   'sk-pen': { t: 'Draw', k: 'L', b: 'On the ground: a rectangle or outline becomes a flat shape to pull up. On a face: a rectangle inside it, or a line from edge to edge that splits it. ' + term('snap', 'Snaps') + ' as you go.' },
   'sk-push': { t: 'Push / Pull', k: 'U', b: 'Drag a face in or out. Tops snap to whole floors (' + K('Shift') + ' = free). ' + K('Ctrl') + ' always makes new sides. Type an exact distance in the box beside the tool.' },
   'sk-slope': { t: 'Slope', k: 'S', b: 'Drag across a face toward its high side; it tilts at the pitch in the box (walls lean out). The back edge stays put.' },

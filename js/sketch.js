@@ -8,18 +8,19 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins } from './parking.js?v=0.52.0';
-import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.52.0';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.52.0';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.52.0';
-import * as SO from './solid.js?v=0.52.0';
-import { noteGeom, WIDTHS } from './notes.js?v=0.52.0';
-import { booleanSolids } from './bool.js?v=0.52.0';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins } from './parking.js?v=0.53.0';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.53.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.53.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.53.0';
+import * as SO from './solid.js?v=0.53.0';
+import { noteGeom, WIDTHS } from './notes.js?v=0.53.0';
+import { booleanSolids } from './bool.js?v=0.53.0';
 import { CODES, codeFor, spacesFor } from './parking-codes.js?v=0.51.1';
 
 const TOOLS = [
   { id: 'select', key: 'V', label: 'Select', icon: '<path d="M5 3l14 8-6 1.5L10 19z"/>' },
   { id: 'mass', key: 'M', group: 'Building', label: 'Shapes', icon: '<path d="M4 9l8-4 8 4v9l-8 4-8-4z"/><path d="M4 9l8 4 8-4M12 13v9" opacity=".6"/>' },
+  { id: 'point', key: 'A', label: 'Add point', icon: '<path d="M3 17L21 7" opacity=".6"/><rect x="9" y="9" width="6" height="6" fill="currentColor"/>' },
   { id: 'pen', key: 'L', label: 'Draw', icon: '<path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3" opacity=".6"/>' },
   { id: 'push', key: 'U', label: 'Push/Pull', icon: '<path d="M5 14h14v6H5z"/><path d="M12 12V3M8.5 6.5L12 3l3.5 3.5"/>' },
   { id: 'slope', key: 'S', label: 'Slope', icon: '<path d="M3 19L21 9v10z"/><path d="M6 15l9-5M12 9.5l3 .5-1 3" opacity=".8"/>' },
@@ -61,7 +62,8 @@ const SHAPES = [
   { id: 'court', key: '5', label: 'Courtyard', icon: '<rect x="4" y="4" width="16" height="16"/><rect x="9" y="9" width="6" height="6"/>' },
 ];
 const HINTS = {
-  select: 'Click to edit · drag to move · ⟳ rotate, ⤡ scale · Ctrl+drag a point, edge or face to move it (add Shift to move it up or down) · Alt+drag duplicates.',
+  select: 'Click to select · drag to move · drag a corner or an edge of the selection to reshape it (Shift = free direction) · ⟳ rotate, ⤡ scale · Ctrl+drag any point, edge or face (add Shift for up / down) · Alt+drag duplicates · Alt+click a corner removes it.',
+  point: 'Click an edge to add a corner there — then drag it with Select.',
   mass: 'Drag a quick block (1–5: box, round, L, U, courtyard), or click corners and double-click. ↑ ↓ floors · R roof.',
   pen: 'On the ground: drag a rectangle or click an outline — it becomes a flat shape to pull up. On a face: drag a rectangle inside it, or click from edge to edge to split it.',
   push: 'Drag a face in or out. Tops snap to whole floors (Shift = free). Ctrl = always make new sides. Type an exact distance in the box.',
@@ -303,6 +305,7 @@ export function createSketch(ctx) {
     if (sk.v3) drawLabels3d(g); else drawPlan(g);
     if (diagramOn()) { drawNotes(g); drawNoteSel(g); drawNoteDraft(g); drawSnap(g); return; }
     drawSelection(g);
+    drawEdgeHover(g);
     drawHover(g);
     drawInProgress(g);
     drawOp(g);
@@ -433,7 +436,6 @@ export function createSketch(ctx) {
     const P = outline(o), n = P.length, cl = closed(kind);
     if (editable) {
       P.forEach((p, i) => out.push({ t: 'v', i, p, z: zf(p) }));
-      if (n <= 16) for (let i = 0; i < (cl ? n : n - 1); i++) { const a = P[i], b = P[(i + 1) % n], p = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; out.push({ t: 'm', i, p, z: zf(p) }); }
     }
     if (cl) {
       const c = centroid(P), bb = bbox(P), r = Math.max(...P.map(p => Math.hypot(p[0] - c[0], p[1] - c[1])));
@@ -817,13 +819,14 @@ export function createSketch(ctx) {
     return null;
   }
   /** Point, edge or face of a solid under the cursor (Ctrl-move). */
-  function pickElement(ev) {
+  function pickElement(ev, only) {
     let best = null;
-    for (const m of sk.model.masses) {
+    const ms = only ? sk.model.masses.filter(m => m.id === only) : sk.model.masses;
+    for (const m of ms) {
       m.v.forEach((p, i) => { const q = P3(m, p); if (!q) return; const d = Math.hypot(q[0] - ev.sx, q[1] - ev.sy); if (d < 9 && (!best || d < best.d)) best = { id: m.id, t: 'v', i, d }; });
     }
     if (best) return best;
-    for (const m of sk.model.masses) for (const [a, b] of info(m).edges) {
+    for (const m of ms) for (const [a, b] of info(m).edges) {
       const p = P3(m, m.v[a]), q = P3(m, m.v[b]); if (!p || !q) continue;
       const d = distSeg([ev.sx, ev.sy], p, q);
       if (d < 6 && (!best || d < best.d)) best = { id: m.id, t: 'e', a, b, d };
@@ -832,9 +835,73 @@ export function createSketch(ctx) {
     const f = pickFace(ev);
     return f ? { id: f.id, t: 'f', fi: f.fi, p: f.p } : null;
   }
+  /** Edge of an outline object under the cursor (screen px): { i, d, t (0..1 along it) }. */
+  function edgeHit(kind, o, ev, tol = 6) {
+    const P = outline(o), n = P.length, zf = handleZ(kind, o); let best = null;
+    for (let i = 0; i < (closed(kind) ? n : n - 1); i++) {
+      const pa = P[i], pb = P[(i + 1) % n], a = scr(pa, zf(pa)), b = scr(pb, zf(pb)); if (!a || !b) continue;
+      const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, ((ev.sx - a[0]) * dx + (ev.sy - a[1]) * dy) / L2));
+      const d = Math.hypot(ev.sx - a[0] - dx * t, ev.sy - a[1] - dy * t);
+      if (d < tol && (!best || d < best.d)) best = { i, d, t };
+    }
+    return best;
+  }
+  const editable = (kind, o) => kind !== 'mass' || !!o.prm;
+  /** The edge the Add point tool would split: any outline object or block edge. → { kind, id, i | a,b, t } */
+  function pointTarget(ev) {
+    let best = null;
+    const consider = (r, d) => { if (r && (!best || d < best.d)) best = { ...r, d }; };
+    for (const kind of ['lot', 'island', 'drive', 'mass']) for (const o of list(kind)) {
+      if (kind === 'mass' && !o.prm) {
+        for (const [a, b] of info(o).edges) {
+          const pa = P3(o, o.v[a]), pb = P3(o, o.v[b]); if (!pa || !pb) continue;
+          const dx = pb[0] - pa[0], dy = pb[1] - pa[1], L2 = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, ((ev.sx - pa[0]) * dx + (ev.sy - pa[1]) * dy) / L2));
+          const d = Math.hypot(ev.sx - pa[0] - dx * t, ev.sy - pa[1] - dy * t);
+          if (d < 8) consider({ kind, id: o.id, a, b, t }, d);
+        }
+        continue;
+      }
+      const e = edgeHit(kind, o, ev, 8); if (e) consider({ kind, id: o.id, i: e.i, t: e.t }, e.d);
+    }
+    // Not right on a corner (that's a corner already).
+    return best && best.t > 0.02 && best.t < 0.98 ? best : null;
+  }
+  function addPoint(ev) {
+    const T = pointTarget(ev);
+    if (!T) { flash('Click on an edge to add a corner.'); return; }
+    before();
+    const o = list(T.kind).find(q => q.id === T.id);
+    if (T.a != null) {                                    // free-form block: a new vertex on that edge, ready to drag
+      const p = SO.add(o.v[T.a], SO.mul(SO.sub(o.v[T.b], o.v[T.a]), T.t)), vi = SO.splitEdge(o, T.a, T.b, p);
+      sk.infos.delete(o.id); sk.sel = { kind: 'mass', id: o.id };
+      startOp('move', o, { el: { t: 'v', i: vi, id: o.id }, p0: p.slice(), d: 0 }, ev);
+      sk.op.keepUndo = true; return;
+    }
+    const P = outline(o), n = P.length, a = P[T.i], b = P[(T.i + 1) % n], q = [a[0] + (b[0] - a[0]) * T.t, a[1] + (b[1] - a[1]) * T.t];
+    P.splice(T.i + 1, 0, q);
+    if (o.prm) regen(o);
+    sk.sel = { kind: T.kind, id: o.id };
+    // Keep the button held to drag the new corner straight away.
+    const z = handleZ(T.kind, o)(q), start = ev.at?.(z) || ev.xy || q;
+    sk.drag = { kind: T.kind, id: o.id, h: { t: 'v', i: T.i + 1 }, z, start, orig: JSON.stringify(o), carry: [], pushed: true, sx: ev.sx, sy: ev.sy };
+    sk.hovE = null; changed(true);
+  }
+  function drawEdgeHover(g) {
+    const e = sk.hovE; if (!e) return;
+    const o = list(e.kind)?.find(q => q.id === e.id); if (!o) return;
+    let a, b;
+    if (e.a != null) { a = P3(o, o.v[e.a]); b = P3(o, o.v[e.b]); }
+    else { const P = outline(o), zf = handleZ(e.kind, o), pa = P[e.i], pb = P[(e.i + 1) % P.length]; a = scr(pa, zf(pa)); b = scr(pb, zf(pb)); }
+    if (!a || !b) return;
+    g.save(); g.beginPath(); g.moveTo(...a); g.lineTo(...b); g.strokeStyle = ORANGE; g.lineWidth = 4; g.globalAlpha = 0.85; g.stroke();
+    if (sk.tool === 'point') { const x = a[0] + (b[0] - a[0]) * e.t, y = a[1] + (b[1] - a[1]) * e.t; g.globalAlpha = 1; g.beginPath(); g.rect(x - 5, y - 5, 10, 10); g.fillStyle = '#fff'; g.fill(); g.strokeStyle = ORANGE; g.lineWidth = 2; g.stroke(); }
+    g.restore();
+  }
   function hit(ev) {
     const o = findSel();
     if (o) for (const h of handles(sk.sel.kind, o)) { const q = scr(h.p, h.z); if (q && Math.hypot(q[0] - ev.sx, q[1] - ev.sy) < (h.t === 'r' || h.t === 's' ? 10 : 7)) return { kind: sk.sel.kind, id: o.id, h, z: h.z }; }
+    // An edge of the selection: drag it to reshape.
+    if (o && sk.sel.kind !== 'note' && editable(sk.sel.kind, o)) { const e = edgeHit(sk.sel.kind, o, ev); if (e) { const P = outline(o); return { kind: sk.sel.kind, id: o.id, h: { t: 'e', i: e.i }, z: handleZ(sk.sel.kind, o)(P[e.i]) }; } }
     if (sk.v3) { const p = sk.v3.pickSketch(ev.sx, ev.sy); if (p && p.id) return { kind: 'mass', id: p.id, z: p.at[2] }; }
     const xy = ev.xy; if (!xy) return null;
     const zg = zGround(xy);
@@ -1133,7 +1200,7 @@ export function createSketch(ctx) {
     const op = sk.op; sk.op = null; sk.baseLock = null;
     const m = massById(op.id);
     if (!m) return;
-    if (!op.moved) { resetOp(m); sk.undo.pop(); draw(); card(); return; }
+    if (!op.moved) { resetOp(m); if (op.keepUndo) { sk.infos.delete(m.id); changed(); } else { sk.undo.pop(); draw(); card(); } return; }
     sk.lastOp = { ...op };
     if (op.type === 'push') { const inp = bar.querySelector('[data-fly="dist"]'); if (inp) inp.value = (op.d / kz()).toFixed(1); }
     sk.infos.delete(m.id);
@@ -1421,6 +1488,15 @@ export function createSketch(ctx) {
       sk.sel = { kind: 'mass', id: m.id };
       return true;
     }
+    // The selected free-form block: its corners and edges drag without Ctrl.
+    if (t === 'select' && !ev.alt && sk.sel?.kind === 'mass') {
+      const m = massById(sk.sel.id);
+      if (m && !m.prm) {
+        const el = pickElement(ev, m.id);
+        if (el && el.t !== 'f') { before(); const p0 = el.t === 'v' ? m.v[el.i].slice() : SO.add(m.v[el.a], SO.mul(SO.sub(m.v[el.b], m.v[el.a]), 0.5)); startOp('move', m, { el, p0, d: 0 }, ev); return true; }
+      }
+    }
+    if (t === 'point') { addPoint(ev); return true; }
     if (t === 'pen') {
       if (sk.draw?.face) {                       // clicking out a line on a face
         const s = penFacePoint(ev); if (!s) return true;
@@ -1516,9 +1592,18 @@ export function createSketch(ctx) {
       return;
     }
     if (d?.pts) { const xy = groundSnap(ev, d.pts.at(-1), { own: d.pts }); if (xy) { d.hover = xy; draw(); } return; }
-    if (!sk.drag) {                                   // hover feedback for the face tools / Ctrl-move
-      const want = sk.tool === 'push' || sk.tool === 'slope' || sk.tool === 'pen' || (sk.tool === 'select' && ev.ctrl);
-      const h = want ? (sk.tool === 'select' ? pickElement(ev) : (() => { const f = pickFace(ev); return f && { id: f.id, t: 'f', fi: f.fi }; })()) : null;
+    if (!sk.drag) {                                   // hover feedback for the face tools / Ctrl-move / the selection's edges
+      const so = sk.tool === 'select' && !ev.ctrl ? findSel() : null;
+      if (sk.tool === 'point' || (so && sk.sel.kind !== 'note' && editable(sk.sel.kind, so))) {
+        const e = sk.tool === 'point' ? pointTarget(ev) : (() => { const x = edgeHit(sk.sel.kind, so, ev); return x && { kind: sk.sel.kind, id: so.id, i: x.i, t: x.t }; })();
+        const k2 = e ? JSON.stringify([e.kind, e.id, e.i, e.a, e.b, sk.tool === 'point' ? Math.round(e.t * 50) : 0]) : '';
+        if (k2 !== (sk.hovEKey || '')) { sk.hovE = e; sk.hovEKey = k2; draw(); }
+        if (sk.tool === 'point') return;
+      } else if (sk.hovE) { sk.hovE = null; sk.hovEKey = ''; draw(); }
+      const freeSel = sk.tool === 'select' && !ev.ctrl && sk.sel?.kind === 'mass' && !massById(sk.sel.id)?.prm;
+      const want = sk.tool === 'push' || sk.tool === 'slope' || sk.tool === 'pen' || (sk.tool === 'select' && ev.ctrl) || freeSel;
+      let h = want ? (sk.tool === 'select' ? pickElement(ev, freeSel ? sk.sel.id : null) : (() => { const f = pickFace(ev); return f && { id: f.id, t: 'f', fi: f.fi }; })()) : null;
+      if (freeSel && h?.t === 'f') h = null;
       const key = h ? JSON.stringify([h.id, h.t, h.fi, h.i, h.a, h.b]) : '';
       // Before the first click, show what the start point would snap to.
       const pre = ['mass', 'lot', 'island', 'drive'].includes(sk.tool) || (sk.tool === 'pen' && !h);
@@ -1535,13 +1620,19 @@ export function createSketch(ctx) {
     const orig = JSON.parse(g.orig);
     for (const k of ['pts', 'v', 'f', 'prm', 'angle']) if (k in orig) o[k] = orig[k];
     const P = outline(o), n = P.length, t = g.h?.t;
-    if (t === 'm' && !g.inserted) {
-      g.inserted = true; g.h = { t: 'v', i: g.h.i + 1 };
-      P.splice(g.h.i, 0, g.start.slice());
+    if (t === 'e') {
+      // Edge: slides square to itself (Shift = any direction); the far corner snaps.
+      const i = g.h.i, j = (i + 1) % n, a = P[i], b = P[j];
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, nx = -(b[1] - a[1]) / L, ny = (b[0] - a[0]) / L;
+      let mx = dx, my = dy;
+      if (!ev.shift) { const k = dx * nx + dy * ny; mx = nx * k; my = ny * k; }
+      if (!ev.alt && (!sk.v3 || g.kind !== 'mass')) {
+        const S = snapCands(g.kind, o.id), sn = snapMove([[a[0] + mx, a[1] + my], [b[0] + mx, b[1] + my]], S.C, q => scr(q));
+        if (sn) { if (ev.shift) { mx += sn.dx; my += sn.dy; } else { const k = sn.dx * nx + sn.dy * ny; mx += nx * k; my += ny * k; } sk.snap = { p: sn.p, t: 'corner', label: sn.label, guides: [] }; } else sk.snap = null;
+      }
+      P[i] = [a[0] + mx, a[1] + my]; P[j] = [b[0] + mx, b[1] + my];
       if (o.prm) regen(o);
-      g.orig = JSON.stringify(o); return move(ev);
-    }
-    if (t === 'v') {
+    } else if (t === 'v') {
       const i = g.h.i;
       let p = [P[i][0] + dx, P[i][1] + dy];
       const nb = P[(i - 1 + n) % n];
