@@ -8,13 +8,13 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins } from './parking.js?v=0.53.0';
-import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.53.0';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.53.0';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.53.0';
-import * as SO from './solid.js?v=0.53.0';
-import { noteGeom, WIDTHS } from './notes.js?v=0.53.0';
-import { booleanSolids } from './bool.js?v=0.53.0';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins } from './parking.js?v=0.54.0';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.54.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.54.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.54.0';
+import * as SO from './solid.js?v=0.54.0';
+import { noteGeom, WIDTHS } from './notes.js?v=0.54.0';
+import { booleanSolids } from './bool.js?v=0.54.0';
 import { CODES, codeFor, spacesFor } from './parking-codes.js?v=0.51.1';
 
 const TOOLS = [
@@ -65,7 +65,7 @@ const HINTS = {
   select: 'Click to select · drag to move · drag a corner or an edge of the selection to reshape it (Shift = free direction) · ⟳ rotate, ⤡ scale · Ctrl+drag any point, edge or face (add Shift for up / down) · Alt+drag duplicates · Alt+click a corner removes it.',
   point: 'Click an edge to add a corner there — then drag it with Select.',
   mass: 'Drag a quick block (1–5: box, round, L, U, courtyard), or click corners and double-click. ↑ ↓ floors · R roof.',
-  pen: 'On the ground: drag a rectangle or click an outline — it becomes a flat shape to pull up. On a face: drag a rectangle inside it, or click from edge to edge to split it.',
+  pen: 'On the ground: drag a rectangle or click an outline — it becomes a flat shape to pull up. On a face: drag or click from edge to edge to split it (lines stop at the edges; the new faces pull separately), or drag a rectangle inside it.',
   push: 'Drag a face in or out. Tops snap to whole floors (Shift = free). Ctrl = always make new sides. Type an exact distance in the box.',
   slope: 'Drag across a face toward its high side to tilt it at the pitch in the box (walls lean out). The back edge stays put.',
   lot: 'Drag a rectangle, or click corners and double-click to finish. [ ] turn the rows, ↑ ↓ slide them.',
@@ -1054,13 +1054,13 @@ export function createSketch(ctx) {
     for (const L of SO.faceLoops(m, fi)) for (let k = 0; k < L.length; k++) {
       const i = L[k], s = P3(m, m.v[i]); if (!s) continue;
       const d = Math.hypot(s[0] - q[0], s[1] - q[1]);
-      if (d < 10 && (!best || best.t !== 'v' || d < best.d)) best = { t: 'v', i, p: m.v[i].slice(), d, outer: L === m.f[fi].o };
+      if (d < 12 && (!best || best.t !== 'v' || d < best.d)) best = { t: 'v', i, p: m.v[i].slice(), d, outer: L === m.f[fi].o };
     }
     if (best) return best;
     for (const L of SO.faceLoops(m, fi)) for (let k = 0; k < L.length; k++) {
       const a = L[k], b = L[(k + 1) % L.length], sa = P3(m, m.v[a]), sb = P3(m, m.v[b]); if (!sa || !sb) continue;
       const d = distSeg(q, sa, sb);
-      if (d < 8 && (!best || d < best.d)) {
+      if (d < 14 && (!best || d < best.d)) {
         let t = segT(q, sa, sb);
         const mid = Math.abs(t - 0.5) * Math.hypot(sb[0] - sa[0], sb[1] - sa[1]) < 6; if (mid) t = 0.5;      // midpoints snap
         best = { t: 'e', a, b, p: SO.add(m.v[a], SO.mul(SO.sub(m.v[b], m.v[a]), t)), d, mid, outer: L === m.f[fi].o };
@@ -1074,17 +1074,50 @@ export function createSketch(ctx) {
     const p = SO.rayFace(m, d.fi, r.o, r.d); if (!p) return null;
     const s = snapOnFace(m, d.fi, p);
     // Lines across a face pull square to the face (Shift locks), like on the ground.
-    const prev = d.pts?.length && !d.rect && !d.pending ? d.pts[d.pts.length - 1].p : null;
+    const prev = d.pts?.length && !d.pending ? d.pts[d.pts.length - 1].p : d.pts?.[0]?.p;
+    let res = s;
     if (!s.t && prev && !ev.alt) {
       const F = SO.faceFrame(m, d.fi), w = SO.sub(p, prev), cu = SO.dot(w, F.u), cv = SO.dot(w, F.v);
       const ang = Math.atan2(Math.abs(cv), Math.abs(cu));
       if (ev.shift || ang < 3 * Math.PI / 180 || ang > 87 * Math.PI / 180) {
         const alongU = Math.abs(cu) >= Math.abs(cv);
-        return { p: SO.add(prev, SO.mul(alongU ? F.u : F.v, alongU ? cu : cv)), axis: true };
+        res = { p: SO.add(prev, SO.mul(alongU ? F.u : F.v, alongU ? cu : cv)), axis: true };
       }
     }
-    return s;
+    // A line never runs past the face: it stops on the edge where it would leave (a strong snap to the edge).
+    if (!res.t && !SO.inFace(m, d.fi, res.p)) return faceClamp(m, d.fi, prev, res.p);
+    return res;
   }
+  /** Where a line from prev toward p first meets the face's boundary (or the boundary point nearest p). */
+  function faceClamp(m, fi, prev, p) {
+    const F = SO.faceFrame(m, fi), O = m.v[m.f[fi].o[0]];
+    const to2 = q => [SO.dot(SO.sub(q, O), F.u), SO.dot(SO.sub(q, O), F.v)];
+    const P1 = to2(p), P0 = prev ? to2(prev) : null;
+    let best = null;
+    for (const L of SO.faceLoops(m, fi)) for (let k = 0; k < L.length; k++) {
+      const a = L[k], b = L[(k + 1) % L.length], A = to2(m.v[a]), B = to2(m.v[b]), outer = L === m.f[fi].o;
+      const ex = B[0] - A[0], ey = B[1] - A[1];
+      if (P0) {
+        const rx = P1[0] - P0[0], ry = P1[1] - P0[1], den = rx * ey - ry * ex;
+        if (Math.abs(den) > 1e-12) {
+          const t = ((A[0] - P0[0]) * ey - (A[1] - P0[1]) * ex) / den, u = ((A[0] - P0[0]) * ry - (A[1] - P0[1]) * rx) / den;
+          if (t > 1e-6 && t <= 1 + 1e-9 && u >= -1e-9 && u <= 1 + 1e-9 && (!best || best.cross === undefined || t < best.cross)) best = { cross: t, a, b, u, outer };
+          continue;
+        }
+      }
+      if (best?.cross !== undefined) continue;
+      const L2 = ex * ex + ey * ey || 1, u = Math.max(0, Math.min(1, ((P1[0] - A[0]) * ex + (P1[1] - A[1]) * ey) / L2));
+      const dd = Math.hypot(P1[0] - A[0] - ex * u, P1[1] - A[1] - ey * u);
+      if (!best || dd < best.dd) best = { dd, a, b, u, outer };
+    }
+    if (!best) return { p };
+    const { a, b, u, outer } = best, Lab = SO.len(SO.sub(m.v[b], m.v[a])) || 1;
+    if (u * Lab < 0.5 * perFt()) return { t: 'v', i: a, p: m.v[a].slice(), outer };
+    if ((1 - u) * Lab < 0.5 * perFt()) return { t: 'v', i: b, p: m.v[b].slice(), outer };
+    return { t: 'e', a, b, p: SO.add(m.v[a], SO.mul(SO.sub(m.v[b], m.v[a]), u)), outer };
+  }
+  /** A drag from one outer edge to another splits the face (a line), rather than drawing a rectangle. */
+  const splitDrag = d => { const a = d.pts[0], b = d.b; return !!(a?.t && b?.t && a.outer && b.outer && !(a.t === 'e' && b.t === 'e' && a.a === b.a && a.b === b.b) && !(a.t === 'v' && b.t === 'v' && a.i === b.i)); };
   function penRect(d, m) {
     const F = SO.faceFrame(m, d.fi), a = d.pts[0].p, b = d.b.p;
     const du = SO.dot(SO.sub(b, a), F.u), dv = SO.dot(SO.sub(b, a), F.v);
@@ -1093,20 +1126,22 @@ export function createSketch(ctx) {
   function drawPenFace(g, d) {
     const m = massById(d.id); if (!m) return;
     if (facePath(g, m, d.fi)) { g.fillStyle = 'rgba(232,145,63,0.12)'; g.fill('evenodd'); }
-    const P = d.rect ? penRect(d, m) : [...d.pts.map(s => s.p), ...(d.hover ? [d.hover.p] : [])];
+    const asLine = d.rect && splitDrag(d), asRect = d.rect && !asLine;
+    const P = asLine ? [d.pts[0].p, d.b.p] : asRect ? penRect(d, m) : [...d.pts.map(s => s.p), ...(d.hover ? [d.hover.p] : [])];
     const Q = P.map(p => P3(m, p));
     if (Q.length > 1 && Q.every(Boolean)) {
-      g.beginPath(); Q.forEach((q, i) => (i ? g.lineTo(...q) : g.moveTo(...q))); if (d.rect) g.closePath();
-      const ok = !d.rect || P.every(p => SO.inFace(m, d.fi, p));
+      g.beginPath(); Q.forEach((q, i) => (i ? g.lineTo(...q) : g.moveTo(...q))); if (asRect) g.closePath();
+      const ok = !asRect || P.every(p => SO.inFace(m, d.fi, p));
       g.setLineDash([6, 4]); g.strokeStyle = ok ? ORANGE : '#ef4444'; g.lineWidth = 2; g.stroke(); g.setLineDash([]);
     }
-    for (const s of [...d.pts, ...(d.hover ? [d.hover] : [])]) {
+    for (const s of [...d.pts, ...(d.hover ? [d.hover] : []), ...(d.rect && d.b ? [d.b] : [])]) {
       const q = P3(m, s.p); if (!q) continue;
       g.beginPath();
       if (s.t === 'v') g.rect(q[0] - 5, q[1] - 5, 10, 10); else g.arc(q[0], q[1], s.t === 'e' ? 5 : 3.5, 0, Math.PI * 2);
       g.fillStyle = s.t === 'v' ? '#22c55e' : s.t === 'e' ? (s.mid ? '#06b6d4' : '#ef4444') : ORANGE; g.fill();
     }
-    if (d.rect) { const R = penRect(d, m); const w = SO.len(SO.sub(R[1], R[0])), h = SO.len(SO.sub(R[3], R[0])); tag(g, P3(m, d.b.p), `${fmtLen(w)} × ${fmtLen(h)}`); }
+    if (asLine) tag(g, P3(m, d.b.p), `split · ${fmtLen(SO.len(SO.sub(d.b.p, d.pts[0].p)))}`);
+    else if (asRect) { const R = penRect(d, m); const w = SO.len(SO.sub(R[1], R[0])), h = SO.len(SO.sub(R[3], R[0])); tag(g, P3(m, d.b.p), `${fmtLen(w)} × ${fmtLen(h)}`); }
     else if (d.hover && d.pts.length) tag(g, P3(m, d.hover.p), fmtLen(SO.len(SO.sub(d.hover.p, d.pts[d.pts.length - 1].p))));
   }
   /** Vertex index for a snapped point on face fi (adds a vertex on an edge when needed). */
@@ -1693,7 +1728,7 @@ export function createSketch(ctx) {
     }
     const d = sk.draw;
     if (d?.face) {
-      if (d.rect) { penFinish('rect'); return; }
+      if (d.rect) { if (splitDrag(d)) { d.pts = [d.pts[0], d.b]; penFinish('split'); } else penFinish('rect'); return; }
       if (d.pending) { d.pending = false; draw(); }       // a click: carry on clicking points
       return;
     }
