@@ -282,36 +282,59 @@ export class SiteView3D {
   }
 
   /**
-   * Existing trees: [{ x, y (native), z (ground, output), h (output), r (native) }] as low-poly crowns on trunks, at
-   * true height on the exaggerated ground (like the buildings). Diagram look: pale crowns with outlines.
+   * Existing trees: [{ x, y (native), z (ground, output), h (output), r (native) }] as abstract low-poly trees at
+   * true height on the exaggerated ground (like the buildings). Several crown forms — rounded clusters, ovals,
+   * spreading canopies, columns and conifers — picked from each tree's proportions and position, turned and
+   * tinted a little differently. Diagram look: pale crowns with outlines.
    */
   setTrees(list) {
-    if (this.trees) { this.scene.remove(this.trees); this.trees.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); this.trees = null; }
+    if (this.trees) { this.scene.remove(this.trees); this.trees.traverse(o => { if (o.geometry && !o.geometry.userData.shared) o.geometry.dispose(); o.material?.dispose(); }); this.trees = null; }
     this._treeList = list;
     if (!list?.length || !this.g) return;
-    const g = new THREE.Group(), n = list.length, dg = !!this.diagram;
-    const crownGeo = new THREE.IcosahedronGeometry(1, 1), trunkGeo = new THREE.CylinderGeometry(1, 1, 1, 6);
-    const crowns = new THREE.InstancedMesh(crownGeo, new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: !dg }), n);
-    const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshLambertMaterial({ color: dg ? 0xb9b4aa : 0x6b4f3a }), n);
-    const M = new THREE.Matrix4(), q = new THREE.Quaternion(), c = new THREE.Color();
-    list.forEach((t, i) => {
-      const X = (t.x - this.cx) * this.k, Z = -(t.y - this.cy) * this.k, Y0 = (t.z - this.z0) * this.ex;
-      const r = Math.max(0.5, t.r * this.k), h = Math.max(1, t.h), crownH = Math.max(h * 0.62, Math.min(h, r * 1.6)), trunkH = h - crownH;
-      M.compose(new THREE.Vector3(X, Y0 + trunkH + crownH / 2, Z), q, new THREE.Vector3(r, crownH / 2, r)); crowns.setMatrixAt(i, M);
-      const tr = Math.max(0.25, r * 0.07);
-      M.compose(new THREE.Vector3(X, Y0 + trunkH / 2 + 0.2, Z), q, new THREE.Vector3(tr, trunkH + 0.4, tr)); trunks.setMatrixAt(i, M);
-      if (dg) c.setRGB(0.86, 0.9, 0.85); else c.setHSL(0.3 + ((i * 37) % 10) / 160, 0.42, 0.24 + ((i * 53) % 10) / 90);
-      crowns.setColorAt(i, c);
+    const F = (this._treeForms ||= treeForms());
+    const g = new THREE.Group(), dg = !!this.diagram;
+    const hash = t => { const v = Math.sin(t.x * 12.9898 + t.y * 78.233) * 43758.5453; return v - Math.floor(v); };
+    // Pick a form per tree.
+    const byForm = new Map();
+    list.forEach(t => {
+      const u = hash(t), ratio = t.h / Math.max(0.1, 2 * t.r * this.k);
+      const form = ratio > 1.9 ? (u < 0.6 ? 'cone' : 'column') : ratio < 0.95 ? (u < 0.6 ? 'spread' : 'round') : ['round', 'oval', 'cluster', 'lumpy'][Math.floor(u * 4)];
+      if (!byForm.has(form)) byForm.set(form, []);
+      byForm.get(form).push(t);
     });
-    crowns.castShadow = trunks.castShadow = true;
-    g.add(crowns, trunks);
-    if (dg) {                                             // crisp outlines for the diagram look
-      const eg = new THREE.EdgesGeometry(crownGeo, 30), pos = eg.attributes.position.array, out = new Float32Array(pos.length * n), v = new THREE.Vector3();
-      list.forEach((t, i) => { crowns.getMatrixAt(i, M); for (let k = 0; k < pos.length; k += 3) { v.set(pos[k], pos[k + 1], pos[k + 2]).applyMatrix4(M); out.set([v.x, v.y, v.z], i * pos.length + k); } });
-      const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(out, 3));
-      g.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x7c8a7c, transparent: true, opacity: 0.6 })));
-      eg.dispose();
+    const M = new THREE.Matrix4(), q = new THREE.Quaternion(), c = new THREE.Color(), up = new THREE.Vector3(0, 1, 0);
+    const trunks = new THREE.InstancedMesh(F.trunk, new THREE.MeshLambertMaterial({ color: dg ? 0xb9b4aa : 0x5e4633 }), list.length);
+    let ti = 0;
+    for (const [form, L] of byForm) {
+      const geo = F[form], crowns = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true }), L.length);
+      const conifer = form === 'cone' || form === 'column';
+      L.forEach((t, i) => {
+        const u = hash(t), X = (t.x - this.cx) * this.k, Z = -(t.y - this.cy) * this.k, Y0 = (t.z - this.z0) * this.ex;
+        const r = Math.max(0.6, t.r * this.k), h = Math.max(1.5, t.h);
+        const crownH = conifer ? h * (0.78 + 0.1 * u) : form === 'spread' ? Math.min(h * 0.5, r * 1.1) : Math.min(h * (0.62 + 0.12 * u), r * 2.2);
+        const trunkH = h - crownH;
+        q.setFromAxisAngle(up, u * Math.PI * 2);
+        M.compose(new THREE.Vector3(X, Y0 + trunkH + crownH / 2, Z), q, new THREE.Vector3(r * (0.92 + 0.16 * u), crownH / 2, r * (1.08 - 0.16 * u)));
+        crowns.setMatrixAt(i, M);
+        if (dg) c.setRGB(0.84 + 0.04 * u, 0.89, 0.83);
+        else if (conifer) c.setHSL(0.36 + 0.04 * u, 0.38, 0.18 + 0.06 * u);
+        else c.setHSL(0.24 + 0.08 * u, 0.40 + 0.12 * u, 0.24 + 0.10 * ((u * 7) % 1));
+        crowns.setColorAt(i, c);
+        const tr = Math.max(0.2, r * (conifer ? 0.06 : 0.08));
+        M.compose(new THREE.Vector3(X, Y0 + (trunkH + crownH * 0.3) / 2, Z), q, new THREE.Vector3(tr, trunkH + crownH * 0.3, tr));
+        trunks.setMatrixAt(ti++, M);
+      });
+      crowns.castShadow = true;
+      g.add(crowns);
+      if (dg) {                                             // crisp outlines for the diagram look
+        const eg = F.edges[form], pos = eg.attributes.position.array, out = new Float32Array(pos.length * L.length), v = new THREE.Vector3();
+        L.forEach((t, i) => { crowns.getMatrixAt(i, M); for (let k = 0; k < pos.length; k += 3) { v.set(pos[k], pos[k + 1], pos[k + 2]).applyMatrix4(M); out[i * pos.length + k] = v.x; out[i * pos.length + k + 1] = v.y; out[i * pos.length + k + 2] = v.z; } });
+        const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(out, 3));
+        g.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x7c8a7c, transparent: true, opacity: 0.55 })));
+      }
     }
+    trunks.castShadow = true;
+    g.add(trunks);
     g.name = 'trees';
     this.trees = g; this.scene.add(g);
   }
@@ -656,4 +679,59 @@ export class SiteView3D {
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }
+}
+
+/**
+ * Crown forms for the trees, each fitting a unit sphere (x, z in −1…1, y in −1…1), built once. Clusters of lumpy
+ * low-poly blobs read as abstract trees rather than lollipops; conifers are stacked cones.
+ */
+function treeForms() {
+  let seed = 11;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const blob = (cx, cy, cz, rx, ry, rz, detail = 1, lump = 0.18) => {
+    const g = new THREE.IcosahedronGeometry(1, detail).toNonIndexed(), p = g.attributes.position;
+    const key = new Map();
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), y = p.getY(i), z = p.getZ(i), k = `${x.toFixed(3)},${y.toFixed(3)},${z.toFixed(3)}`;
+      let f = key.get(k); if (f == null) { f = 1 + (rnd() - 0.5) * 2 * lump; key.set(k, f); }
+      p.setXYZ(i, cx + x * rx * f, cy + y * ry * f, cz + z * rz * f);
+    }
+    return g;
+  };
+  const merge = (parts) => {
+    let n = 0; for (const g of parts) n += g.attributes.position.count;
+    const pos = new Float32Array(n * 3); let o = 0;
+    for (const g of parts) { pos.set(g.attributes.position.array, o); o += g.attributes.position.array.length; g.dispose(); }
+    // Fit to the unit box so instance scales mean crown radius / half-height.
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (let i = 0; i < pos.length; i += 3) { x0 = Math.min(x0, pos[i]); x1 = Math.max(x1, pos[i]); y0 = Math.min(y0, pos[i + 1]); y1 = Math.max(y1, pos[i + 1]); z0 = Math.min(z0, pos[i + 2]); z1 = Math.max(z1, pos[i + 2]); }
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, cz = (z0 + z1) / 2, sx = 2 / (x1 - x0), sy = 2 / (y1 - y0), sz = 2 / (z1 - z0);
+    for (let i = 0; i < pos.length; i += 3) { pos[i] = (pos[i] - cx) * sx; pos[i + 1] = (pos[i + 1] - cy) * sy; pos[i + 2] = (pos[i + 2] - cz) * sz; }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.computeVertexNormals();
+    g.userData.shared = true;
+    return g;
+  };
+  const cluster = (n, spreadXZ, spreadY, size) => merge(Array.from({ length: n }, (_, i) => {
+    const a = (i / n) * Math.PI * 2 + rnd() * 0.8, d = i === 0 ? 0 : spreadXZ * (0.5 + 0.5 * rnd());
+    const s = size * (0.75 + 0.4 * rnd());
+    return blob(Math.cos(a) * d, (rnd() - 0.4) * spreadY, Math.sin(a) * d, s, s * (0.85 + 0.3 * rnd()), s, 1, 0.2);
+  }));
+  const cone = (tiers) => merge(Array.from({ length: tiers }, (_, i) => {
+    const g = new THREE.ConeGeometry(1 - i * 0.22, 1.1 - i * 0.12, 7, 1).toNonIndexed();
+    g.rotateY(rnd() * Math.PI); g.translate(0, i * 0.62, 0);
+    return g;
+  }));
+  const F = {
+    round: cluster(5, 0.55, 0.5, 0.62),
+    oval: merge([blob(0, 0, 0, 0.8, 1.2, 0.8, 1, 0.2), blob(0.25, 0.55, 0.1, 0.55, 0.6, 0.55, 1, 0.2), blob(-0.3, -0.35, -0.1, 0.6, 0.55, 0.6, 1, 0.2)]),
+    cluster: cluster(7, 0.75, 0.7, 0.5),
+    lumpy: merge([blob(0, 0, 0, 1, 0.9, 1, 2, 0.28)]),
+    spread: merge([...Array.from({ length: 6 }, (_, i) => { const a = i / 6 * Math.PI * 2 + rnd(); return blob(Math.cos(a) * 0.75, (rnd() - 0.5) * 0.25, Math.sin(a) * 0.75, 0.55, 0.32, 0.55, 1, 0.22); }), blob(0, 0.15, 0, 0.7, 0.4, 0.7, 1, 0.2)]),
+    cone: cone(3),
+    column: merge([blob(0, 0, 0, 0.55, 1.4, 0.55, 1, 0.22), blob(0.12, 0.8, 0.05, 0.4, 0.7, 0.4, 1, 0.22)]),
+    trunk: (() => { const g = new THREE.CylinderGeometry(0.65, 1, 1, 6); g.userData.shared = true; return g; })(),
+  };
+  F.edges = {};
+  for (const k of ['round', 'oval', 'cluster', 'lumpy', 'spread', 'cone', 'column']) F.edges[k] = new THREE.EdgesGeometry(F[k], 35);
+  return F;
 }
