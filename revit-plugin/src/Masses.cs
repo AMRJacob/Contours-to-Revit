@@ -59,6 +59,12 @@ namespace ContoursToRevit
                         var p = ds.get_Parameter(BuiltInParameter.PHASE_CREATED);
                         if (p != null && !p.IsReadOnly) p.Set(phase);
                     }
+                    var demo = b.Id("phaseDemolished");
+                    if (demo != ElementId.InvalidElementId)
+                    {
+                        var pd = ds.get_Parameter(BuiltInParameter.PHASE_DEMOLISHED);
+                        if (pd != null && !pd.IsReadOnly) pd.Set(demo);
+                    }
                     Storage.Tag(ds, "mass", b.Str("meta"));
                     made++; faces += n;
                 }

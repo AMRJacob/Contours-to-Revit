@@ -1,6 +1,6 @@
 // Canvas rendering for the on-screen preview and the printable PNG contour map.
-import { BUILDING_SOURCES } from './context.js?v=0.62.1';
-import { labelPositions, isMajor } from './contours.js?v=0.62.1';
+import { BUILDING_SOURCES } from './context.js?v=0.63.0';
+import { labelPositions, isMajor } from './contours.js?v=0.63.0';
 
 /** Hillshade (0..1) for a grid; azimuth 315°, altitude 45°. */
 export function hillshade(g, zFactor = 1) {

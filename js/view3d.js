@@ -243,6 +243,20 @@ export class SiteView3D {
     this._bldgStyle();
   }
 
+  /** Buildings the site design removes, as see-through red ("Both" view). tri: flat x,y,z (native XY, output Z). */
+  setDemoBuildings(tri) {
+    if (this.bldgDemo) { this.scene.remove(this.bldgDemo); this.bldgDemo.geometry.dispose(); this.bldgDemo.material.dispose(); this.bldgDemo = null; }
+    if (!tri?.length || !this.g) return;
+    const pos = new Float32Array(tri.length);
+    for (let i = 0; i < tri.length; i += 3) { pos[i] = (tri[i] - this.cx) * this.k; pos[i + 1] = (tri[i + 2] - this.z0) * this.ex; pos[i + 2] = -(tri[i + 1] - this.cy) * this.k; }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.computeVertexNormals();
+    this.bldgDemo = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0xe0524a, transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide, flatShading: true }));
+    this.bldgDemo.renderOrder = 3;
+    this.scene.add(this.bldgDemo);
+  }
+
   /**
    * Sketch: massing blocks ({ tris: flat [x,y,z…] native XY / output Z, colors: hex per triangle, lines: floor lines })
    * and parking ({ lines: stall lines, acc: accessible stall triangles, stripe, accColor }).

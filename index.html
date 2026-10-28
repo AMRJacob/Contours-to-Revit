@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.62.1">
+  <link rel="stylesheet" href="css/app.css?v=0.63.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -242,6 +242,7 @@
                 <button type="button" class="tool" data-tool="pad" title="Building pad — drag a rectangle, then type its elevation"><svg viewBox="0 0 24 24"><path d="M6 9h12v6H6z"/><path d="M2 19l4-4M22 19l-4-4M2 5l4 4M22 5l-4 4" opacity=".6"/></svg><span>Pad</span></button>
                 <button type="button" class="tool" data-tool="swale" title="Swale — a shallow channel that carries water along a set flowline slope"><svg viewBox="0 0 24 24"><path d="M2 8c4 0 5 8 10 8s6-8 10-8"/><path d="M7 12l5 2 5-2" opacity=".6"/></svg><span>Swale</span></button>
                 <button type="button" class="tool" data-tool="trees" title="Remove trees — click a tree to remove it or bring it back; drag across trees to remove several (Shift keeps them)"><svg viewBox="0 0 24 24"><circle cx="11" cy="9" r="6"/><path d="M11 15v6"/><path d="M15 15l6 6M21 15l-6 6" stroke="#ef4444"/></svg><span>Trees</span></button>
+                <button type="button" class="tool" data-tool="bldgs" title="Remove buildings — click a building to remove it or bring it back; drag across buildings to remove several (Shift keeps them)"><svg viewBox="0 0 24 24"><path d="M4 21V9l7-5 7 5v12z"/><path d="M14 13l7 7M21 13l-7 7" stroke="#ef4444"/></svg><span>Buildings</span></button>
               </div>
               <p class="hint">The grading tools are on the map — <b>Brush</b>: Raise R, Lower L, Flatten F, Smooth M · <b>Grade</b>: Slope S, Wall W, Pad P, Swale D. Their options open beside the toolbar. They work in plan and in 3D (right-drag orbits there).</p>
               <p class="hint tool-hint coach-src" id="tool-hint"></p>
@@ -358,6 +359,10 @@
                 </select>
                 <label class="check"><input type="checkbox" id="dz-tree-show" checked><span>Show removed trees as demolished (red dashed ×)</span></label>
                 <p class="hint" id="dz-tree-n"></p>
+              </div>
+              <div class="field" id="f-bldgs" hidden>
+                <label class="check"><input type="checkbox" id="dz-bldg-show" checked><span>Show removed buildings as demolished (red dashed)</span></label>
+                <p class="hint" id="dz-bldg-n"></p>
               </div>
               <div class="field" id="f-soft">
                 <label for="dz-soft">Edge softness <output id="dz-soft-v">60%</output></label>
@@ -554,7 +559,7 @@
               <label class="check"><input type="checkbox" id="dz-show-labels" checked><span>Contour labels</span></label>
               <label class="check"><input type="checkbox" id="dz-show-cursor" checked><span>Elevation at the cursor</span></label>
               <label class="check"><input type="checkbox" id="dz-show-cf" checked><span>Show cut / fill colors</span></label>
-              <label class="check"><input type="checkbox" id="dz-show-demo" checked><span>Removed trees as demolished (red dashed ×) — off hides them</span></label>
+              <label class="check"><input type="checkbox" id="dz-show-demo" checked><span>Show removed trees and buildings as demolition — red dashed in Site design, see-through red in the 3D “Both” view (Proposed and Sketch always leave them out)</span></label>
           <h4 class="set-h">New DXF</h4>
                 <label class="check"><input type="checkbox" id="dz-dxf-exist" checked><span>Include existing contours in the new DXF (grey layers)</span></label>
         </section>
@@ -685,6 +690,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.62.1"></script>
+  <script type="module" src="js/app.js?v=0.63.0"></script>
 </body>
 </html>

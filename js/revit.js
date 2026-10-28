@@ -357,7 +357,7 @@ function sendForm(site, P, snapBtn) {
     ${host?.features?.includes('masses') ? (() => {
       const bl = api.buildings(site), lid = bl.filter(x => x.b.hSrc === 'lidar').length;
       return `<label class="check"><input type="checkbox" id="rv-masses" ${o.masses ? 'checked' : ''} ${bl.length ? '' : 'disabled'}><span><strong>Existing buildings</strong> — masses
-      <small class="rv-state">${bl.length ? `${bl.length} from the building layer${new Set(bl.map(x => x.tag)).size > 1 ? 's' : ''} shown on the map${lid ? `, ${lid} with lidar roofs` : ''}. Replaces masses sent before.` : 'Turn on a building layer on the map first.'}</small></span></label>`;
+      <small class="rv-state">${bl.length ? `${bl.length} from the building layer${new Set(bl.map(x => x.tag)).size > 1 ? 's' : ''} shown on the map${lid ? `, ${lid} with lidar roofs` : ''}${bl.filter(x => x.removed).length ? `; ${bl.filter(x => x.removed).length} removed by the site design are demolished in the proposed grading phase` : ''}. Replaces masses sent before.` : 'Turn on a building layer on the map first.'}</small></span></label>`;
     })() : ''}
     ${host?.features?.includes('shapes') ? (() => {
       const sh = api.sketchShapes(), tr = api.trees(site);
@@ -608,7 +608,9 @@ async function send() {
         status(`Preparing ${list.length} building masses…`);
         const d = api.datum(site), P0 = model.pbp, r4 = v => Math.round(v * 1e4) / 1e4;
         const T = (x, y, z) => { const [X, Y] = api.outXY(site, x, y); return [r4(P0.x + X * k), r4(P0.y + Y * k), r4(P0.z + (z - d) * k)]; };
-        job.masses = { phaseCreated: Number(o.phaseE) || null, buildings: list.map(({ b, src, tag }, n) => {
+        const phDemo = Number(o.phaseP) || null;
+        job.masses = { phaseCreated: Number(o.phaseE) || null, buildings: list.map(({ b, src, tag, removed }, n) => ({ ...massOf(b, src, tag, n), phaseDemolished: removed ? phDemo : null, ...(removed ? { name: `Building to remove (${tag})` } : {}) })) };
+        function massOf(b, src, tag, n) {
           if (b.mass) {
             const how = `lidar ${site.lidar?.year || ''}`.trim();
             return { id: `${tag}-${n}`, name: `Existing building (${tag})`, v: b.mass.v.flatMap(p => T(...p)), f: b.mass.f, comment: `Contours to Revit — ${src}, ${how}`,
@@ -626,7 +628,7 @@ async function send() {
           const how = b.hSrc === 'lidar' ? `lidar ${site.lidar?.year || ''}`.trim() : b.heightKnown ? 'data height' : 'assumed height';
           return { id: `${tag}-${n}`, name: `Existing building (${tag})`, v, f, comment: `Contours to Revit — ${src}, ${how}`,
             meta: JSON.stringify({ src: tag, h: r4((b.top - b.base) * k), how }) };
-        }) };
+        }
       }
     }
     if (host?.features?.includes('shapes') && (o.sk || o.trees)) {
