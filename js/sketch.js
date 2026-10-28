@@ -8,13 +8,14 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins } from './parking.js?v=0.51.1';
-import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.51.1';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.51.1';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.51.1';
-import * as SO from './solid.js?v=0.51.1';
-import { noteGeom, WIDTHS } from './notes.js?v=0.51.1';
-import { booleanSolids } from './bool.js?v=0.51.1';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins } from './parking.js?v=0.52.0';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.52.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.52.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.52.0';
+import * as SO from './solid.js?v=0.52.0';
+import { noteGeom, WIDTHS } from './notes.js?v=0.52.0';
+import { booleanSolids } from './bool.js?v=0.52.0';
+import { CODES, codeFor, spacesFor } from './parking-codes.js?v=0.51.1';
 
 const TOOLS = [
   { id: 'select', key: 'V', label: 'Select', icon: '<path d="M5 3l14 8-6 1.5L10 19z"/>' },
@@ -179,15 +180,14 @@ export function createSketch(ctx) {
     for (const m of sk.model.masses) byUse.set(m.use, (byUse.get(m.use) || 0) + massGfa(m));
     let req = 0;
     const reqBy = [];
-    for (const [use, sf] of byUse) {
-      const r = sk.model.ratios[use];
-      if (!r) continue;
-      const n = r.mode === 'unit' ? (sf / Math.max(1, r.unitSf || 1)) * r.r : sf / 1000 * r.r;
-      req += n; reqBy.push([use, n]);
-    }
+    // Per block, so a code's step-downs for large buildings apply to each building.
+    const per = new Map();
+    for (const m of sk.model.masses) { const r = sk.model.ratios[m.use]; if (!r) continue; per.set(m.use, (per.get(m.use) || 0) + spacesFor(r, massGfa(m))); }
+    for (const [use, n] of per) { req += n; reqBy.push([use, n]); }
     let prov = 0, acc = 0, van = 0, accReq = 0, short = 0;
     for (const l of sk.model.lots) { const L = lotLayout(l); prov += L.total; acc += L.acc; van += L.van; accReq += L.required.acc; short += L.short; }
-    return { byUse, gfa: [...byUse.values()].reduce((a, v) => a + v, 0), req: Math.ceil(req), reqBy, prov, acc, van, accReq, short };
+    const down = sk.model.ratioSrc?.round === 'down';
+    return { byUse, gfa: [...byUse.values()].reduce((a, v) => a + v, 0), req: down ? Math.floor(req + 1e-9) : Math.ceil(req - 1e-9), reqBy, prov, acc, van, accReq, short };
   }
 
   // ---------------------------------------------------------------- undo / change
@@ -235,9 +235,36 @@ export function createSketch(ctx) {
     migrate(m);
     sk.model = m;
     if (pending) save();
+    jurisdiction(site);
     sk.ver++;
     draw(); panel(); ctx.onChange?.();
   }
+
+  // ---------------------------------------------------------------- parking ratios from the site's jurisdiction
+  /** Look up the city the site is in; use its code's ratios unless this project's ratios were edited by hand. */
+  async function jurisdiction(site) {
+    sk.jur = { loading: true };
+    let place = null, err = null;
+    try { place = await ctx.jurisdiction?.(site); } catch (e) { err = e; }
+    if (sk.site !== site) return;
+    const code = place ? codeFor(place) : null;
+    sk.jur = { place, code, err };
+    const src = sk.model.ratioSrc;
+    if (code && !src?.edited && src?.id !== code.id) applyCode(code);
+    else if (!code && !src) sk.model.ratioSrc = { id: null };
+    panel();
+  }
+  function applyCode(code) {
+    for (const [use, R] of Object.entries(code.uses)) {
+      const cur = sk.model.ratios[use] || {};
+      sk.model.ratios[use] = { mode: R.mode, r: R.r ?? 0, unitSf: cur.unitSf || (use === 'hospitality' ? 450 : 900), ...(R.tiers ? { tiers: R.tiers } : {}), ...(R.r == null ? { need: true } : {}) };
+    }
+    sk.model.ratioSrc = { id: code.id, round: code.round, checked: code.checked };
+    $('sk-ratios') && ($('sk-ratios').dataset.html = '');
+    changed(true);
+  }
+  const ST = { '05': 'AR', Arkansas: 'AR' };
+  const jurName = () => { const p = sk.jur?.place; const st = p && (ST[p.stateFips] || ST[p.stateName]); return p?.name ? `${p.name}${st ? `, ${st}` : ''}` : null; };
 
   // ---------------------------------------------------------------- views: the map, or the 3D view
   const canvas = document.createElement('canvas');
@@ -1719,6 +1746,7 @@ export function createSketch(ctx) {
       <div class="sk-big sk-park ${st.req ? (diff >= 0 ? 'ok' : 'short') : ''}">
         <div><small>Parking provided</small><b>${st.prov}</b></div><div><small>Required</small><b>${st.req || '—'}</b></div>
         <div><small>${diff >= 0 ? 'Surplus' : 'Short'}</small><b>${st.req ? Math.abs(diff) : '—'}</b></div></div>
+      <p class="hint sk-req-src">${(() => { const c = sk.model.ratioSrc?.id && CODES.find(x => x.id === sk.model.ratioSrc.id); return c ? `Required spaces: ${escapeHtml(c.place)}, ${c.state} code${sk.model.ratioSrc.edited ? ' (edited)' : ''} <span class="qm" data-tip-text="${escapeHtml(`${c.title}. ${c.amended}. Checked ${c.checked}.`)}">?</span> — <button type="button" class="linkish" data-settings="sketch" data-focus="sk-ratios">ratios</button>` : `Required spaces use example ratios — ${jurName() ? `no verified code for ${escapeHtml(jurName())} yet` : 'no verified code for this site'}. <button type="button" class="linkish" data-settings="sketch" data-focus="sk-ratios">Set ratios</button>`; })()}</p>
       <p class="hint">${st.acc} accessible provided (${st.accReq} required${st.van ? `, ${st.van} van` : ''})${st.short ? ` — <strong>${st.short} short: a row is too short for the accessible group</strong>` : ''}. Accessible counts per lot by the 2010 ADA Standards (Table 208.2, 208.2.4). Floors are counted every floor-to-floor height where at least half the floor has full headroom.</p>`;
     schemeUi(); ratiosUi(); listUi(); dgColorsUi();
   }
@@ -1759,10 +1787,23 @@ export function createSketch(ctx) {
   }
   function ratiosUi() {
     const el = $('sk-ratios'); if (!el) return;
-    const html = scheme().uses.map(u => {
+    const src = sk.model.ratioSrc, code = src?.id ? CODES.find(c => c.id === src.id) || null : null;
+    const J = sk.jur, nm = jurName();
+    const fmtD = d => new Date(`${d}T12:00:00`).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    let head;
+    if (code) {
+      const tip = `${code.title}. ${code.amended}. Checked ${fmtD(code.checked)}.\n\n${code.notes.join('\n')}`;
+      head = `<div class="sk-rsrc ok"><span>From the <b>${escapeHtml(code.place)}, ${code.state}</b> code${src.edited ? ' <em>(edited)</em>' : ''} <span class="qm" data-tip-title="Parking code" data-tip-text="${escapeHtml(tip)}">?</span></span>
+        <a href="${code.url}" target="_blank" rel="noopener">Source ↗</a>${src.edited ? '<button type="button" class="linkish" data-rcode>Reset to code</button>' : ''}</div>`;
+    } else if (J?.loading) head = '<div class="sk-rsrc">Looking up the site\'s city…</div>';
+    else if (J?.err) head = '<div class="sk-rsrc warn">Couldn\'t look up the site\'s city (US Census TIGERweb didn\'t answer). These ratios are examples, not from any code — enter the local requirement.</div>';
+    else head = `<div class="sk-rsrc warn">${nm ? `The site is in <b>${escapeHtml(nm)}</b>` : 'The site is outside any incorporated city (county rules apply)'} — the app doesn't have a verified parking code for it yet. These ratios are examples, not from any code; enter the local requirement.</div>`;
+    const html = head + scheme().uses.map(u => {
       const r = sk.model.ratios[u.key] || { mode: 'ksf', r: 0 };
-      return `<div class="sk-ratio" data-use="${u.key}"><i style="background:${u.color}"></i><span>${escapeHtml(u.label)}</span>
-        <input type="number" min="0" step="0.1" value="${r.r}" data-f="r" aria-label="Spaces">
+      const R = code?.uses[u.key];
+      const info = R ? `<span class="qm" data-tip-title="Where this ratio comes from" data-tip-text="${escapeHtml(`${R.text}\n\nSource: ${code.title}.`)}">?</span>` : '';
+      return `<div class="sk-ratio${r.need ? ' need' : ''}" data-use="${u.key}"><i style="background:${u.color}"></i><span>${escapeHtml(u.label)}${info}</span>
+        <input type="number" min="0" step="0.1" value="${r.need ? '' : +Number(r.r).toFixed(2)}" placeholder="${r.need ? 'enter' : ''}" data-f="r" aria-label="Spaces">
         <select data-f="mode"><option value="ksf"${r.mode === 'ksf' ? ' selected' : ''}>per 1,000 sf</option><option value="unit"${r.mode === 'unit' ? ' selected' : ''}>per unit</option></select>
         ${r.mode === 'unit' ? `<input type="number" min="100" step="50" value="${r.unitSf || 900}" data-f="unitSf" aria-label="Average unit size" title="Average gross sf per unit">` : ''}</div>`;
     }).join('');
@@ -1804,6 +1845,8 @@ export function createSketch(ctx) {
       const r = sk.model.ratios[row.dataset.use] || (sk.model.ratios[row.dataset.use] = { mode: 'ksf', r: 0 });
       const f = e.target.dataset.f;
       if (f === 'mode') r.mode = e.target.value; else r[f] = Number(e.target.value) || 0;
+      if (f === 'r') { delete r.need; delete r.tiers; }
+      sk.model.ratioSrc = { ...(sk.model.ratioSrc || { id: null }), edited: true };
       if (r.mode === 'unit' && !r.unitSf) r.unitSf = 900;
       $('sk-ratios').dataset.html = ''; changed(true);
     });
@@ -1813,6 +1856,7 @@ export function createSketch(ctx) {
       if ('dgclear' in b.dataset) { before(); sk.model.paint = {}; changed(); }
     });
     $('dg-colors')?.addEventListener('change', e => { if (e.target.type === 'color') setDg(e.target.dataset.dgk, e.target.value); });
+    $('sk-ratios').addEventListener('click', e => { if (e.target.closest('[data-rcode]') && sk.jur?.code) { sk.model.ratioSrc = null; applyCode(sk.jur.code); } });
     $('sk-list').addEventListener('click', e => {
       const b = e.target.closest('.sk-item'); if (!b) return;
       sk.sel = { kind: b.dataset.kind, id: b.dataset.id }; setTool('select'); draw(); panel(); card();

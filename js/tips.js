@@ -102,7 +102,7 @@ function content(a) {
   if (!T && !txt) return null;
   const title = T?.t || a.dataset.tipTitle || '';
   const keys = T?.k ? `<span class="tip-keys">${K(T.k)}</span>` : '';
-  return `${title ? `<div class="tip-h"><b>${title}</b>${keys}</div>` : ''}<div class="tip-b">${T ? T.b : escape(txt)}</div><i class="tip-lock"></i>`;
+  return `${title ? `<div class="tip-h"><b>${title}</b>${keys}</div>` : ''}<div class="tip-b">${T ? T.b : escape(txt).replace(/\n/g, '<br>')}</div><i class="tip-lock"></i>`;
 }
 const escape = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 

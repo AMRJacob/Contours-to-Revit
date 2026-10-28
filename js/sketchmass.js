@@ -1,8 +1,8 @@
 // Sketch massing geometry: a block is an outline extruded floor by floor, with optional courtyard (a ring), one
 // step-back (upper floors inset from a chosen floor) and a roof form (flat, gable, hip, shed). Shapes: box, circle,
 // L, U and courtyard presets — after drawing, every block is just an outline you can reshape.
-import { dominantAngle, wingRects, wingRoof, wingShape, convexHalfplanes } from './massing.js?v=0.51.1';
-import { insetPoly } from './parking.js?v=0.51.1';
+import { dominantAngle, wingRects, wingRoof, wingShape, convexHalfplanes } from './massing.js?v=0.52.0';
+import { insetPoly } from './parking.js?v=0.52.0';
 
 export const area = P => { let a = 0; for (let i = 0, j = P.length - 1; i < P.length; j = i++) a += P[j][0] * P[i][1] - P[i][0] * P[j][1]; return Math.abs(a) / 2; };
 const sArea = P => { let a = 0; for (let i = 0, j = P.length - 1; i < P.length; j = i++) a += P[j][0] * P[i][1] - P[i][0] * P[j][1]; return a / 2; };

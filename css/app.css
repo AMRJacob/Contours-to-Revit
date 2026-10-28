@@ -924,3 +924,12 @@ body.theme-legend .sub-h { font-family: var(--display); letter-spacing: .12em; c
 body.theme-legend .site-topo { border-top: 1px solid transparent; border-image: linear-gradient(90deg, transparent, var(--line), transparent) 1; }
 body.theme-legend .pts-warn { border: 1px solid rgba(246, 179, 138, .35); border-radius: 2px; }
 body.theme-legend .stats dd.over { color: #f6b38a; }
+
+/* Parking ratio source */
+.sk-rsrc { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 12px; padding: 6px 8px; border-radius: 6px; background: color-mix(in srgb, var(--ok) 12%, transparent); color: var(--ink-2); margin-bottom: 4px; }
+.sk-rsrc span { flex: 1; }
+.sk-rsrc a { color: var(--mode); }
+.sk-rsrc.warn { background: var(--warn-bg); color: var(--warn); }
+.sk-ratio.need input { border-color: var(--warn); }
+.sk-ratio .qm { margin-left: 4px; }
+.sk-req-src .linkish { color: var(--mode); }
