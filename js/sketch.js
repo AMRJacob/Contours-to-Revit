@@ -8,13 +8,13 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, roundEach, driveJoins } from './parking.js?v=0.65.1';
-import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.65.1';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.65.1';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.65.1';
-import * as SO from './solid.js?v=0.65.1';
-import { noteGeom, WIDTHS } from './notes.js?v=0.65.1';
-import { booleanSolids } from './bool.js?v=0.65.1';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, roundEach, driveJoins } from './parking.js?v=0.66.0';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.66.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.66.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.66.0';
+import * as SO from './solid.js?v=0.66.0';
+import { noteGeom, WIDTHS } from './notes.js?v=0.66.0';
+import { booleanSolids } from './bool.js?v=0.66.0';
 import { CODES, codeFor, spacesFor } from './parking-codes.js?v=0.51.1';
 
 const TOOLS = [
@@ -114,6 +114,41 @@ export function createSketch(ctx) {
   const overlap = (a, b) => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
   const list = kind => sk.model[LISTS[kind]];
   const ex3 = () => (sk.v3 ? ctx.ex3d?.() || 1 : 1);
+  /** The two curb lines of a sidewalk, per segment: [[a, b], …]. */
+  function walkEdges(w) {
+    const out = [], hw = (w.w || 5) * perFt() / 2;
+    for (let i = 0; i < w.pts.length - 1; i++) {
+      const a = w.pts[i], b = w.pts[i + 1], L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, nx = -(b[1] - a[1]) / L * hw, ny = (b[0] - a[0]) / L * hw;
+      out.push([[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny]], [[a[0] - nx, a[1] - ny], [b[0] - nx, b[1] - ny]]);
+    }
+    return out;
+  }
+  /** A drive aisle starting on a sidewalk's edge leaves it square: the edge's normal (pointing away from the walk), or null. */
+  function walkEdgeNormal(p) {
+    const tol = 3 * perFt();
+    let best = null;
+    for (const w of sk.model.walks) {
+      const hw = (w.w || 5) * perFt() / 2;
+      for (let i = 0; i < w.pts.length - 1; i++) {
+        const a = w.pts[i], b = w.pts[i + 1], dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1;
+        const t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (L * L); if (t < -0.02 || t > 1.02) continue;
+        const side = ((p[0] - a[0]) * -dy + (p[1] - a[1]) * dx) / L;          // signed distance from the centre line
+        if (Math.abs(side) > hw + tol) continue;                                 // on the walk or just off its edge
+        const sg = Math.sign(side) || 1, n = [-dy / L * sg, dx / L * sg], d = Math.abs(Math.abs(side) - hw);
+        const q = [a[0] + dx * t + n[0] * hw, a[1] + dy * t + n[1] * hw];          // the point on that edge
+        if (!best || d < best.d) best = { n, p: q, d };
+      }
+    }
+    return best;
+  }
+  /** Point c held to the line through a along n (Alt lets go). */
+  const alongN = (a, n, c) => { const k = (c[0] - a[0]) * n[0] + (c[1] - a[1]) * n[1]; return [a[0] + n[0] * k, a[1] + n[1] * k]; };
+  function perpSnap(d, c, ev) {
+    if (!d.perpN || ev.alt || !c) return c;
+    const a = d.pts ? d.pts[0] : d.a, p = alongN(a, d.perpN, c);
+    sk.snap = { p, t: 'lock', label: '⟂ sidewalk', guides: [[a, p]] };
+    return p;
+  }
   /** One-way arrows along an aisle (native polylines): a shaft and a head every ~40 ft. */
   function driveArrows(d) {
     const out = [], ft = perFt(), step = 40 * ft, len = 9 * ft, hw = 2.6 * ft;
@@ -142,7 +177,7 @@ export function createSketch(ctx) {
   const freeze = m => { delete m.prm; };
   /** Everything derived from a solid (cached): triangles, floor plates, area, top surface, outline, base elevation. */
   function info(m) {
-    const key = JSON.stringify([m.v, m.f, m.ftf, kz()]);
+    const key = JSON.stringify([m.v, m.f, m.ftf, kz(), m.ff || 0, ctx.groundVer?.() || 0]);
     const c = sk.infos.get(m.id);
     if (c && c.key === key && !(sk.baseLock?.id === m.id)) return c.I;
     const tris = SO.solidTris(m), P0 = SO.plates(m, ftfN(m), tris);
@@ -152,11 +187,22 @@ export function createSketch(ctx) {
     const F = foot.length >= 3 ? foot : xy;
     let base;
     if (sk.baseLock?.id === m.id) base = sk.baseLock.base;
-    else { let lo = Infinity; for (const p of [...F, centroid(F)]) { const z = ctx.zAt(...p); if (Number.isFinite(z) && z < lo) lo = z; } base = Number.isFinite(lo) ? lo : 0; }
+    else base = avgGrade(F) + (m.ff || 0) * outPerFt();      // sits at the average grade under it, ± the first-floor slider
     const I = { tris, P, floors: P.length, gfa: P.reduce((a, p) => a + p.area, 0), zmax: SO.zMax(m), top: SO.topAt(m, tris), edges: SO.edgesOf(m),
       c: centroid(xy), bb: bbox(xy), base, sheet: SO.isSheet(m), foot: F };
     sk.infos.set(m.id, { key, I });
     return I;
+  }
+  /** Average ground elevation under an outline (a grid of samples inside it; corners + centre for slivers). */
+  function avgGrade(F) {
+    const [x0, y0, x1, y1] = bbox(F), n = 14; let sum = 0, cnt = 0;
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const x = x0 + (i + 0.5) / n * (x1 - x0), y = y0 + (j + 0.5) / n * (y1 - y0);
+      if (!inPoly(F, x, y)) continue;
+      const z = ctx.zAt(x, y); if (Number.isFinite(z)) { sum += z; cnt++; }
+    }
+    if (!cnt) for (const p of [...F, centroid(F)]) { const z = ctx.zAt(...p); if (Number.isFinite(z)) { sum += z; cnt++; } }
+    return cnt ? sum / cnt : 0;
   }
   const massGfa = m => info(m).gfa * sfPerNative2();
   const massBase = m => info(m).base;
@@ -453,6 +499,14 @@ export function createSketch(ctx) {
       g.lineWidth = (w.w || 5) * perFt() * px + 2; g.strokeStyle = sk.sel?.id === w.id ? ORANGE : 'rgba(90,84,74,0.9)'; g.stroke();
       path(w.pts, false); g.lineWidth = (w.w || 5) * perFt() * px; g.strokeStyle = siteColor(`w:${w.id}`, 'plaza'); g.stroke();
       g.lineJoin = 'miter';
+      if (w.grade) {          // graded walk: an arrow down the slope at its middle, with the slope
+        const i = Math.floor((w.pts.length - 1) / 2), a = w.pts[i], b = w.pts[i + 1], q0 = scr(a), q1 = scr(b);
+        if (q0 && q1) { const mx = (q0[0] + q1[0]) / 2, my = (q0[1] + q1[1]) / 2, L = Math.hypot(q1[0] - q0[0], q1[1] - q0[1]) || 1, ux = (q1[0] - q0[0]) / L, uy = (q1[1] - q0[1]) / L;
+          g.beginPath(); g.moveTo(mx - ux * 14, my - uy * 14); g.lineTo(mx + ux * 14, my + uy * 14); g.moveTo(mx + ux * 14 - ux * 6 - uy * 5, my + uy * 14 - uy * 6 + ux * 5); g.lineTo(mx + ux * 14, my + uy * 14); g.lineTo(mx + ux * 14 - ux * 6 + uy * 5, my + uy * 14 - uy * 6 - ux * 5);
+          g.strokeStyle = '#1f2937'; g.lineWidth = 2; g.stroke();
+          label(g, [mx, my - 12], `${{ max: '≤ ', min: '≥ ' }[w.grade.mode] || ''}${w.grade.slope ?? 2}%`, ''); }
+      }
+      if (sk.sel?.id === w.id) { const q = scr(w.pts[0]); if (q) { g.font = 'bold 11px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = 'rgba(15,23,42,.85)'; g.beginPath(); g.arc(q[0], q[1] - 14, 8, 0, Math.PI * 2); g.fill(); g.fillStyle = '#fff'; g.fillText('S', q[0], q[1] - 14); } }
     }
     for (const l of sk.model.lots) {
       const L = lotLayout(l), sel = sk.sel?.id === l.id;
@@ -796,8 +850,12 @@ export function createSketch(ctx) {
     if (kind === 'mass') {
       const head = `<div class="skc-row"><select data-k="use">${scheme().uses.map(u => `<option value="${u.key}"${u.key === o.use ? ' selected' : ''}>${escapeHtml(u.label)}</option>`).join('')}</select>
           <button type="button" data-k="del" title="Delete (Del)">🗑</button></div>`;
+      const avg = avgGrade(info(o).foot), u = uLen(), ffEl = avg + (o.ff || 0) * outPerFt();
       const floors = `<div class="skc-row"><span>Floors</span><button type="button" data-k="fl-" title="↓">−</button><output data-o="floors"></output><button type="button" data-k="fl+" title="↑">+</button>
-          <span>@</span>${num('ftf', o.ftf, 2, 40, 0.5)}<span>${uLen()}</span></div>`;
+          <span>@</span>${num('ftf', o.ftf, 2, 40, 0.5)}<span>${u}</span></div>
+        <div class="skc-row" title="The block sits at the average grade under it; slide the first floor up or down to line it up with a point on the grade"><span>First floor</span><input type="range" data-k="ff" min="-20" max="20" step="0.5" value="${o.ff || 0}" style="flex:1;min-width:90px">
+          <output data-o="ff">${(o.ff || 0) > 0 ? '+' : ''}${o.ff || 0} ft</output></div>
+        <div class="skc-row skc-read" data-o="ffel">FF ${ffEl.toFixed(1)} · average grade ${avg.toFixed(1)}</div>`;
       if (info(o).sheet) return `${head}<div class="skc-row skc-note">Flat shape — pull it up with Push/Pull (U).</div><div class="skc-row skc-read" data-o="read"></div>`;
       if (!o.prm) return `${head}${floors}<div class="skc-row skc-note">Edited by hand — shape it with Draw, Push/Pull, Slope and Ctrl+drag.</div><div class="skc-row skc-read" data-o="read"></div>`;
       const r = o.prm.roof || { type: 'flat', pitch: 6 }, st = o.prm.step || { at: 0, inset: 10 };
@@ -834,7 +892,15 @@ export function createSketch(ctx) {
         <div class="skc-row"><span>Use</span><select data-k="use">${scheme().uses.map(u => `<option value="${u.key}"${u.key === o.use ? ' selected' : ''}>${escapeHtml(u.label)}</option>`).join('')}</select>
           <span>floor area</span>${num('gfa', o.gfa || 0, 0, 1e7, 100, 80)}<span>sf</span></div>
         <div class="skc-row skc-note">${o.gfa ? `${o.floors || '?'} floor levels with ${Math.round(o.gfa).toLocaleString()} sf of floors in Revit.` : 'No floors in what was sent — type the floor area for parking.'} Placed where Revit puts it, relative to the site's placement in that model.</div>${rvWhere(o)}`;
-    if (kind === 'walk') return `<div class="skc-row"><span>Sidewalk</span>${num('w', o.w || 5, 2, 40, 0.5, 42)}<span>${uLen()} wide</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div><div class="skc-row skc-read" data-o="read"></div>`;
+    if (kind === 'walk') {
+      const gr = o.grade;
+      return `<div class="skc-row"><span>Sidewalk</span>${num('w', o.w || 5, 2, 40, 0.5, 42)}<span>${uLen()} wide</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div>
+        <div class="skc-row seg seg-dark" title="Graded: the ground along the walk is graded to a set slope (a Slope in Site design)"><label><input type="radio" name="skc-wg" value="ground"${gr ? '' : ' checked'}><span>Follows ground</span></label><label><input type="radio" name="skc-wg" value="slope"${gr ? ' checked' : ''}><span>Graded slope</span></label></div>
+        ${gr ? `<div class="skc-row"><span>Slope</span><select data-k="wmode">${[['exact', 'exactly'], ['max', 'at most'], ['min', 'at least']].map(([k, l]) => `<option value="${k}"${(gr.mode || 'exact') === k ? ' selected' : ''}>${l}</option>`).join('')}</select>${num('wslope', gr.slope ?? 2, 0, 25, 0.1, 42)}<span>%</span>
+          <button type="button" data-k="wflip" title="Run the slope the other way (it falls from the start, S)">⇄</button></div>
+        <div class="skc-row skc-note">Falls from its start (S) at this slope; the ground beside it ties back in. It's a Slope in Site design, kept in step with this walk.</div>` : ''}
+        <div class="skc-row skc-read" data-o="read"></div>`;
+    }
     if (kind === 'plant') return `<div class="skc-row"><span>Planting</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div><div class="skc-row skc-read" data-o="read"></div>`;
     if (kind === 'tree') return `<div class="skc-row"><select data-k="form">${[['broadleaf', 'Broadleaf'], ['pine', 'Pine'], ['cedar', 'Cedar']].map(([k, l]) => `<option value="${k}"${(o.form || 'broadleaf') === k ? ' selected' : ''}>${l}</option>`).join('')}</select><span>crown ⌀</span>${num('d', o.d, 3, 120, 1, 42)}<span>height</span>${num('h', o.h, 5, 150, 1, 42)}<span>${uLen()}</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div>`;
     return `<div class="skc-row"><span>Planter island</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div>
@@ -849,7 +915,7 @@ export function createSketch(ctx) {
     for (const q of pts) { if (!q) continue; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; }
     if (!Number.isFinite(x1)) { cardEl.hidden = true; return; }
     const W = cardEl.parentElement.clientWidth, H = cardEl.parentElement.clientHeight;
-    const sig = `${kind}:${o.id}:${sk.sel2?.id || ''}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use, o.color, o.stand, o.curve, o.size, o.r, o.cut, o.oneWay, o.islandR, !!o.accAt, o.d, o.h, o.form, o.gfa])}`;
+    const sig = `${kind}:${o.id}:${sk.sel2?.id || ''}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use, o.color, o.stand, o.curve, o.size, o.r, o.cut, o.oneWay, o.grade, o.islandR, !!o.accAt, o.d, o.h, o.form, o.gfa])}`;
     if (cardEl.dataset.sig !== sig && !cardEl.contains(document.activeElement)) { cardEl.dataset.sig = sig; cardEl.innerHTML = cardHtml(kind, o); }
     const read = cardEl.querySelector('[data-o="read"]') || {};
     if (kind === 'note') { /* nothing to read out */ } else if (kind === 'mass') {
@@ -882,6 +948,7 @@ export function createSketch(ctx) {
     if (k.startsWith('bool-')) { combine(k.slice(5)); return; }
     if (k === 'fl-' || k === 'fl+') { before(); if (floorsBy(o, k === 'fl+' ? 1 : -1)) { remember(o); changed(true); } else sk.undo.pop(); }
     if (k === 'accAuto') { before(); delete o.accAt; changed(true); }
+    if (k === 'wflip') { before(); o.pts = o.pts.slice().reverse(); changed(true); }
     if (k === 'flipDir') { before(); o.pts = o.pts.slice().reverse(); if (Array.isArray(o.cut)) o.cut = [o.cut[1], o.cut[0]]; changed(true); }
     if (k === 'rv-fit' || k === 'rv-ground') {
       const I = rvInfo(o), [x0, y0, x1, y1] = I.bb, box = ctx.siteBox?.();
@@ -906,7 +973,18 @@ export function createSketch(ctx) {
       changed(true);
     }
   });
+  // First-floor slider: live while dragging, one undo step.
+  cardEl.addEventListener('input', e => {
+    const t = e.target; if (t.dataset.k !== 'ff') return;
+    const o = findSel(); if (!o) return;
+    if (!sk.ffPushed) { before(); sk.ffPushed = true; }
+    o.ff = Number(t.value) || 0;
+    const out = cardEl.querySelector('[data-o="ff"]'); if (out) out.textContent = `${o.ff > 0 ? '+' : ''}${o.ff} ft`;
+    const avg = avgGrade(info(o).foot), rd = cardEl.querySelector('[data-o="ffel"]'); if (rd) rd.textContent = `FF ${(avg + o.ff * outPerFt()).toFixed(1)} · average grade ${avg.toFixed(1)}`;
+    draw(); live();
+  });
   cardEl.addEventListener('change', e => {
+    if (e.target.dataset.k === 'ff') { sk.ffPushed = false; changed(true); return; }
     const o = findSel(); if (!o) return;
     const t = e.target, k = t.dataset.k, v = Number(t.value), p = o.prm;
     before();
@@ -945,6 +1023,9 @@ export function createSketch(ctx) {
     if (k === 'r') o.r = Math.max(0, Number.isFinite(v) ? v : 0);
     if (k === 'cut0' || k === 'cut1') { const c = cutsOf(o); c[k === 'cut0' ? 0 : 1] = t.checked; o.cut = c; }
     if (k === 'oneWay') { o.oneWay = t.checked; t.blur(); }
+    if (t.name === 'skc-wg') { o.grade = t.value === 'slope' ? { slope: o.grade?.slope ?? 2, mode: o.grade?.mode || 'exact' } : null; t.blur(); }
+    if (k === 'wslope' && o.grade) o.grade = { ...o.grade, slope: Math.max(0, Math.min(25, Number.isFinite(v) ? v : 2)) };
+    if (k === 'wmode' && o.grade) o.grade = { ...o.grade, mode: t.value };
     if (k === 'islandR') o.islandR = Math.max(0, Number.isFinite(v) ? v : 0);
     if (sk.sel.kind === 'mass') remember(o);
     cardEl.dataset.sig = '';
@@ -1221,7 +1302,10 @@ export function createSketch(ctx) {
     }
     for (const i of sk.model.islands) if (i.id !== exclude) ring(i.pts, 'island');
     for (const d of sk.model.drives) if (d.id !== exclude) ring(d.pts, 'drive aisle', false);
-    for (const w of sk.model.walks) if (w.id !== exclude) ring(w.pts, 'sidewalk', false);
+    for (const w of sk.model.walks) if (w.id !== exclude) {
+      ring(w.pts, 'sidewalk', false);
+      for (const [a, b] of walkEdges(w)) segs.push({ a, b, t: 'sidewalk edge' });
+    }
     for (const pl of sk.model.plants) if (pl.id !== exclude) ring(pl.pts, 'planting');
     for (const c of ctx.contextSegs?.() || []) ring(c.pts, c.t, c.closed, c.frame !== false);
     sk.sc = { key, C: { pts, segs }, frames: frameAngles(fsegs) };
@@ -1836,12 +1920,14 @@ export function createSketch(ctx) {
       if (sk.draw?.pts && !sk.draw.face) {      // outline in progress
         const q = scr(sk.draw.pts[0], sk.v3 ? zGround(sk.draw.pts[0]) + 0.3 : undefined);
         if (!isLine(sk.draw.kind) && sk.draw.pts.length >= 3 && q && Math.hypot(q[0] - ev.sx, q[1] - ev.sy) < 10) { finishDraw(sk.draw.pts); return true; }
-        const xy = groundSnap(ev, sk.draw.pts.at(-1), { own: sk.draw.pts }); if (!xy) return true;
+        let xy = groundSnap(ev, sk.draw.pts.at(-1), { own: sk.draw.pts }); if (!xy) return true;
+        if (sk.draw.pts.length === 1) xy = perpSnap(sk.draw, xy, ev);
         sk.draw.pts.push(xy);
         draw(); return true;
       }
       const xy = groundSnap(ev, null); if (!xy) return true;
-      sk.draw = { kind, shape: t === 'mass' ? sk.shape : 'box', a: xy, b: xy, cp: [ev.sx, ev.sy], rect: false, pending: true, frame: isLine(kind) ? 0 : frameNear(xy) };
+      sk.draw = { kind, shape: t === 'mass' ? sk.shape : 'box', a: xy, b: xy, cp: [ev.sx, ev.sy], rect: false, pending: true, frame: isLine(kind) ? 0 : frameNear(xy), perpN: null };
+      if (kind === 'drive' && !ev.alt) { const we = walkEdgeNormal(xy); if (we) { sk.draw.perpN = we.n; sk.draw.a = sk.draw.b = we.p; } }
       card();
       return true;
     }
@@ -1911,13 +1997,14 @@ export function createSketch(ctx) {
       if (d.pending && Math.hypot(ev.sx - d.cp[0], ev.sy - d.cp[1]) > 6) { d.pending = false; d.rect = true; }
       if (d.rect) {
         // A drive aisle is a line (pull / Shift lock from its start); shapes snap their far corner, Shift = square.
-        const b = isLine(d.kind) ? groundSnap(ev, d.a, { own: [d.a] }) : groundSnap({ ...ev, shift: false }, null);
+        let b = isLine(d.kind) ? groundSnap(ev, d.a, { own: [d.a] }) : groundSnap({ ...ev, shift: false }, null);
         if (!b) return;
+        b = perpSnap(d, b, ev);
         d.b = b; d.square = ev.shift && !isLine(d.kind); draw();
       }
       return;
     }
-    if (d?.pts) { const xy = groundSnap(ev, d.pts.at(-1), { own: d.pts }); if (xy) { d.hover = xy; draw(); } return; }
+    if (d?.pts) { let xy = groundSnap(ev, d.pts.at(-1), { own: d.pts }); if (xy) { if (d.pts.length === 1) xy = perpSnap(d, xy, ev); d.hover = xy; draw(); } return; }
     if (!sk.drag && sk.tool === 'radius') {
       const T = radiusTarget(ev), k = T ? JSON.stringify([T.type, T.id, T.di, T.i, T.key, Math.round(T.q[0]), Math.round(T.q[1])]) : '';
       if (k !== (sk.hovRKey || '')) { sk.hovR = T; sk.hovRKey = k; draw(); }
@@ -2038,8 +2125,9 @@ export function createSketch(ctx) {
       return;
     }
     if (d && !d.pts) {
+      if (d.rect && d.kind === 'drive') { sk.draw = { kind: d.kind, shape: d.shape, pts: [d.a, d.b], perpN: d.perpN }; flash('Click to bend the aisle — double-click, Enter or Esc to finish.'); draw(); return; }
       if (d.rect) { finishDraw(drawPts()); return; }
-      sk.draw = { kind: d.kind, shape: d.shape, pts: [d.a] }; draw(); return;   // a click without dragging starts an outline
+      sk.draw = { kind: d.kind, shape: d.shape, pts: [d.a], perpN: d.perpN }; draw(); return;   // a click without dragging starts an outline
     }
     if (sk.drag) { const { moved, accLot } = sk.drag; sk.drag = null; if (moved) changed(true); else { if (accLot) sk.undo.pop(); card(); } }
   }
@@ -2131,6 +2219,7 @@ export function createSketch(ctx) {
     const k = e.key;
     if (k === 'Escape') {
       if (sk.op) { const m = massById(sk.op.id); if (m) resetOp(m); sk.op = null; sk.baseLock = null; sk.undo.pop(); changed(true); }
+      else if (sk.draw?.kind === 'drive' && sk.draw.pts?.length >= 2) finishOutline();
       else if (sk.draw) { sk.draw = null; draw(); } else if (sk.tool !== 'select') setTool('select'); else { sk.sel = null; draw(); panel(); card(); }
       return true;
     }
@@ -2413,8 +2502,19 @@ export function createSketch(ctx) {
   function trees3d() {
     return sk.model.trees.map(t => ({ x: t.pts[0][0], y: t.pts[0][1], z: zGround(t.pts[0]), h: t.h * outPerFt(), r: t.d / 2 * perFt(), form: t.form || 'broadleaf', sketch: true }));
   }
+  /** Parking paving (lots, drive aisles and their curb returns) and the planted areas inside it (islands, beds). */
+  function pavedAreas() {
+    const paved = [], keep = [], J = joins();
+    for (const l of sk.model.lots) paved.push(shapeOf(l));
+    for (const d of sk.model.drives) for (let i = 0; i < d.pts.length - 1; i++) paved.push(lanePoly(d.pts[i], d.pts[i + 1], (d.w || 24) * perFt()));
+    for (const W of J.wedges) paved.push(W);
+    for (const i of sk.model.islands) keep.push(shapeOf(i, 'island'));
+    for (const pl of sk.model.plants) keep.push(shapeOf(pl));
+    for (const l of sk.model.lots) for (const isl of lotLayout(l).islands || []) keep.push(islandShape(isl, l.islandR));
+    return { paved, keep };
+  }
   return {
-    trees3d, exportShapes, revit3d,
+    trees3d, exportShapes, revit3d, pavedAreas,
     /** A building from Revit replaces the one sent before (one per site for now). */
     setRevitBuilding(o) { before(); const prev = sk.model.rvbs[0]; if (prev) o.use = prev.use || o.use; sk.model.rvbs = [o]; sk.rvCache?.clear(); sk.sel = { kind: 'revit', id: o.id }; changed(); },
     get version() { return sk.ver; },

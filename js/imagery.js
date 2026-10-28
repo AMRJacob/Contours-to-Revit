@@ -19,8 +19,8 @@
 //   'image' — ArcGIS ImageServer /exportImage, same (optionally locked to one flight)
 //   'tiles' — cached tiles: Web Mercator grids are stitched and warped here; a grid already in the site's State
 //             Plane zone is stitched and cropped directly.
-import { projector, zoneUnitsPerMeter } from './geo.js?v=0.65.1';
-import { NATIONAL, STATES, STATE_LIST } from './imgcatalog.js?v=0.65.1';
+import { projector, zoneUnitsPerMeter } from './geo.js?v=0.66.0';
+import { NATIONAL, STATES, STATE_LIST } from './imgcatalog.js?v=0.66.0';
 
 export { STATE_LIST };
 
