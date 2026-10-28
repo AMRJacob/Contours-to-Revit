@@ -355,6 +355,57 @@ export class SiteView3D {
     this.trees = g; this.scene.add(g);
   }
 
+  /**
+   * Buildings from Revit: [{ id, buckets: [{ mat, pos (Float32, native XY / output Z, 9 per triangle) }], materials:
+   * [{ rgb, render, transparency, tex (base64), mime, sx, sy (native) }], zmin, paint (diagram colour or null) }].
+   * One mesh per material: render colour, Revit transparency (glass), textures mapped by the face's direction at their
+   * real-world size. Heights stay true scale on the exaggerated ground, like the other buildings. Cached.
+   */
+  setRevit(list) {
+    const key = list?.length ? `${list.map(o => `${o.id}:${o.paint || ''}:${o.buckets.length}`).join('|')}:${this.ex}:${this.cx}` : '';
+    if (this.revit && this._rvKey === key && this._rvList?.every((o, i) => o.buckets === list[i]?.buckets)) return;
+    if (this.revit) { this.scene.remove(this.revit); this.revit.traverse(o => { o.geometry?.dispose(); if (o.material && !o.material.userData.keep) o.material.dispose(); }); this.revit = null; }
+    this._rvKey = key; this._rvList = list;
+    if (!list?.length || !this.g) return;
+    const g = new THREE.Group(), tex = (this._rvTex ||= new Map());
+    for (const o of list) for (const b of o.buckets) {
+      const m = o.materials[b.mat] || {}, a = b.pos, n = a.length / 3;
+      const pos = new Float32Array(n * 3), uv = new Float32Array(n * 2);
+      const zb = (o.zmin - this.z0) * this.ex;
+      for (let v = 0; v < n; v++) { pos[v * 3] = (a[v * 3] - this.cx) * this.k; pos[v * 3 + 1] = zb + (a[v * 3 + 2] - o.zmin); pos[v * 3 + 2] = -(a[v * 3 + 1] - this.cy) * this.k; }
+      // Box mapping: each triangle takes the two axes across its normal; one tile = the texture's real-world size.
+      const tx = Math.max(0.1, (m.sx || 0) * this.k) || 8, ty = Math.max(0.1, (m.sy || m.sx || 0) * this.k) || 8;
+      for (let t = 0; t < n; t += 3) {
+        const ax = pos[t * 3 + 3] - pos[t * 3], ay = pos[t * 3 + 4] - pos[t * 3 + 1], az = pos[t * 3 + 5] - pos[t * 3 + 2];
+        const bx = pos[t * 3 + 6] - pos[t * 3], by = pos[t * 3 + 7] - pos[t * 3 + 1], bz = pos[t * 3 + 8] - pos[t * 3 + 2];
+        const nx = Math.abs(ay * bz - az * by), ny = Math.abs(az * bx - ax * bz), nz = Math.abs(ax * by - ay * bx);
+        for (let k = 0; k < 3; k++) {
+          const X = pos[(t + k) * 3], Y = pos[(t + k) * 3 + 1], Z = pos[(t + k) * 3 + 2];
+          const [u, w] = ny >= nx && ny >= nz ? [X, Z] : nx >= nz ? [Z, Y] : [X, Y];
+          uv[(t + k) * 2] = u / tx; uv[(t + k) * 2 + 1] = w / ty;
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      geo.computeVertexNormals();
+      const c = o.paint || (m.render ? `rgb(${m.render.join(',')})` : m.rgb ? `rgb(${m.rgb.join(',')})` : '#c8c8c8');
+      const op = 1 - Math.max(0, Math.min(95, m.transparency || 0)) / 100;
+      const mat = new THREE.MeshLambertMaterial({ color: c, side: THREE.DoubleSide, transparent: op < 1, opacity: op, depthWrite: op >= 1 });
+      if (m.tex && !o.paint) {
+        const tk = `${m.mime}:${m.tex.length}:${m.tex.slice(0, 64)}`;
+        let T = tex.get(tk);
+        if (!T) { T = new THREE.TextureLoader().load(`data:${m.mime};base64,${m.tex}`, () => { this.dirty = true; }); T.wrapS = T.wrapT = THREE.RepeatWrapping; T.colorSpace = THREE.SRGBColorSpace; tex.set(tk, T); }
+        mat.map = T; mat.color.set(0xffffff);
+      }
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = mesh.receiveShadow = true; mesh.userData.rvId = o.id; mesh.name = 'revitBuilding';
+      g.add(mesh);
+      if (this.diagram) { const e = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 30), new THREE.LineBasicMaterial({ color: 0x6b7280 })); g.add(e); }
+    }
+    this.revit = g; this.scene.add(g);
+  }
+
   /** Diagram annotations: [{ tris: flat display [x,y,z…], edges: flat display pairs, color, opacity }]. */
   setNotes(items) {
     if (this.notes) { this.scene.remove(this.notes); this.notes.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); this.notes = null; }
@@ -677,10 +728,12 @@ export class SiteView3D {
     const sm = this.sketch?.getObjectByName('sketchMass'); if (sm) objs.push(sm);
     if (this.bldg?.visible) objs.push(this.bldg);
     this.trees?.children.forEach(o => { if (o.name === 'crowns') objs.push(o); });
+    this.revit?.children.forEach(o => { if (o.name === 'revitBuilding') objs.push(o); });
     if (!objs.length) return null;
     const hit = this._ray(sx, sy).intersectObjects(objs, false)[0];
     if (!hit) return null;
     if (hit.object === sm) return { kind: 'mass', id: sm.userData.ids[hit.faceIndex] };
+    if (hit.object.name === 'revitBuilding') return { kind: 'revit', id: hit.object.userData.rvId };
     if (hit.object === this.bldg) { const key = this._bldgOpt?.keys?.[hit.faceIndex]; return key ? { kind: 'bldg', key } : null; }
     const t = hit.object.userData.list?.[hit.instanceId];
     return t ? { kind: 'tree', tree: t } : null;

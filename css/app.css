@@ -956,3 +956,6 @@ body.theme-legend .dz-opts { background: linear-gradient(180deg, rgba(18,23,30,.
 body.theme-legend .dz-opts-h b { font-family: var(--display); color: var(--brass-hi); }
 .dz3d-canvas { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
 .v3-stage.dz-drawing canvas { cursor: crosshair; }
+#step-revit .rv-from { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 8px 0 12px; background: color-mix(in srgb, var(--mode) 8%, transparent); }
+#step-revit .rv-from p { margin: 0 0 6px; font-size: 13px; }
+#step-revit .rv-from .hint { margin: 6px 0 0; font-size: 12px; }

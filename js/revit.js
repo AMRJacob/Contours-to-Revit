@@ -334,6 +334,12 @@ function sendForm(site, P, snapBtn) {
   <p class="hint rv-place">At the Project Base Point: ${fmtPlacement(P, site)}${P.setCoords ? ' · shared coordinates set' : ''}. <a href="#" data-rv="change-place">Change…</a></p>
   ${diffs.length ? `<div class="rv-banner rv-banner-warn">The app's ${diffs.join(', ')} differ${diffs.length === 1 ? 's' : ''} from what this model uses — the site would land in the wrong spot.
     <div class="align-row"><button type="button" class="btn btn-xs" data-rv="use-model">Use the model's</button><button type="button" class="btn btn-quiet btn-xs" data-rv="change-place">Change the model's…</button></div></div>` : ''}
+  ${host?.features?.includes('building') ? `<div class="rv-from">
+    <p><strong>Bring the building in from Revit</strong></p>
+    <div class="align-row"><span class="seg seg-sm"><label><input type="radio" name="rv-bscope" value="auto" checked><span>Selection</span></label><label><input type="radio" name="rv-bscope" value="view"><span>Active 3D view</span></label></span>
+      <button type="button" class="btn btn-xs" data-rv="get-building" ${busy ? 'disabled' : ''}>Bring it in</button></div>
+    <p class="hint">Walls, floors, roofs, glazing, doors, columns, stairs… with their materials and colours — for shadows, sun, 3D and diagrams on the site. Site elements are left out. With nothing selected, it takes what the active 3D view shows.</p>
+  </div>` : ''}
   <div class="rv-items">
     <label class="check"><input type="checkbox" id="rv-exist" ${o.exist ? 'checked' : ''}><span><strong>Existing ground</strong> — Toposolid <small id="rv-exist-n"></small>
       ${exist ? `<small class="rv-state">In the model. <label class="rv-inline"><input type="checkbox" id="rv-exist-replace"> Replace it</label> <span id="rv-exist-why"></span></small>` : '<small class="rv-state">New.</small>'}</span></label>
@@ -349,6 +355,14 @@ function sendForm(site, P, snapBtn) {
       const bl = api.buildings(site), lid = bl.filter(x => x.b.hSrc === 'lidar').length;
       return `<label class="check"><input type="checkbox" id="rv-masses" ${o.masses ? 'checked' : ''} ${bl.length ? '' : 'disabled'}><span><strong>Existing buildings</strong> — masses
       <small class="rv-state">${bl.length ? `${bl.length} from the building layer${new Set(bl.map(x => x.tag)).size > 1 ? 's' : ''} shown on the map${lid ? `, ${lid} with lidar roofs` : ''}. Replaces masses sent before.` : 'Turn on a building layer on the map first.'}</small></span></label>`;
+    })() : ''}
+    ${host?.features?.includes('shapes') ? (() => {
+      const sh = api.sketchShapes(), tr = api.trees(site);
+      const parts = [sh.blocks.length ? `${sh.blocks.length} block${sh.blocks.length === 1 ? '' : 's'}` : '', ...['paving', 'island', 'walk', 'planting'].filter(k => sh.surfaces[k].length).map(k => ({ paving: 'parking', island: 'islands', walk: 'sidewalks', planting: 'planting' }[k])), tr.planted.length ? `${tr.planted.length} new tree${tr.planted.length === 1 ? '' : 's'}` : ''].filter(Boolean);
+      return `<label class="check"><input type="checkbox" id="rv-sk" ${o.sk && parts.length ? 'checked' : ''} ${parts.length ? '' : 'disabled'}><span><strong>Sketch design</strong>${parts.length ? ` — ${parts.join(', ')}` : ''}
+      <small class="rv-state">${parts.length ? 'Blocks as masses coloured by use; parking, islands, sidewalks and planting as model surfaces; trees as planting. Replaces what was sent before.' : 'Draw blocks, parking, sidewalks, planting or trees in the Sketch tab first.'}</small></span></label>
+      <label class="check"><input type="checkbox" id="rv-trees" ${o.trees && tr.lidar.length ? 'checked' : ''} ${tr.lidar.length ? '' : 'disabled'}><span><strong>Existing trees</strong>${tr.lidar.length ? ` — ${tr.lidar.length} from lidar` : ''}
+      <small class="rv-state">${tr.lidar.length ? 'Simple tree shapes at their measured height and crown, existing phase. Replaces those sent before.' : 'Turn on the Trees layer (found in the lidar) first.'}</small></span></label>`;
     })() : ''}
     <label class="check"><input type="checkbox" id="rv-dxf" ${o.dxf ? 'checked' : ''}><span><strong>Contours &amp; context</strong> — DXF link (the map's shown layers)
       <small class="rv-state">${dxf ? 'Reloads the existing link.' : 'Linked and pinned at the Project Base Point.'}</small></span></label>
@@ -380,7 +394,7 @@ function defaults(site) {
   const av = model.activeView?.image ? model.activeView.id : (model.views.find(v => /site/i.test(v.name)) || model.views[0])?.id;
   const type = model.toposolidTypes.find(t => /site|topo|existing/i.test(t.name)) || model.toposolidTypes[0];
   return {
-    exist: true, prop: true, img: true, drape: true, masses: false, dxf: true, pdxf: false,
+    exist: true, prop: true, img: true, drape: true, masses: false, dxf: true, pdxf: false, sk: true, trees: false,
     typeId: type?.id, levelId: lvl?.id, viewId: av,
     phaseE: ph[0]?.id, phaseD: ph.length > 1 ? ph[ph.length - 1].id : '', phaseP: ph[ph.length - 1]?.id,
     tol: TOLS[site.units][2],
@@ -394,7 +408,7 @@ function readForm() {
   // A disabled box (no design yet) keeps the remembered choice instead of saving "off".
   const c = (id, key) => { const el = $(id); return !el || el.disabled ? (o[key] ?? defaults(site)[key]) : el.checked; };
   Object.assign(o, {
-    exist: c('rv-exist', 'exist'), prop: c('rv-prop', 'prop'), img: c('rv-img', 'img'), drape: c('rv-drape', 'drape'), masses: c('rv-masses', 'masses'), dxf: c('rv-dxf', 'dxf'), pdxf: c('rv-pdxf', 'pdxf'),
+    exist: c('rv-exist', 'exist'), prop: c('rv-prop', 'prop'), img: c('rv-img', 'img'), drape: c('rv-drape', 'drape'), masses: c('rv-masses', 'masses'), dxf: c('rv-dxf', 'dxf'), pdxf: c('rv-pdxf', 'pdxf'), sk: c('rv-sk', 'sk'), trees: c('rv-trees', 'trees'),
     typeId: v('rv-type'), levelId: v('rv-level'), viewId: v('rv-view'),
     phaseE: v('rv-phE'), phaseD: v('rv-phD'), phaseP: v('rv-phP'),
     tol: Number(v('rv-tol')) || TOLS[site.units][2],
@@ -443,13 +457,14 @@ function replaceReason(site, ex, tol, meta) {
 const demLabel = site => (site.dem?.contributions || []).map(c => c.tier?.label).join('+');
 
 function resultList(r) {
-  const name = { masses: 'Existing buildings', drape: 'Aerial on the Toposolids', coordinates: 'Shared coordinates', existing: 'Existing Toposolid', proposed: 'Proposed Toposolid', aerial: 'Aerial image', 'dxf-existing': 'Contours DXF', 'dxf-proposed': 'Proposed DXF', state: 'Site saved in the model' };
+  const name = { shapes: 'Sketch design & trees', masses: 'Existing buildings', drape: 'Aerial on the Toposolids', coordinates: 'Shared coordinates', existing: 'Existing Toposolid', proposed: 'Proposed Toposolid', aerial: 'Aerial image', 'dxf-existing': 'Contours DXF', 'dxf-proposed': 'Proposed DXF', state: 'Site saved in the model' };
   const ids = r.results.filter(x => x.ok && x.id).map(x => x.id);
   const items = r.results.map(x => `<li class="${x.ok ? 'ok' : 'bad'}">${esc(name[x.role] || x.role)}: ${x.ok
     ? (x.kept ? 'already in the model — kept as is'
       : x.role === 'existing' || x.role === 'proposed' ? `${x.replaced ? 'replaced' : 'created'}, ${Number(x.points).toLocaleString()} points${x.profile ? ', boundary outline' : ''}`
       : x.role === 'coordinates' ? (x.check > 0.9999 ? 'set and checked' : 'set — check the angle')
       : x.role === 'aerial' ? `${x.reloaded ? 'reloaded' : 'placed'} in “${esc(x.view)}”`
+      : x.role === 'shapes' ? (() => { const L = { 'sketch-blocks': 'blocks', 'sketch-paving': 'paving', 'sketch-island': 'islands', 'sketch-walk': 'sidewalks', 'sketch-planting': 'planting', 'sketch-trees': 'tree parts', 'lidar-trees': 'existing-tree shapes' }; const parts = Object.entries(x.made || {}).filter(([, n]) => n).map(([r, n]) => `${n} ${L[r] || r}`); return `${parts.join(', ') || 'nothing to send'}${x.failed ? `, ${x.failed} failed` : ''}`; })()
       : x.role === 'masses' ? `${x.made} building mass${x.made === 1 ? '' : 'es'}${x.failed ? `, ${x.failed} failed` : ''}${x.removed ? ` (replaced ${x.removed})` : ''}`
       : x.role === 'drape' ? `material “${esc(x.material)}” on ${x.painted} Toposolid${x.painted === 1 ? '' : 's'} (${x.faces} face${x.faces === 1 ? '' : 's'})`
       : x.role.startsWith('dxf') ? (x.reloaded ? 'reloaded' : 'linked') : 'done')
@@ -503,6 +518,7 @@ async function onClick(e) {
       if (f) { o.folder = f; saveOpts(o); render(); }
     } else if (a === 'open-folder') call('openFolder', { path: loadOpts().folder || model.stored.folder || model.defaultFolder });
     else if (a === 'send') await send();
+    else if (a === 'get-building') await getBuilding(site);
     else if (a === 'select') await call('select', { ids: b.dataset.ids.split(',').map(Number) });
     else if (a === 'open-snap') {
       const snap = storedSnapshot();
@@ -609,6 +625,10 @@ async function send() {
             meta: JSON.stringify({ src: tag, h: r4((b.top - b.base) * k), how }) };
         }) };
       }
+    }
+    if (host?.features?.includes('shapes') && (o.sk || o.trees)) {
+      status('Preparing the Sketch design…');
+      job.shapes = shapesJob(site, o, date);
     }
     const drape = o.drape && host?.features?.includes('drape');
     let aerialFid = null, aerialImg = null;
@@ -754,11 +774,24 @@ function mockHost() {
     addEventListener: (t, f) => { if (t === 'message') listeners.push(f); },
     postMessage(m) {
       const { id, type } = m;
-      if (type === 'hello') return reply(id, true, { host: 'mock', version: '0.0.1', revit: '2026 (mock)', features: ['drape', 'masses'], compatibleRendering: false, update: { current: '0.0.1', state: 'idle', auto: true } });
+      if (type === 'hello') return reply(id, true, { host: 'mock', version: '0.0.1', revit: '2026 (mock)', features: ['drape', 'masses', 'shapes', 'building'], compatibleRendering: false, update: { current: '0.0.1', state: 'idle', auto: true } });
       if (type === 'checkUpdate') return reply(id, true, { current: '0.0.1', latest: '0.3.0', available: !window.c2rMock.installed, pending: window.c2rMock.installed || null, state: 'idle' });
       if (type === 'installUpdate') { window.c2rMock.installed = '0.3.0'; return reply(id, true, { current: '0.0.1', latest: '0.3.0', available: false, pending: '0.3.0', state: 'installed' }); }
       if (type === 'setRendering') return reply(id, true, { compatibleRendering: m.compatible, restart: true });
       if (type === 'getModel') return reply(id, true, model());
+      if (type === 'getBuilding') {
+        // A 60 × 40 ft, 30 ft tall box with a glass front, at the PBP + (100, 50) ft, ground floor at the PBP elevation.
+        const P = model().pbp, x0 = P.x + 100, y0 = P.y + 50, z0 = P.z, W = 60, D = 40, H = 30;
+        const quad = (a, b, c, e) => [...a, ...b, ...c, ...a, ...c, ...e];
+        const c = [[0, 0, 0], [W, 0, 0], [W, D, 0], [0, D, 0], [0, 0, H], [W, 0, H], [W, D, H], [0, D, H]];
+        const wall = [...quad(c[1], c[2], c[6], c[5]), ...quad(c[2], c[3], c[7], c[6]), ...quad(c[3], c[0], c[4], c[7])], glass = quad(c[0], c[1], c[5], c[4]), roof = quad(c[4], c[5], c[6], c[7]);
+        const enc = a => { const f = Float32Array.from(a), u8 = new Uint8Array(f.buffer); let s2 = ''; for (const b of u8) s2 += String.fromCharCode(b); return btoa(s2); };
+        window.c2rMock.building = (window.c2rMock.building || 0) + 1;
+        return reply(id, true, { name: 'Mock building', how: m.scope === 'view' ? 'view' : 'selection', elements: 6, triangles: (wall.length + glass.length + roof.length) / 9, truncated: false, origin: [x0, y0, z0],
+          buckets: [{ mat: 0, n: wall.length / 9, pos: enc(wall) }, { mat: 1, n: glass.length / 9, pos: enc(glass) }, { mat: 2, n: roof.length / 9, pos: enc(roof) }],
+          materials: [{ name: 'Brick', rgb: [150, 80, 60], render: [160, 82, 58], transparency: 0, shininess: 10 }, { name: 'Glass', rgb: [120, 170, 200], transparency: 70, shininess: 100 }, { name: 'Roofing', rgb: [90, 90, 95], transparency: 0, shininess: 5 }],
+          gfa: W * D * 2, floors: 2 });
+      }
       if (type === 'chunk') return reply(id, true, { fid: m.fid, bytes: m.b64.length * 0.75 });
       if (type === 'pickFolder') return reply(id, true, 'D:\\Shared\\Mock site');
       if (type === 'openFolder' || type === 'openUrl' || type === 'select') return reply(id, true, true);
@@ -776,6 +809,7 @@ function mockHost() {
         for (const t of m.toposolids) put(t.role, t.meta, { points: t.points.length / 3, profile: !!t.profile });
         if (m.image) put('aerial', m.image.meta, { view: 'Level 1', reloaded: false });
         if (m.masses) results.push({ role: 'masses', ok: true, made: m.masses.buildings.length, failed: 0, removed: 0 });
+        if (m.shapes) { window.c2rMock.shapes = m.shapes; results.push({ role: 'shapes', ok: true, made: Object.fromEntries(m.shapes.groups.map(g => [g.role, g.items.length])), failed: 0, removed: 0 }); }
         if (m.drape) results.push({ role: 'drape', ok: true, material: m.drape.name, painted: elements.filter(e => m.drape.roles.includes(e.role)).length, faces: 1 });
         for (const d of m.dxfs) put(d.role, d.meta, { reloaded: false });
         if (m.state) { stored.placement = m.state.placement; stored.snapshot = m.state.snapshot; stored.folder = m.folder; results.push({ role: 'state', ok: true }); }
@@ -784,4 +818,108 @@ function mockHost() {
       reply(id, false, null, 'unknown ' + type);
     },
   };
+}
+
+// ---------------------------------------------------------------- Sketch design and trees → Revit shapes
+const hexRgb = h => { const m = /^#?([0-9a-f]{6})$/i.exec(h || ''); if (!m) { const r = /rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(h || ''); return r ? [+r[1], +r[2], +r[3]] : [180, 180, 180]; } const n = parseInt(m[1], 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; };
+function shapesJob(site, o, date) {
+  const k = kOf(site), d = api.datum(site), P0 = model.pbp, r4 = v => Math.round(v * 1e4) / 1e4;
+  const T = (x, y, z) => { const [X, Y] = api.outXY(site, x, y); return [r4(P0.x + X * k), r4(P0.y + Y * k), r4(P0.z + (z - d) * k)]; };
+  const materials = [], idx = new Map();
+  const M = (name, color, transparency = 0) => { if (!idx.has(name)) { idx.set(name, materials.length); materials.push({ name, rgb: hexRgb(color), transparency }); } return idx.get(name); };
+  const soup = arr => { const v = [], f = []; for (let i = 0; i < arr.length; i += 3) v.push(...T(arr[i], arr[i + 1], arr[i + 2])); for (let t = 0; t < v.length / 3; t += 3) f.push([t, t + 1, t + 2]); return { v, f }; };
+  const groups = [], phP = Number(o.phaseP) || null, phE = Number(o.phaseE) || null;
+  const comment = what => `Contours to Revit — ${what} (${date})`;
+  if (o.sk) {
+    const sh = api.sketchShapes();
+    groups.push({ role: 'sketch-blocks', category: 'OST_Mass', phase: phP, items: sh.blocks.map(b => {
+      const v = []; for (let i = 0; i < b.v.length; i += 3) v.push(...T(b.v[i], b.v[i + 1], b.v[i + 2]));
+      return { id: b.id, name: b.name, v, f: b.f, mat: M(`Sketch - ${b.use}`, b.color), comment: comment('Sketch block'), meta: JSON.stringify({ use: b.use, gfa: b.gfa }) };
+    }) });
+    for (const [role, cat, label] of [['paving', 'OST_Parking|OST_Site', 'Parking paving'], ['island', 'OST_Planting|OST_Site', 'Parking islands'], ['walk', 'OST_Hardscape|OST_Site', 'Sidewalks'], ['planting', 'OST_Planting|OST_Site', 'Planting beds']]) {
+      const arr = sh.surfaces[role];
+      groups.push({ role: `sketch-${role}`, category: cat, phase: phP, items: arr.length ? [{ id: role, name: label, ...soup(arr), mat: M(label, sh.colors[role]), comment: comment(`Sketch ${label.toLowerCase()}`) }] : [] });
+    }
+    const tp = api.trees(site).planted;
+    groups.push({ role: 'sketch-trees', category: 'OST_Planting', phase: phP, items: tp.flatMap((t, i) => treeItems(site, t, `New tree ${i + 1}`, T, M, comment('new tree'))) });
+  }
+  if (o.trees) {
+    const lid = api.trees(site).lidar;
+    // Many trees: one crown shape and one trunk shape for the lot (fast in Revit).
+    const crowns = { v: [], f: [] }, trunks = { v: [], f: [] };
+    for (const t of lid) {
+      const m = treeMesh(site, t);
+      for (const [dst, src] of [[crowns, m.crown], [trunks, m.trunk]]) { const off = dst.v.length / 3; for (let i = 0; i < src.v.length; i += 3) dst.v.push(...T(src.v[i], src.v[i + 1], src.v[i + 2])); for (const f of src.f) dst.f.push(f.map(q => q + off)); }
+    }
+    groups.push({ role: 'lidar-trees', category: 'OST_Planting', phase: phE, items: lid.length ? [
+      { id: 'crowns', name: `Existing trees (${lid.length}) — crowns`, ...crowns, mat: M('Tree foliage', '#5a7f45'), comment: comment('existing trees from USGS lidar, estimated') },
+      { id: 'trunks', name: `Existing trees (${lid.length}) — trunks`, ...trunks, mat: M('Tree trunk', '#5e4633'), comment: comment('existing trees from USGS lidar, estimated') }] : [] });
+  }
+  return { materials, groups };
+}
+/** A simple tree: trunk (hexagonal prism) and crown (ellipsoid; a cone for cedars). x, y native; z, h output; r native. */
+function treeMesh(site, t) {
+  const nPerOut = api.nativePerOut(site), h = Math.max(2, t.h), r = Math.max(nPerOut, t.r);   // at least 1 output unit
+  const form = t.form || (t.ev >= 0.6 ? (t.h / Math.max(0.1, 2 * t.r / nPerOut) > 2.2 ? 'cedar' : 'pine') : 'broadleaf');
+  const crownH = form === 'cedar' ? h * 0.88 : form === 'pine' ? h * 0.45 : Math.min(h * 0.68, 2.4 * r / nPerOut);
+  const top = t.z + h, cb = top - crownH;
+  const crown = { v: [], f: [] }, trunk = { v: [], f: [] }, S = 8;
+  if (form === 'cedar') {
+    for (let i = 0; i < S; i++) { const a = i / S * 2 * Math.PI; crown.v.push(t.x + r * Math.cos(a), t.y + r * Math.sin(a), cb); }
+    crown.v.push(t.x, t.y, top, t.x, t.y, cb);
+    for (let i = 0; i < S; i++) { const j = (i + 1) % S; crown.f.push([i, j, S], [j, i, S + 1]); }
+  } else {
+    const R = 5, cz = cb + crownH / 2;
+    crown.v.push(t.x, t.y, top);
+    for (let k = 1; k < R; k++) { const ph = k / R * Math.PI, rr = Math.sin(ph), zz = Math.cos(ph); for (let i = 0; i < S; i++) { const a = i / S * 2 * Math.PI + (k % 2) * Math.PI / S; crown.v.push(t.x + r * rr * Math.cos(a), t.y + r * rr * Math.sin(a), cz + crownH / 2 * zz); } }
+    crown.v.push(t.x, t.y, cb);
+    const ring = k => 1 + (k - 1) * S, bot = 1 + (R - 1) * S;
+    for (let i = 0; i < S; i++) crown.f.push([0, ring(1) + i, ring(1) + (i + 1) % S]);
+    for (let k = 1; k < R - 1; k++) for (let i = 0; i < S; i++) { const a = ring(k) + i, b = ring(k) + (i + 1) % S, c = ring(k + 1) + i, e = ring(k + 1) + (i + 1) % S; crown.f.push([a, c, e], [a, e, b]); }
+    for (let i = 0; i < S; i++) crown.f.push([bot, ring(R - 1) + (i + 1) % S, ring(R - 1) + i]);
+  }
+  const tr = Math.max(0.35 * nPerOut, r * 0.07), z0 = t.z - 0.5, z1 = cb + crownH * 0.3;
+  for (const z of [z0, z1]) for (let i = 0; i < 6; i++) { const a = i / 6 * 2 * Math.PI; trunk.v.push(t.x + tr * Math.cos(a), t.y + tr * Math.sin(a), z); }
+  for (let i = 0; i < 6; i++) { const j = (i + 1) % 6; trunk.f.push([i, j, 6 + j, 6 + i]); }
+  trunk.f.push([5, 4, 3, 2, 1, 0], [6, 7, 8, 9, 10, 11]);
+  return { crown, trunk };
+}
+function treeItems(site, t, name, T, M, comment) {
+  const m = treeMesh(site, t), out = [];
+  const conv = src => { const v = []; for (let i = 0; i < src.v.length; i += 3) v.push(...T(src.v[i], src.v[i + 1], src.v[i + 2])); return { v, f: src.f }; };
+  const key = `${Math.round(t.x)},${Math.round(t.y)}`;
+  out.push({ id: `${key}-crown`, name: `${name} — crown`, ...conv(m.crown), mat: M(t.form === 'cedar' || t.form === 'pine' ? 'Tree foliage (evergreen)' : 'Tree foliage', t.form === 'cedar' || t.form === 'pine' ? '#355e3b' : '#5a7f45'), comment, meta: JSON.stringify({ h: t.h, form: t.form || 'broadleaf' }) });
+  out.push({ id: `${key}-trunk`, name: `${name} — trunk`, ...conv(m.trunk), mat: M('Tree trunk', '#5e4633'), comment });
+  return out;
+}
+
+// ---------------------------------------------------------------- the building from Revit → the site
+const b64f32 = b64 => { const bin = atob(b64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i); return new Float32Array(u8.buffer); };
+const f32b64 = a => { const u8 = new Uint8Array(a.buffer, a.byteOffset, a.byteLength); let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+async function getBuilding(site) {
+  if (!site) throw new Error('Survey the site first.');
+  const scope = document.querySelector('input[name="rv-bscope"]:checked')?.value || 'auto';
+  busy = true; render();
+  try {
+    api.setStatus('Reading the building in Revit…');
+    const r = await call('getBuilding', { scope }, 10 * 60 * 1000);
+    api.setStatus(`Placing ${r.triangles.toLocaleString()} triangles on the site…`);
+    // Revit internal feet → native XY / output Z: the reverse of how the site is placed at the Project Base Point.
+    const k = kOf(site), d = api.datum(site), p = model.pbp;
+    const conv = (X, Y, Z) => { const [x, y] = api.inXY(site, (X - p.x) / k, (Y - p.y) / k); return [x, y, (Z - p.z) / k + d]; };
+    const [ox, oy, oz] = r.origin, o0 = conv(ox, oy, oz);
+    const buckets = r.buckets.map(b => {
+      const a = b64f32(b.pos);
+      for (let i = 0; i < a.length; i += 3) { const q = conv(ox + a[i], oy + a[i + 1], oz + a[i + 2]); a[i] = q[0] - o0[0]; a[i + 1] = q[1] - o0[1]; a[i + 2] = q[2] - o0[2]; }
+      return { mat: b.mat, pos: f32b64(a) };
+    });
+    const nPerFt = api.nativePerOut(site) / k;           // native units per Revit foot
+    const materials = r.materials.map(m => ({ name: m.name, rgb: m.rgb, render: m.render, shine: m.shininess,
+      transparency: m.transparency || (m.renderTransparency > 0 ? Math.round(m.renderTransparency * 100) : 0),
+      tex: m.tex || null, mime: m.mime || null, sx: m.sx ? m.sx * nPerFt : 0, sy: m.sy ? m.sy * nPerFt : 0 }));
+    api.setRevitBuilding({ id: `rvb-${Date.now().toString(36)}`, name: r.name, at: new Date().toLocaleDateString(), how: r.how, gfa: r.gfa || 0, floors: r.floors || 0, use: 'office',
+      origin: o0, buckets, materials, tris: r.triangles });
+    const tex = materials.filter(m => m.tex).length;
+    api.setStatus(`Brought in ${r.elements} element${r.elements === 1 ? '' : 's'} from the ${r.how === 'selection' ? 'selection' : r.how === 'view' ? 'active 3D view' : 'model'} — ${r.triangles.toLocaleString()} triangles, ${materials.length} materials${tex ? ` (${tex} with textures)` : ''}${r.truncated ? '. Trimmed at 250,000 triangles — select fewer elements for the rest.' : '.'}`, !!r.truncated);
+  } finally { busy = false; render(); }
 }

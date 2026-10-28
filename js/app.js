@@ -1,25 +1,25 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.60.0';
-import { fetchElevation, sample } from './dem.js?v=0.60.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.60.0';
-import { Dxf } from './dxf.js?v=0.60.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.60.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.60.0';
-import { Flow } from './flow.js?v=0.60.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.61.0';
+import { fetchElevation, sample } from './dem.js?v=0.61.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.61.0';
+import { Dxf } from './dxf.js?v=0.61.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.61.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.61.0';
+import { Flow } from './flow.js?v=0.61.0';
 import { placeAt } from './parking-codes.js?v=0.51.1';
-import { createSketch } from './sketch.js?v=0.60.0';
-import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.60.0';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.60.0';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.60.0';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.60.0';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.60.0';
-import { loadLidar, applyLidar } from './lidar.js?v=0.60.0';
-import { findTrees } from './trees.js?v=0.60.0';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.60.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.60.0';
+import { createSketch } from './sketch.js?v=0.61.0';
+import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.61.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.61.0';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.61.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.61.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.61.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.61.0';
+import { findTrees } from './trees.js?v=0.61.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.61.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.61.0';
 
-const VERSION = '0.60.0';
+const VERSION = '0.61.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -1393,6 +1393,12 @@ function outXY(site, x, y) {
   if (!site.rot) return [X, Y];
   const r = site.rot * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
   return [X * c - Y * s, X * s + Y * c];
+}
+/** The reverse of outXY: output XY (after the local origin and rotation) → native State Plane XY. */
+function inXY(site, X, Y) {
+  let x = X, y = Y;
+  if (site.rot) { const r = site.rot * Math.PI / 180, c = Math.cos(r), s = Math.sin(r); x = X * c + Y * s; y = -X * s + Y * c; }
+  return [(x + site.base[0]) / site.toOut, (y + site.base[1]) / site.toOut];
 }
 /** Elevation datum subtracted from every output Z (0 = real NAVD88 elevations). */
 const datumOf = site => site.datum || 0;
@@ -4775,6 +4781,7 @@ function v3Build(resetView = false) {
   const allTrees = [...(visibility.trees ? site.context?.trees || [] : []), ...sketch.trees3d()];   // lidar trees + trees planted in Sketch
   v3.setTrees(allTrees.length ? allTrees : null, { base: dgC.tree, paint: t => dgC.painted('t', treeKey(t)) });
   v3.setNotes(sketch.notes3d());
+  v3.setRevit(sketch.revit3d());
   sunApply3d();
 }
 
@@ -5389,7 +5396,14 @@ initRevit({
   site: () => state.result,
   setStatus,
   outXY,
+  inXY,
   datum: datumOf,
+  /** What Sketch has drawn (blocks by use, paving, islands, sidewalks, planting) and the trees (planted + lidar). */
+  sketchShapes: () => sketch.exportShapes(),
+  trees: site => ({ planted: sketch.trees3d(), lidar: visibility.trees ? (site?.context?.trees || []) : [] }),
+  /** A building sent from Revit (already in native XY / output Z). */
+  setRevitBuilding: o => { sketch.setRevitBuilding(o); if (dz.mode !== 'sketch' && dz.mode !== 'diagram') setMode('sketch'); },
+  nativePerOut: site => 1 / site.toOut,
   revitValues,
   /** Aerial for Revit: at most 0.5 ft/px (finer images make Revit views slow); a coarser chosen resolution is kept. */
   aerial: async site => {
@@ -5403,6 +5417,7 @@ initRevit({
   prefix: () => (folder.prefix || 'site').replace(/[\\/:*?"<>|]+/g, '-'),
   snapshot: () => {
     const snap = projSnapshot();
+    if (snap.sketch?.rvbs) snap.sketch = { ...snap.sketch, rvbs: [] };       // the building lives in the Revit model already
     if (snap.design?.brush instanceof Float32Array) snap.design = { ...snap.design, brush: f32ToB64(snap.design.brush) };
     return snap;
   },

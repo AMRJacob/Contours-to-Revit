@@ -8,13 +8,13 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, roundEach, driveJoins } from './parking.js?v=0.60.0';
-import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.60.0';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.60.0';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.60.0';
-import * as SO from './solid.js?v=0.60.0';
-import { noteGeom, WIDTHS } from './notes.js?v=0.60.0';
-import { booleanSolids } from './bool.js?v=0.60.0';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, roundEach, driveJoins } from './parking.js?v=0.61.0';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.61.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.61.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.61.0';
+import * as SO from './solid.js?v=0.61.0';
+import { noteGeom, WIDTHS } from './notes.js?v=0.61.0';
+import { booleanSolids } from './bool.js?v=0.61.0';
 import { CODES, codeFor, spacesFor } from './parking-codes.js?v=0.51.1';
 
 const TOOLS = [
@@ -85,7 +85,7 @@ const DEFAULT_RATIOS = {   // examples only — every jurisdiction sets its own
   civic: { mode: 'ksf', r: 2.5 }, hospitality: { mode: 'unit', r: 1, unitSf: 450 }, mixed: { mode: 'ksf', r: 3 },
   industrial: { mode: 'ksf', r: 1 }, parking: { mode: 'ksf', r: 0 },
 };
-const LISTS = { mass: 'masses', lot: 'lots', island: 'islands', drive: 'drives', note: 'notes', walk: 'walks', plant: 'plants', tree: 'trees' };
+const LISTS = { mass: 'masses', lot: 'lots', island: 'islands', drive: 'drives', note: 'notes', walk: 'walks', plant: 'plants', tree: 'trees', revit: 'rvbs' };
 const svg = i => `<svg viewBox="0 0 24 24">${i}</svg>`;
 const ORANGE = '#e8913f';
 
@@ -97,7 +97,7 @@ export function createSketch(ctx) {
     radius: 10, walkW: 5, treeD: 25, set: 'sketch', style: { color: 'arrow', size: 1, stand: false, curve: true }, showLabels: false,
   };
   function blank() {
-    return { v: 3, masses: [], lots: [], islands: [], drives: [], notes: [], walks: [], plants: [], trees: [], dg: { ...DG0 }, paint: {}, scheme: JSON.parse(JSON.stringify(BUILTIN_SCHEMES[0])), ratios: JSON.parse(JSON.stringify(DEFAULT_RATIOS)) };
+    return { v: 3, masses: [], lots: [], islands: [], drives: [], notes: [], walks: [], plants: [], trees: [], rvbs: [], dg: { ...DG0 }, paint: {}, scheme: JSON.parse(JSON.stringify(BUILTIN_SCHEMES[0])), ratios: JSON.parse(JSON.stringify(DEFAULT_RATIOS)) };
   }
   const scheme = () => sk.model.scheme;
   const uid = () => Math.random().toString(36).slice(2, 9);
@@ -196,11 +196,13 @@ export function createSketch(ctx) {
   function stats() {
     const byUse = new Map();
     for (const m of sk.model.masses) byUse.set(m.use, (byUse.get(m.use) || 0) + massGfa(m));
+    for (const o of sk.model.rvbs) if (o.gfa) byUse.set(o.use || 'office', (byUse.get(o.use || 'office') || 0) + o.gfa);
     let req = 0;
     const reqBy = [];
     // Per block, so a code's step-downs for large buildings apply to each building.
     const per = new Map();
     for (const m of sk.model.masses) { const r = sk.model.ratios[m.use]; if (!r) continue; per.set(m.use, (per.get(m.use) || 0) + spacesFor(r, massGfa(m))); }
+    for (const o of sk.model.rvbs) { const r = sk.model.ratios[o.use || 'office']; if (r && o.gfa) per.set(o.use || 'office', (per.get(o.use || 'office') || 0) + spacesFor(r, o.gfa)); }
     for (const [use, n] of per) { req += n; reqBy.push([use, n]); }
     let prov = 0, acc = 0, van = 0, accReq = 0, short = 0;
     for (const l of sk.model.lots) { const L = lotLayout(l); prov += L.total; acc += L.acc; van += L.van; accReq += L.required.acc; short += L.short; }
@@ -209,7 +211,7 @@ export function createSketch(ctx) {
   }
 
   // ---------------------------------------------------------------- undo / change
-  const SAVED = ['masses', 'lots', 'islands', 'drives', 'notes', 'walks', 'plants', 'trees'];
+  const SAVED = ['masses', 'lots', 'islands', 'drives', 'notes', 'walks', 'plants', 'trees', 'rvbs'];
   const SAVEDO = ['dg', 'paint'];                    // diagram colours: undoable too
   function snapshot() { return JSON.stringify(Object.fromEntries([...SAVED, ...SAVEDO].map(k => [k, sk.model[k]]))); }
   function before() { sk.undo.push(snapshot()); if (sk.undo.length > 80) sk.undo.shift(); sk.redo.length = 0; }
@@ -347,6 +349,62 @@ export function createSketch(ctx) {
     }
     return true;
   }
+  // ---------------------------------------------------------------- a building brought in from Revit
+  // { id, name, at, how, gfa, floors, use, origin: [x, y, z] (native XY, output Z), buckets: [{ mat, pos (base64 Float32
+  //   offsets from origin, 9 per triangle) }], materials: [{ name, rgb, render, opacity, shine, tex, mime, sx, sy (native) }] }
+  const b64f32 = b64 => { const bin = atob(b64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i); return new Float32Array(u8.buffer); };
+  /** Decoded triangles (absolute), up-facing ones for plan / picking, a height raster for shadows. Cached. */
+  function rvInfo(o) {
+    const c = sk.rvCache?.get(o.id); if (c && c.o === o) return c.I;
+    const [ox, oy, oz] = o.origin, buckets = o.buckets.map(b => { const a = b64f32(b.pos); for (let i = 0; i < a.length; i += 3) { a[i] += ox; a[i + 1] += oy; a[i + 2] += oz; } return { mat: b.mat, pos: a }; });
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    const up = [];
+    for (const b of buckets) {
+      const a = b.pos;
+      for (let i = 0; i < a.length; i += 9) {
+        for (let k = 0; k < 9; k += 3) { const x = a[i + k], y = a[i + k + 1], z = a[i + k + 2]; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; if (z < z0) z0 = z; if (z > z1) z1 = z; }
+        // Up-facing (plan): normal z of the triangle in native XY / output Z (scaled to native).
+        const ux = a[i + 3] - a[i], uy = a[i + 4] - a[i + 1], uz = (a[i + 5] - a[i + 2]) * kz(), vx = a[i + 6] - a[i], vy = a[i + 7] - a[i + 1], vz = (a[i + 8] - a[i + 2]) * kz();
+        const nz = ux * vy - uy * vx, nl = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, nz);
+        if (nl > 0 && nz / nl > 0.25) up.push({ mat: b.mat, p: [a[i], a[i + 1], a[i + 3], a[i + 4], a[i + 6], a[i + 7]], z: (a[i + 2] + a[i + 5] + a[i + 8]) / 3, za: [a[i + 2], a[i + 5], a[i + 8]] });
+      }
+    }
+    up.sort((p, q) => p.z - q.z);
+    // Height raster (top surface), 2 ft cells, for sun / shadow.
+    const cs = 2 * perFt(), nx = Math.max(1, Math.ceil((x1 - x0) / cs) + 1), ny = Math.max(1, Math.ceil((y1 - y0) / cs) + 1), H = new Float32Array(nx * ny).fill(NaN);
+    if (nx * ny < 4e6) for (const t of up) {
+      const [ax, ay, bx, by, cx, cy] = t.p, den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy); if (Math.abs(den) < 1e-12) continue;
+      const i0 = Math.max(0, Math.floor((Math.min(ax, bx, cx) - x0) / cs)), i1 = Math.min(nx - 1, Math.ceil((Math.max(ax, bx, cx) - x0) / cs));
+      const j0 = Math.max(0, Math.floor((Math.min(ay, by, cy) - y0) / cs)), j1 = Math.min(ny - 1, Math.ceil((Math.max(ay, by, cy) - y0) / cs));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const px = x0 + i * cs, py = y0 + j * cs, w1 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / den, w2 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / den, w3 = 1 - w1 - w2;
+        if (w1 < -0.02 || w2 < -0.02 || w3 < -0.02) continue;
+        const z = w1 * t.za[0] + w2 * t.za[1] + w3 * t.za[2], q = j * nx + i; if (!(H[q] >= z)) H[q] = z;
+      }
+    }
+    const roofAt = (x, y) => { const i = Math.round((x - x0) / cs), j = Math.round((y - y0) / cs); return i < 0 || j < 0 || i >= nx || j >= ny ? NaN : H[j * nx + i]; };
+    const I = { buckets, up, bb: [x0, y0, x1, y1], zmin: z0, zmax: z1, roofAt };
+    (sk.rvCache ||= new Map()).set(o.id, { o, I });
+    return I;
+  }
+  const rvMatColor = (o, mi) => { const m = o.materials[mi] || {}, c = m.render || m.rgb || [200, 200, 200]; return `rgb(${c[0]},${c[1]},${c[2]})`; };
+  function drawRevit(g) {
+    for (const o of sk.model.rvbs) {
+      const I = rvInfo(o), sel = sk.sel?.id === o.id, dg = diagramOn(), dcol = dg ? paintOr(`r:${o.id}`) : null;
+      for (const t of I.up) {
+        const a = scr([t.p[0], t.p[1]]), b = scr([t.p[2], t.p[3]]), c = scr([t.p[4], t.p[5]]); if (!a || !b || !c) continue;
+        g.beginPath(); g.moveTo(...a); g.lineTo(...b); g.lineTo(...c); g.closePath();
+        g.fillStyle = dcol || rvMatColor(o, t.mat); g.fill(); g.strokeStyle = g.fillStyle; g.lineWidth = 0.6; g.stroke();
+      }
+      const [x0, y0, x1, y1] = I.bb;
+      if (sel) { sPath(g, [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]); g.setLineDash([6, 4]); g.strokeStyle = ORANGE; g.lineWidth = 2; g.stroke(); g.setLineDash([]); }
+    }
+  }
+  const rvHit = xy => sk.model.rvbs.find(o => { const I = rvInfo(o), [x0, y0, x1, y1] = I.bb; if (xy[0] < x0 || xy[0] > x1 || xy[1] < y0 || xy[1] > y1) return false; return I.up.some(t => inPoly([[t.p[0], t.p[1]], [t.p[2], t.p[3]], [t.p[4], t.p[5]]], ...xy)); });
+  /** Triangles by material for the 3D view (absolute native XY, output Z). */
+  function revit3d() {
+    return sk.model.rvbs.map(o => { const I = rvInfo(o); return { id: o.id, buckets: I.buckets, materials: o.materials, zmin: I.zmin, paint: diagramOn() ? paintOr(`r:${o.id}`) : null }; });
+  }
   function drawPlan(g) {
     const M = ctx.affine(sk.site), px = M.scale;                 // screen px per native unit
     const path = (P, close = true) => sPath(g, P, null, close);
@@ -402,6 +460,7 @@ export function createSketch(ctx) {
       const L = lotLayout(l);
       label(g, scr(centroid(l.pts)), `${L.total} spaces`, L.acc ? `${L.acc} accessible${L.van ? ` (${L.van} van)` : ''}${L.short ? ` · ${L.short} short` : ''}` : '');
     }
+    drawRevit(g);
     // Solids from above: their upward faces, lowest first, shaded a little by slope; roof and step lines show.
     const ms = sk.model.masses.slice().sort((a, b) => massTop(a) - massTop(b));
     for (const m of ms) {
@@ -477,7 +536,7 @@ export function createSketch(ctx) {
   // ---------------------------------------------------------------- selection handles
   /** Handles of the selection: corners (v), edge midpoints (m), rotate (r), scale (s). Free solids: rotate and scale. */
   function handles(kind, o) {
-    if (kind === 'tree') return [];
+    if (kind === 'tree' || kind === 'revit') return [];
     const zf = handleZ(kind, o), out = [];
     const editable = kind !== 'mass' || o.prm;
     const P = outline(o), n = P.length, cl = closed(kind);
@@ -499,7 +558,9 @@ export function createSketch(ctx) {
       for (const [a, b] of info(o2).edges) { const p = P3(o2, o2.v[a]), q = P3(o2, o2.v[b]); if (!p || !q) continue; g.beginPath(); g.moveTo(...p); g.lineTo(...q); g.stroke(); }
       g.restore();
     }
-    const kind = sk.sel.kind, zf = handleZ(kind, o);
+    const kind = sk.sel.kind;
+    if (kind === 'revit') return;                       // its dashed box is drawn with it
+    const zf = handleZ(kind, o);
     if (sk.v3) {
       if (kind === 'mass') { g.lineWidth = 2; g.strokeStyle = ORANGE; for (const [a, b] of info(o).edges) { const p = P3(o, o.v[a]), q = P3(o, o.v[b]); if (!p || !q) continue; g.beginPath(); g.moveTo(...p); g.lineTo(...q); g.stroke(); } }
       else if (sPath(g, o.pts, zf, closed(kind))) { g.lineWidth = 2.5; g.strokeStyle = ORANGE; g.stroke(); }
@@ -733,6 +794,10 @@ export function createSketch(ctx) {
           <label class="skc-chk" title="Flared apron and depressed curb where an end leaves all paving (at the street)"><input type="checkbox" data-k="cut"${o.cut !== false ? ' checked' : ''}> Curb cut at street end</label></div>
         <div class="skc-row skc-read" data-o="read"></div>`;
     }
+    if (kind === 'revit') return `<div class="skc-row"><b>${escapeHtml(o.name || 'Revit building')}</b><span class="skc-read">from Revit ${escapeHtml(o.at || '')}</span><button type="button" data-k="del" title="Remove it from the site (Del)">🗑</button></div>
+        <div class="skc-row"><span>Use</span><select data-k="use">${scheme().uses.map(u => `<option value="${u.key}"${u.key === o.use ? ' selected' : ''}>${escapeHtml(u.label)}</option>`).join('')}</select>
+          <span>floor area</span>${num('gfa', o.gfa || 0, 0, 1e7, 100, 80)}<span>sf</span></div>
+        <div class="skc-row skc-note">${o.gfa ? `${o.floors || '?'} floor levels with ${Math.round(o.gfa).toLocaleString()} sf of floors in Revit.` : 'No floors in what was sent — type the floor area for parking.'} Send it again from Revit to update; it's placed by Revit, so it doesn't move here.</div>`;
     if (kind === 'walk') return `<div class="skc-row"><span>Sidewalk</span>${num('w', o.w || 5, 2, 40, 0.5, 42)}<span>${uLen()} wide</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div><div class="skc-row skc-read" data-o="read"></div>`;
     if (kind === 'plant') return `<div class="skc-row"><span>Planting</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div><div class="skc-row skc-read" data-o="read"></div>`;
     if (kind === 'tree') return `<div class="skc-row"><select data-k="form">${[['broadleaf', 'Broadleaf'], ['pine', 'Pine'], ['cedar', 'Cedar']].map(([k, l]) => `<option value="${k}"${(o.form || 'broadleaf') === k ? ' selected' : ''}>${l}</option>`).join('')}</select><span>crown ⌀</span>${num('d', o.d, 3, 120, 1, 42)}<span>height</span>${num('h', o.h, 5, 150, 1, 42)}<span>${uLen()}</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div>`;
@@ -744,11 +809,11 @@ export function createSketch(ctx) {
     if (!o || !sk.active || !sk.site || sk.drag || sk.draw || sk.op || (sk.set === 'sketch' && sk.tool !== 'select') || (sk.set === 'diagram' && sk.tool !== 'select' && !(sk.tool === 'label' && o.type === 'label')) || (sk.v3 && !sk.v3.visible)) { cardEl.hidden = true; return; }
     const kind = sk.sel.kind;
     let x1 = -Infinity, y0 = Infinity;
-    const pts = kind === 'mass' ? o.v.map(p => P3(o, p)) : kind === 'note' ? (noteScreen(o) || []) : o.pts.map(p => scr(p, handleZ(kind, o)(p)));
+    const pts = kind === 'mass' ? o.v.map(p => P3(o, p)) : kind === 'note' ? (noteScreen(o) || []) : kind === 'revit' ? [scr(rvInfo(o).bb.slice(0, 2))] : o.pts.map(p => scr(p, handleZ(kind, o)(p)));
     for (const q of pts) { if (!q) continue; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; }
     if (!Number.isFinite(x1)) { cardEl.hidden = true; return; }
     const W = cardEl.parentElement.clientWidth, H = cardEl.parentElement.clientHeight;
-    const sig = `${kind}:${o.id}:${sk.sel2?.id || ''}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use, o.color, o.stand, o.curve, o.size, o.r, o.cut, o.islandR, !!o.accAt, o.d, o.h, o.form])}`;
+    const sig = `${kind}:${o.id}:${sk.sel2?.id || ''}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use, o.color, o.stand, o.curve, o.size, o.r, o.cut, o.islandR, !!o.accAt, o.d, o.h, o.form, o.gfa])}`;
     if (cardEl.dataset.sig !== sig && !cardEl.contains(document.activeElement)) { cardEl.dataset.sig = sig; cardEl.innerHTML = cardHtml(kind, o); }
     const read = cardEl.querySelector('[data-o="read"]') || {};
     if (kind === 'note') { /* nothing to read out */ } else if (kind === 'mass') {
@@ -758,7 +823,7 @@ export function createSketch(ctx) {
     } else if (kind === 'lot') {
       const Lr = lotLayout(o);
       read.textContent = `${Lr.total} spaces (${Lr.acc} accessible${Lr.van ? `, ${Lr.van} van` : ''}) · ${Math.round(area(o.pts) * sfPerNative2() / Math.max(1, Lr.total))} sf per space`;
-    } else if (kind === 'tree') { /* nothing to read out */
+    } else if (kind === 'tree' || kind === 'revit') { /* nothing to read out */
     } else if (kind === 'drive' || kind === 'walk') {
       let Ln = 0; for (let i = 1; i < o.pts.length; i++) Ln += Math.hypot(o.pts[i][0] - o.pts[i - 1][0], o.pts[i][1] - o.pts[i - 1][1]);
       read.textContent = kind === 'walk' ? `${fmtLen(Ln)} long · ${fmtArea(Ln * (o.w || 5) * perFt() * sfPerNative2())}` : `${fmtLen(Ln)} long · stalls it crosses are cleared`;
@@ -825,6 +890,7 @@ export function createSketch(ctx) {
     if (k === 'd' && sk.sel.kind === 'tree') o.d = Math.max(3, Math.min(120, v || o.d));
     if (k === 'h' && sk.sel.kind === 'tree') o.h = Math.max(5, Math.min(150, v || o.h));
     if (k === 'form' && sk.sel.kind === 'tree') { o.form = t.value; sk.treeForm = t.value; }
+    if (k === 'gfa' && sk.sel.kind === 'revit') o.gfa = Math.max(0, v || 0);
     if (k === 'r') o.r = Math.max(0, Number.isFinite(v) ? v : 0);
     if (k === 'cut') o.cut = t.checked;
     if (k === 'islandR') o.islandR = Math.max(0, Number.isFinite(v) ? v : 0);
@@ -923,7 +989,7 @@ export function createSketch(ctx) {
     }
     return best;
   }
-  const editable = (kind, o) => kind !== 'tree' && (kind !== 'mass' || !!o.prm);
+  const editable = (kind, o) => kind !== 'tree' && kind !== 'revit' && (kind !== 'mass' || !!o.prm);
   /** The edge the Add point tool would split: any outline object or block edge. → { kind, id, i | a,b, t } */
   function pointTarget(ev) {
     let best = null;
@@ -1057,6 +1123,7 @@ export function createSketch(ctx) {
       for (const m of ms) if (info(m).top(...xy)) return { kind: 'mass', id: m.id, z: 0 };
     }
     const tol = sk.v3 ? 0 : 4 / ctx.affine(sk.site).scale;
+    const rb = rvHit(xy); if (rb) return { kind: 'revit', id: rb.id, z: zg };
     for (const t of sk.model.trees) if (Math.hypot(xy[0] - t.pts[0][0], xy[1] - t.pts[0][1]) < Math.max(t.d / 2 * perFt(), tol * 2)) return { kind: 'tree', id: t.id, z: zg };
     for (const w of sk.model.walks) for (let i = 0; i < w.pts.length - 1; i++) if (distSeg(xy, w.pts[i], w.pts[i + 1]) < (w.w || 5) * perFt() / 2 + tol) return { kind: 'walk', id: w.id, z: zg };
     for (const d of sk.model.drives) for (let i = 0; i < d.pts.length - 1; i++) if (distSeg(xy, d.pts[i], d.pts[i + 1]) < (d.w || 24) * perFt() / 2 + tol) return { kind: 'drive', id: d.id, z: zg };
@@ -1429,7 +1496,7 @@ export function createSketch(ctx) {
   function defaultFor(key) {
     const [k, id] = [key.slice(0, 1), key.slice(2)];
     if (k === 'm') { const m = massById(id); return dgs().mass && dgs().mass !== 'use' ? resolveC(dgs().mass) : colorOf(scheme(), m?.use); }
-    if (k === 'b') return dgs().bldg;
+    if (k === 'b' || k === 'r') return dgs().bldg;
     if (k === 't') return dgs().tree;
     return colorOf(scheme(), k === 'i' || k === 'g' ? 'green' : k === 'w' ? 'plaza' : 'lot');
   }
@@ -1565,9 +1632,11 @@ export function createSketch(ctx) {
       if (h?.kind === 'mass') return { key: `m:${h.id}` };
       if (h?.kind === 'bldg') return { key: `b:${h.key}` };
       if (h?.kind === 'tree') return { key: `t:${ctx.treeKey(h.tree)}` };
+      if (h?.kind === 'revit') return { key: `r:${h.id}` };
     }
     const xy = ev.xy; if (!xy) return null;
     if (!sk.v3) { const ms = sk.model.masses.slice().sort((a, b) => massTop(b) - massTop(a)); for (const m of ms) if (info(m).top(...xy)) return { key: `m:${m.id}` }; }
+    if (!sk.v3) { const rb = rvHit(xy); if (rb) return { key: `r:${rb.id}` }; }
     const tree = !sk.v3 && ctx.pickContext?.(xy, 'tree'); if (tree) return { key: `t:${tree}` };
     for (const t of sk.model.trees) if (Math.hypot(xy[0] - t.pts[0][0], xy[1] - t.pts[0][1]) < t.d / 2 * perFt()) return { key: `t:${treeKeyOf(t)}` };
     for (const i of sk.model.islands) if (inPoly(shapeOf(i, 'island'), ...xy)) return { key: `i:${i.id}` };
@@ -1744,6 +1813,7 @@ export function createSketch(ctx) {
       if (P.length > (closed(h.kind) ? 3 : 2)) { before(); P.splice(h.h.i, 1); if (src.rad) src.rad = Object.fromEntries(Object.entries(src.rad).filter(([k]) => +k !== h.h.i).map(([k, r]) => [+k > h.h.i ? +k - 1 : +k, r])); if (src.prm) regen(src); changed(); }
       return true;
     }
+    if (h.kind === 'revit') { sk.sel = { kind: 'revit', id: h.id }; draw(); panel(); card(); return true; }   // placed by Revit: select only
     let target = h, obj = src;
     const pushed = ev.alt && !h.h;
     if (pushed) {                                          // Alt+drag: duplicate and move the copy
@@ -2082,6 +2152,7 @@ export function createSketch(ctx) {
       ...sk.model.islands.map(i => ({ kind: 'island', o: i, t: `Island · ${fmtArea(area(i.pts) * sfPerNative2())}`, c: colorOf(scheme(), 'green') })),
       ...sk.model.walks.map(w => ({ kind: 'walk', o: w, t: `Sidewalk · ${w.w || 5} ${uLen()} wide`, c: colorOf(scheme(), 'plaza') })),
       ...sk.model.plants.map(pl => ({ kind: 'plant', o: pl, t: `Planting · ${fmtArea(area(pl.pts) * sfPerNative2())}`, c: colorOf(scheme(), 'green') })),
+      ...sk.model.rvbs.map(o => ({ kind: 'revit', o, t: `Revit · ${o.name || 'building'}${o.gfa ? ` · ${fmtArea(o.gfa)}` : ''}`, c: '#94a3b8' })),
       ...(sk.model.trees.length ? [{ kind: 'tree', o: sk.model.trees[0], t: `Trees · ${sk.model.trees.length} new`, c: '#3f8a4a' }] : []),
     ];
     el.innerHTML = rows.length ? rows.map(r => `<button type="button" class="sk-item${sk.sel?.id === r.o.id ? ' on' : ''}" data-kind="${r.kind}" data-id="${r.o.id}"><i style="background:${r.c}"></i>${escapeHtml(r.t)}</button>`).join('') : '';
@@ -2183,7 +2254,10 @@ export function createSketch(ctx) {
       const I = info(m), base = I.base, [x0, y0, x1, y1] = I.bb;
       return { ring: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], massRing: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], base, top: base + I.zmax / kz(),
         roofAt: (x, y) => { const t = I.top(x, y); return t ? base + t.z / kz() : NaN; }, sketch: true };
-    });
+    }).concat(sk.model.rvbs.map(o => {
+      const I = rvInfo(o), [x0, y0, x1, y1] = I.bb, ring = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+      return { ring, massRing: ring, base: I.zmin, top: I.zmax, roofAt: I.roofAt, sketch: true, revit: true };
+    }));
   }
   /** Solid triangles (flat [x, y, z × 3 …], native XY, output Z), a colour, block id and face per triangle, floor
    *  lines and outline edges. ex: vertical exaggeration of the 3D view (heights above each block's base are divided
@@ -2214,7 +2288,7 @@ export function createSketch(ctx) {
       if (P.length >= 3) for (const [i, j, k] of ctx.triangulate(P)) sub(P[i], P[j], P[k], 0);
     };
     /** Painted items (diagram) get their own mesh and colour. */
-    const own = (key, def) => { if (!diagramOn() || !sk.model.paint?.[key]) return def; const arr = []; extra.push({ tris: arr, color: resolveC(sk.model.paint[key]) }); return arr; };
+    const own = (key, def) => { if (!diagramOn() || !sk.model.paint?.[key]) return def; const arr = []; extra.push({ tris: arr, color: resolveC(sk.model.paint[key]), role: { l: 'paving', d: 'paving', i: 'island', w: 'walk', g: 'planting' }[key[0]] }); return arr; };
     const z = (x, y) => zGround([x, y]) + 0.15;
     const curb = 0.5 * outPerFt();
     const planter = (P, out = islands) => {
@@ -2254,24 +2328,42 @@ export function createSketch(ctx) {
     for (const W of J.wedges) for (let i = 1; i < W.length - 1; i++) for (const q of [W[0], W[i], W[i + 1]]) drives.push(q[0], q[1], z(...q) + 0.05);
     // Sidewalks (draped strips) and planting beds (tessellated so they follow the ground).
     for (const w of sk.model.walks) {
-      const arr = []; extra.push({ tris: arr, color: siteColor(`w:${w.id}`, 'plaza') });
+      const arr = []; extra.push({ tris: arr, color: siteColor(`w:${w.id}`, 'plaza'), role: 'walk' });
       for (let i = 0; i < w.pts.length - 1; i++) drape(w.pts[i], w.pts[i + 1], (w.w || 5) * perFt(), arr, false);
     }
     for (const pl of sk.model.plants) {
-      const arr = []; extra.push({ tris: arr, color: siteColor(`g:${pl.id}`, 'green') });
+      const arr = []; extra.push({ tris: arr, color: siteColor(`g:${pl.id}`, 'green'), role: 'planting' });
       tess(shapeOf(pl), arr, 0.08);
     }
     for (const [a, b] of J.cuts) lines.push(a[0], a[1], z(...a) + 0.1, b[0], b[1], z(...b) + 0.1);
-    if (lotPave.length) extra.unshift({ tris: lotPave, color: colorOf(scheme(), 'lot') });
+    if (lotPave.length) extra.unshift({ tris: lotPave, color: colorOf(scheme(), 'lot'), role: 'paving' });
     return { lines, acc, islands, drives, marks, extra, stripe: colorOf(scheme(), 'stripe'), accColor: colorOf(scheme(), 'accessible'), lotColor: colorOf(scheme(), 'lot'), greenColor: colorOf(scheme(), 'green') };
   }
 
+  /**
+   * What's drawn here, for Revit: blocks (true heights, by use) and the site surfaces as triangle soups —
+   * { blocks: [{ id, name, use, color, v: flat [x, y, z] (native XY, output Z), f: [[a, b, c]…] }],
+   *   surfaces: { paving, island, walk, planting: flat [x, y, z…] triangles }, colors: { … } }.
+   */
+  function exportShapes() {
+    const blocks = sk.model.masses.filter(m => !info(m).sheet).map(m => {
+      const I = info(m), v = [];
+      for (const p of m.v) v.push(p[0], p[1], I.base + p[2] / kz());
+      return { id: m.id, name: `${useLabel(m)} block · ${I.floors} fl`, use: m.use, color: colorOf(scheme(), m.use), v, f: I.tris.map(t => [t.a, t.b, t.c]), gfa: Math.round(massGfa(m)) };
+    });
+    const P = parking3d();
+    const surfaces = { paving: [...P.drives], island: [...P.islands], walk: [], planting: [] };
+    for (const x of P.extra) (surfaces[x.role] || surfaces.paving).push(...x.tris);
+    return { blocks, surfaces, colors: { paving: colorOf(scheme(), 'lot'), island: colorOf(scheme(), 'green'), walk: colorOf(scheme(), 'plaza'), planting: colorOf(scheme(), 'green') } };
+  }
   /** New trees for the 3D view (same form as lidar trees): { x, y, z (ground), h (output units), r (native), sketch }. */
   function trees3d() {
     return sk.model.trees.map(t => ({ x: t.pts[0][0], y: t.pts[0][1], z: zGround(t.pts[0]), h: t.h * outPerFt(), r: t.d / 2 * perFt(), form: t.form || 'broadleaf', sketch: true }));
   }
   return {
-    trees3d,
+    trees3d, exportShapes, revit3d,
+    /** A building from Revit replaces the one sent before (one per site for now). */
+    setRevitBuilding(o) { before(); const prev = sk.model.rvbs[0]; if (prev) o.use = prev.use || o.use; sk.model.rvbs = [o]; sk.rvCache?.clear(); sk.sel = { kind: 'revit', id: o.id }; changed(); },
     get version() { return sk.ver; },
     get model() { return sk.model; },
     onSite,
