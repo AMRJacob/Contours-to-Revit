@@ -911,3 +911,16 @@ body.theme-legend .dz-empty strong { color: var(--brass-hi); }
 body.theme-legend .lp-ghead { font-family: var(--display); letter-spacing: .06em; font-size: 12px; }
 body.theme-legend .lp-gic { color: var(--brass-hi); }
 body.theme-legend .lp-group { border-color: rgba(205, 172, 110, .14); }
+
+/* Survey detail (topography options) inside the Site step */
+.site-topo { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.sub-h { font-size: 11.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 6px; }
+.site-topo .field { margin-bottom: 4px; }
+.pts-warn { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: var(--warn-bg); color: var(--warn); font-size: 12px; line-height: 1.35; }
+.pts-warn span { flex: 1; }
+.pts-warn .btn { flex: none; border-color: currentColor; color: inherit; background: transparent; }
+.stats dd.over { color: var(--warn); }
+body.theme-legend .sub-h { font-family: var(--display); letter-spacing: .12em; color: var(--brass); }
+body.theme-legend .site-topo { border-top: 1px solid transparent; border-image: linear-gradient(90deg, transparent, var(--line), transparent) 1; }
+body.theme-legend .pts-warn { border: 1px solid rgba(246, 179, 138, .35); border-radius: 2px; }
+body.theme-legend .stats dd.over { color: #f6b38a; }

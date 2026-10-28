@@ -1,24 +1,24 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.50.1';
-import { fetchElevation, sample } from './dem.js?v=0.50.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.50.1';
-import { Dxf } from './dxf.js?v=0.50.1';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.50.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.50.1';
-import { Flow } from './flow.js?v=0.50.1';
-import { createSketch } from './sketch.js?v=0.50.1';
-import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.50.1';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.50.1';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.50.1';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.50.1';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.50.1';
-import { loadLidar, applyLidar } from './lidar.js?v=0.50.1';
-import { findTrees } from './trees.js?v=0.50.1';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.50.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.50.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.51.0';
+import { fetchElevation, sample } from './dem.js?v=0.51.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.51.0';
+import { Dxf } from './dxf.js?v=0.51.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.51.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.51.0';
+import { Flow } from './flow.js?v=0.51.0';
+import { createSketch } from './sketch.js?v=0.51.0';
+import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.51.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.51.0';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.51.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.51.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.51.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.51.0';
+import { findTrees } from './trees.js?v=0.51.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.51.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.51.0';
 
-const VERSION = '0.50.1';
+const VERSION = '0.51.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -324,7 +324,7 @@ $('zone').addEventListener('change', () => { updateZoneHint(); onSiteChanged(fal
 
 function updateTopoSummary() {
   const t = OPTIONS[units()].tick;
-  $('sum-topo').textContent = `pts ${$('spacing').value}${t} · contours ${$('interval').value}${t}`;
+  if ($('sum-topo')) $('sum-topo').textContent = `pts ${$('spacing').value}${t} · contours ${$('interval').value}${t}`;
 }
 
 function invalidate() {
@@ -362,6 +362,7 @@ async function onSiteChanged(redetect) {
   updateTopoSummary();
   $('generate').disabled = !has;
   $('site-warning').hidden = true;
+  $('pts-warn').hidden = true; $('st-points').classList.remove('over');
   if (!has) { updateZoneHint(); return; }
   const c = state.rect.getBounds().getCenter();
   if (redetect) {
@@ -397,14 +398,20 @@ async function onSiteChanged(redetect) {
   const warns = [];
   if (acres > ACRES_HARD) warns.push(`This area is very large (${fmt(acres, 0)} acres). Draw a smaller site — the limit is ${fmt(ACRES_HARD, 0)} acres.`);
   else if (acres > ACRES_WARN) warns.push(`Large area (${fmt(acres, 0)} acres). Generation may be slow; a smaller boundary is recommended.`);
-  if (nPts > MAX_POINTS_HARD) warns.push(`${fmt(nPts, 0)} points is too many. Choose a coarser point spacing.`);
-  else if (nPts > MAX_POINTS_WARN) {
-    const better = OPTIONS[u].spacing.find(sp => (Math.floor(wOut / sp) + 1) * (Math.floor(hOut / sp) + 1) <= MAX_POINTS_WARN);
-    warns.push(`${fmt(nPts, 0)} points is more than Revit handles comfortably (~50,000).` + (better ? ` Try ${better}${OPTIONS[u].tick} spacing.` : ' Try a coarser spacing or smaller site.'));
+  if (nPts > MAX_POINTS_WARN) {
+    // A short note right under the spacing, with a one-click fix: the finest spacing that stays under the limit.
+    const better = OPTIONS[u].spacing.find(sp => sp > spacing && (Math.floor(wOut / sp) + 1) * (Math.floor(hOut / sp) + 1) * frac <= MAX_POINTS_WARN);
+    $('pts-warn-text').textContent = nPts > MAX_POINTS_HARD ? `⚠ ${fmt(nPts, 0)} points — far too many to survey.${better ? '' : ' Draw a smaller site.'}`
+      : `⚠ ${fmt(nPts, 0)} points — too detailed for Revit (keep under ~${fmt(MAX_POINTS_WARN, 0)}).`;
+    $('pts-warn-fix').hidden = !better;
+    if (better) { $('pts-warn-fix').textContent = `Use ${better}${OPTIONS[u].tick}`; $('pts-warn-fix').dataset.sp = String(better); }
+    $('pts-warn').hidden = false; $('st-points').classList.add('over');
   }
   if (warns.length) showWarning(warns.join(' '));
   $('generate').disabled = acres > ACRES_HARD || nPts > MAX_POINTS_HARD;
 }
+
+$('pts-warn-fix').addEventListener('click', e => { const sp = e.currentTarget.dataset.sp; if (!sp) return; $('spacing').value = sp; $('spacing').dispatchEvent(new Event('change')); });
 
 function showWarning(msg) {
   const el = $('site-warning');

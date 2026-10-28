@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.50.1">
+  <link rel="stylesheet" href="css/app.css?v=0.51.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -76,6 +76,28 @@
               Polygon
             </button>
           </div>
+          <div class="site-topo">
+            <div class="sub-h" data-tip="topo">Survey detail</div>
+          <div class="field-row">
+              <div class="field field-units">
+                <label>Units</label>
+                <div class="seg" role="radiogroup" id="units">
+                  <label><input type="radio" name="units" value="ft" checked><span>Feet</span></label>
+                  <label><input type="radio" name="units" value="m"><span>Meters</span></label>
+                </div>
+              </div>
+              <div class="field">
+                <label for="spacing" data-tip="spacing">Points every</label>
+                <select id="spacing"></select>
+              </div>
+              <div class="field">
+                <label for="interval" data-tip="interval">Contours every</label>
+                <select id="interval"></select>
+              </div>
+            </div>
+            <div class="pts-warn" id="pts-warn" hidden><span id="pts-warn-text"></span><button type="button" class="btn btn-xs" id="pts-warn-fix"></button></div>
+            <button type="button" class="more-link" data-settings="topo" data-tip="more-topo">More options ›</button>
+          </div>
           <dl class="stats" id="site-stats" hidden>
             <div><dt>Size</dt><dd id="st-size">—</dd></div>
             <div><dt>Area</dt><dd id="st-area">—</dd></div>
@@ -85,32 +107,8 @@
         </div>
       </details>
 
-      <details class="step existing-only" id="step-options" data-art="topo" open data-tone="topo">
-        <summary data-tip="topo"><span class="num">2</span><span class="st-title">Topography</span><span class="st-sum" id="sum-topo"></span></summary>
-        <div class="step-body">
-          <div class="field-row">
-            <div class="field field-units">
-              <label>Units</label>
-              <div class="seg" role="radiogroup" id="units">
-                <label><input type="radio" name="units" value="ft" checked><span>Feet</span></label>
-                <label><input type="radio" name="units" value="m"><span>Meters</span></label>
-              </div>
-            </div>
-            <div class="field">
-              <label for="spacing" data-tip="spacing">Points every</label>
-              <select id="spacing"></select>
-            </div>
-            <div class="field">
-              <label for="interval" data-tip="interval">Contours every</label>
-              <select id="interval"></select>
-            </div>
-          </div>
-          <button type="button" class="more-link" data-settings="topo" data-tip="more-topo">More options ›</button>
-        </div>
-      </details>
-
       <details class="step existing-only" id="step-place" data-art="revit" data-tone="revit">
-        <summary data-tip="place"><span class="num">3</span><span class="st-title">Place in Revit</span><span class="st-sum" id="sum-place"></span></summary>
+        <summary data-tip="place"><span class="num">2</span><span class="st-title">Place in Revit</span><span class="st-sum" id="sum-place"></span></summary>
         <div class="step-body">
           <label class="check check-first">
             <input type="checkbox" id="local-origin">
@@ -165,7 +163,7 @@
       </details>
 
       <details class="step existing-only" id="step-results" data-art="export" open hidden data-tone="export">
-        <summary data-tip="export"><span class="num">4</span><span class="st-title">Export</span><span class="st-sum" id="sum-export"></span></summary>
+        <summary data-tip="export"><span class="num">3</span><span class="st-title">Export</span><span class="st-sum" id="sum-export"></span></summary>
         <div class="step-body">
           <dl class="stats" id="result-stats">
             <div><dt>Min elev.</dt><dd id="rs-min">—</dd></div>
@@ -672,6 +670,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.50.1"></script>
+  <script type="module" src="js/app.js?v=0.51.0"></script>
 </body>
 </html>
