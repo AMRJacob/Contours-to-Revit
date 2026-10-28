@@ -183,6 +183,9 @@ export class WindField {
     const x = cx + -uy * across + ux * back, y = cy + ux * across + uy * back;
     this.px[p] = this.ox[p] = x; this.py[p] = this.oy[p] = y;
     this.age[p] = 0; this.life[p] = 400; this.fi[p] = i;
+    // Started inside a building (flow mode): try another spot.
+    if (this.flowAt && !this.flowAt(i, x, y) && (this._tries = (this._tries || 0) + 1) < 8) { this.spawn(p, anywhere); return; }
+    this._tries = 0;
   }
   step() {
     const b = this.box, pad = Math.max(b.xmax - b.xmin, b.ymax - b.ymin) * 0.8;
