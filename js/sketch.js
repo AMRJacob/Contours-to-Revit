@@ -8,13 +8,13 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins } from './parking.js?v=0.54.0';
-import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.54.0';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.54.0';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.54.0';
-import * as SO from './solid.js?v=0.54.0';
-import { noteGeom, WIDTHS } from './notes.js?v=0.54.0';
-import { booleanSolids } from './bool.js?v=0.54.0';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins, filletAt } from './parking.js?v=0.55.0';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.55.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.55.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.55.0';
+import * as SO from './solid.js?v=0.55.0';
+import { noteGeom, WIDTHS } from './notes.js?v=0.55.0';
+import { booleanSolids } from './bool.js?v=0.55.0';
 import { CODES, codeFor, spacesFor } from './parking-codes.js?v=0.51.1';
 
 const TOOLS = [
@@ -24,6 +24,7 @@ const TOOLS = [
   { id: 'pen', key: 'L', label: 'Draw', icon: '<path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3" opacity=".6"/>' },
   { id: 'push', key: 'U', label: 'Push/Pull', icon: '<path d="M5 14h14v6H5z"/><path d="M12 12V3M8.5 6.5L12 3l3.5 3.5"/>' },
   { id: 'slope', key: 'S', label: 'Slope', icon: '<path d="M3 19L21 9v10z"/><path d="M6 15l9-5M12 9.5l3 .5-1 3" opacity=".8"/>' },
+  { id: 'radius', key: 'F', label: 'Radius', icon: '<path d="M4 20V12a8 8 0 0 1 8-8h8"/><path d="M4 20h4M20 4v4" opacity=".5"/>' },
   { id: 'lot', key: 'P', group: 'Parking', label: 'Lot', icon: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v6M11 4v6M15 4v6M7 20v-6M11 20v-6M15 20v-6" opacity=".7"/>' },
   { id: 'island', key: 'I', label: 'Island', icon: '<rect x="3" y="8" width="18" height="8" rx="4"/><path d="M9 12h6" opacity=".7"/>' },
   { id: 'drive', key: 'D', label: 'Drive aisle', icon: '<path d="M5 21L10 3M19 21L14 3"/><path d="M12 5v3M12 11v3M12 17v3" opacity=".7"/>' },
@@ -64,6 +65,7 @@ const SHAPES = [
 const HINTS = {
   select: 'Click to select · drag to move · drag a corner or an edge of the selection to reshape it (Shift = free direction) · ⟳ rotate, ⤡ scale · Ctrl+drag any point, edge or face (add Shift for up / down) · Alt+drag duplicates · Alt+click a corner removes it.',
   point: 'Click an edge to add a corner there — then drag it with Select.',
+  radius: 'Click a corner to round it at the radius in the box — blocks, lots, islands, and where drive aisles meet the lot or the street (0 makes those sharp).',
   mass: 'Drag a quick block (1–5: box, round, L, U, courtyard), or click corners and double-click. ↑ ↓ floors · R roof.',
   pen: 'On the ground: drag a rectangle or click an outline — it becomes a flat shape to pull up. On a face: drag or click from edge to edge to split it (lines stop at the edges; the new faces pull separately), or drag a rectangle inside it.',
   push: 'Drag a face in or out. Tops snap to whole floors (Shift = free). Ctrl = always make new sides. Type an exact distance in the box.',
@@ -86,7 +88,7 @@ export function createSketch(ctx) {
   const sk = {
     model: blank(), tool: 'select', shape: 'box', sel: null, drag: null, draw: null, op: null, hov: null, undo: [], redo: [], ver: 0,
     site: null, key: null, layouts: new Map(), infos: new Map(), ngeo: new Map(), active: false, v3: null, pitch: 6,
-    set: 'sketch', style: { color: 'arrow', size: 1, stand: false, curve: true }, showLabels: false,
+    radius: 10, set: 'sketch', style: { color: 'arrow', size: 1, stand: false, curve: true }, showLabels: false,
   };
   function blank() {
     return { v: 3, masses: [], lots: [], islands: [], drives: [], notes: [], dg: { ...DG0 }, paint: {}, scheme: JSON.parse(JSON.stringify(BUILTIN_SCHEMES[0])), ratios: JSON.parse(JSON.stringify(DEFAULT_RATIOS)) };
@@ -166,7 +168,8 @@ export function createSketch(ctx) {
   /** Curb returns and curb cuts of the drive aisles (cached per sketch version). */
   function joins() {
     if (sk.joins?.ver === sk.ver) return sk.joins.J;
-    const J = driveJoins(sk.model.drives.map(d => ({ pts: d.pts, w: (d.w || 24) * perFt(), r: (d.r ?? 15) * perFt(), cut: d.cut !== false })), sk.model.lots.map(l => l.pts));
+    const rAt = d => p => { for (const [k, r] of Object.entries(d.rj || {})) { const [x, y] = k.split(',').map(Number); if (Math.hypot(x - p[0], y - p[1]) < 3 * perFt()) return r * perFt(); } return (d.r ?? 15) * perFt(); };
+    const J = driveJoins(sk.model.drives.map(d => ({ pts: d.pts, w: (d.w || 24) * perFt(), r: (d.r ?? 15) * perFt(), rAt: rAt(d), cut: d.cut !== false })), sk.model.lots.map(l => l.pts));
     sk.joins = { ver: sk.ver, J };
     return J;
   }
@@ -306,6 +309,7 @@ export function createSketch(ctx) {
     if (diagramOn()) { drawNotes(g); drawNoteSel(g); drawNoteDraft(g); drawSnap(g); return; }
     drawSelection(g);
     drawEdgeHover(g);
+    drawRadiusHover(g);
     drawHover(g);
     drawInProgress(g);
     drawOp(g);
@@ -541,6 +545,7 @@ export function createSketch(ctx) {
             <label class="skc-chk" title="Curve arrows and lines through their points"><input type="checkbox" data-st="curve"${sk.style.curve ? ' checked' : ''}> Curved</label></div></div>`
         : `<div class="sk-fly" data-for="mass" hidden>${SHAPES.map(sh => `<button type="button" class="sk-tool sk-mini" data-shape="${sh.id}" title="${sh.label} (${sh.key})" aria-label="${sh.label}">${svg(sh.icon)}<kbd>${sh.key}</kbd></button>`).join('')}</div>`
           + '<div class="sk-fly sk-num" data-for="push" hidden><span>Distance</span><input type="number" step="0.5" data-fly="dist" title="Type an exact distance for the last push/pull"><span class="sk-u"></span></div>'
+          + `<div class="sk-fly sk-num" data-for="radius" hidden><span>Radius</span><input type="number" step="1" min="0" max="500" value="${sk.radius}" data-fly="radius" title="Radius for the next corner you click"><span class="sk-u"></span></div>`
           + `<div class="sk-fly sk-num" data-for="slope" hidden><span>Pitch</span><input type="number" step="0.5" min="0" max="48" value="${sk.pitch}" data-fly="pitch" title="Rise per 12 of run"><span>: 12</span></div>`);
   }
   buildBar();
@@ -556,6 +561,7 @@ export function createSketch(ctx) {
   });
   bar.addEventListener('change', e => {
     const t = e.target, v = Number(t.value);
+    if (t.dataset.fly === 'radius') sk.radius = Math.max(0, Number.isFinite(v) ? v : 10);
     if (t.dataset.fly === 'pitch') { sk.pitch = Math.max(0, Math.min(48, Number.isFinite(v) ? v : 6)); redoLast('slope'); }
     if (t.dataset.fly === 'dist' && Number.isFinite(v)) redoLast('push', v * kz());
     if (t.name === 'dg-size') setStyle({ size: v });
@@ -585,7 +591,7 @@ export function createSketch(ctx) {
       f.querySelector('.dg-row')?.toggleAttribute('hidden', t === 'paint');
       if (!f.hidden) { const b = bar.querySelector(`[data-tool="${f.dataset.for === 'style' ? 'arrow' : t}"]`); f.style.top = `${b.offsetTop}px`; }
     });
-    const u = bar.querySelector('.sk-u'); if (u) u.textContent = uLen();
+    bar.querySelectorAll('.sk-u').forEach(u => { u.textContent = uLen(); });
     setShape(sk.shape, true);
     const drawing = t !== 'select';
     map.getContainer().classList.toggle('sk-drawing', drawing);
@@ -885,6 +891,40 @@ export function createSketch(ctx) {
     const z = handleZ(T.kind, o)(q), start = ev.at?.(z) || ev.xy || q;
     sk.drag = { kind: T.kind, id: o.id, h: { t: 'v', i: T.i + 1 }, z, start, orig: JSON.stringify(o), carry: [], pushed: true, sx: ev.sx, sy: ev.sy };
     sk.hovE = null; changed(true);
+  }
+  /** The corner the Radius tool would round: a drive-aisle join / entry, or an outline corner. */
+  function radiusTarget(ev) {
+    let best = null;
+    const near = (q, d0 = 12) => q && Math.hypot(q[0] - ev.sx, q[1] - ev.sy) < d0;
+    for (const c of joins().corners) { const q = scr(c.p); if (near(q)) { const d = Math.hypot(q[0] - ev.sx, q[1] - ev.sy); if (!best || d < best.d) best = { type: 'joint', di: c.di, p: c.p, entry: c.entry, d }; } }
+    for (const kind of ['island', 'lot', 'mass']) for (const o of list(kind)) {
+      if (kind === 'mass' && !o.prm) { for (const p of info(o).foot) { const q = P3(o, [p[0], p[1], 0]); if (near(q, 9) && !best) best = { type: 'free', id: o.id, p, d: 99 }; } continue; }
+      const P = outline(o), zf = handleZ(kind, o);
+      P.forEach((p, i) => { const q = scr(p, zf(p)); if (!near(q)) return; const d = Math.hypot(q[0] - ev.sx, q[1] - ev.sy); if (!best || d < best.d) best = { type: 'vertex', kind, id: o.id, i, p, d }; });
+    }
+    return best;
+  }
+  function applyRadius(ev) {
+    const T = radiusTarget(ev);
+    if (!T) { flash('Click a corner — of a block, lot or island, or where a drive aisle meets the paving or the street.'); return; }
+    if (T.type === 'free') { flash('That block was shaped by hand — rounding its corners isn\'t supported yet. Round the outline before pulling it up.'); return; }
+    before();
+    if (T.type === 'joint') {
+      const d = sk.model.drives[T.di]; d.rj = { ...(d.rj || {}), [`${Math.round(T.p[0])},${Math.round(T.p[1])}`]: sk.radius };
+    } else {
+      if (!(sk.radius > 0)) { sk.undo.pop(); flash('Set a radius above 0 to round a corner.'); return; }
+      const o = list(T.kind).find(q => q.id === T.id), P = outline(o), R = filletAt(P, T.i, sk.radius * perFt());
+      P.splice(0, P.length, ...R);
+      if (o.prm) regen(o);
+      sk.infos.delete(o.id);
+    }
+    sk.hovR = null; changed();
+  }
+  function drawRadiusHover(g) {
+    const T = sk.hovR; if (!T || sk.tool !== 'radius') return;
+    const q = T.type === 'vertex' ? scr(T.p, handleZ(T.kind, list(T.kind).find(o => o.id === T.id))(T.p)) : scr(T.p); if (!q) return;
+    g.save(); g.beginPath(); g.arc(q[0], q[1], 9, 0, Math.PI * 2); g.strokeStyle = T.type === 'free' ? '#ef4444' : ORANGE; g.lineWidth = 2.5; g.stroke();
+    g.restore(); tag(g, q, T.type === 'free' ? 'shaped by hand' : sk.radius > 0 ? `R ${sk.radius} ${uLen()}` : T.type === 'joint' ? 'make sharp' : 'set a radius');
   }
   function drawEdgeHover(g) {
     const e = sk.hovE; if (!e) return;
@@ -1532,6 +1572,7 @@ export function createSketch(ctx) {
       }
     }
     if (t === 'point') { addPoint(ev); return true; }
+    if (t === 'radius') { applyRadius(ev); return true; }
     if (t === 'pen') {
       if (sk.draw?.face) {                       // clicking out a line on a face
         const s = penFacePoint(ev); if (!s) return true;
@@ -1627,6 +1668,11 @@ export function createSketch(ctx) {
       return;
     }
     if (d?.pts) { const xy = groundSnap(ev, d.pts.at(-1), { own: d.pts }); if (xy) { d.hover = xy; draw(); } return; }
+    if (!sk.drag && sk.tool === 'radius') {
+      const T = radiusTarget(ev), k = T ? JSON.stringify([T.type, T.id, T.di, T.i, Math.round(T.p[0]), Math.round(T.p[1])]) : '';
+      if (k !== (sk.hovRKey || '')) { sk.hovR = T; sk.hovRKey = k; draw(); }
+      return;
+    }
     if (!sk.drag) {                                   // hover feedback for the face tools / Ctrl-move / the selection's edges
       const so = sk.tool === 'select' && !ev.ctrl ? findSel() : null;
       if (sk.tool === 'point' || (so && sk.sel.kind !== 'note' && editable(sk.sel.kind, so))) {

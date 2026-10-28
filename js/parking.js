@@ -315,7 +315,7 @@ function segX(p, q, a, b) {
  * paved: [polygon…] (lots). Returns { wedges: [polygon…], cuts: [[a, b]…] (curb line across each cut) }.
  */
 export function driveJoins(drives, paved) {
-  const wedges = [], cuts = [];
+  const wedges = [], cuts = [], corners = [];
   const lanes = drives.map(d => { const L = []; for (let i = 0; i < d.pts.length - 1; i++) L.push(lanePoly(d.pts[i], d.pts[i + 1], d.w)); return L; });
   drives.forEach((d, di) => {
     const regions = [...paved, ...lanes.flatMap((L, j) => (j === di ? [] : L))];
@@ -331,7 +331,8 @@ export function driveJoins(drives, paved) {
           const d2 = [dir[0] * fw, dir[1] * fw];
           let ed = [e1[0] - e0[0], e1[1] - e0[1]]; const le = Math.hypot(...ed) || 1; ed = [ed[0] / le, ed[1] / le];
           const d1 = ed[0] * nrm[0] * sd + ed[1] * nrm[1] * sd > 0 ? ed : [-ed[0], -ed[1]];
-          const W = filletWedge(X.x, d1, d2, d.r); if (W) wedges.push(W);
+          corners.push({ p: X.x, di });
+          const W = filletWedge(X.x, d1, d2, d.rAt ? d.rAt(X.x) : d.r); if (W) wedges.push(W);
         }
       }
     }
@@ -343,11 +344,22 @@ export function driveJoins(drives, paved) {
       const tips = [];
       for (const sd of [1, -1]) {
         const P = [end[0] + nrm[0] * sd * d.w / 2, end[1] + nrm[1] * sd * d.w / 2];
-        const W = filletWedge(P, [nrm[0] * sd, nrm[1] * sd], [-dir[0], -dir[1]], d.r);
-        if (W) { wedges.push(W); tips.push(W[1]); }
+        corners.push({ p: P, di, entry: true });
+        const W = filletWedge(P, [nrm[0] * sd, nrm[1] * sd], [-dir[0], -dir[1]], d.rAt ? d.rAt(P) : d.r);
+        if (W) { wedges.push(W); tips.push(W[1]); } else tips.push(P);
       }
       if (tips.length === 2) cuts.push([tips[0], tips[1]]);
     }
   });
-  return { wedges, cuts };
+  return { wedges, cuts, corners };
+}
+/** Round one corner (index i) of an outline with radius r: the corner is replaced by arc points. */
+export function filletAt(P, i, r, segs = 8) {
+  const n = P.length, closedRing = n >= 3;
+  if (!closedRing || !(r > 0)) return P.slice();
+  const tri = [P[(i - 1 + n) % n], P[i], P[(i + 1) % n]];
+  const R = roundPoly(tri, r, segs);            // the middle corner's arc sits between the two end corners' arcs
+  const k = segs + 1, arc = R.slice(k, 2 * k);
+  const out = P.slice(); out.splice(i, 1, ...arc);
+  return out;
 }

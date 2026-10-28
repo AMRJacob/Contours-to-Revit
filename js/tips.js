@@ -58,6 +58,7 @@ export const TIPS = {
   'bool-cut': { t: 'Cut', b: 'Takes the dashed (second) block out of the orange one — notches, courtyards, arcades, a tower carved out of a podium. The cutter is used up; Ctrl+Z brings it back.' },
   'sk-mass': { t: 'Shapes', k: 'M', b: 'Quick blocks: drag a box, round, L, U or courtyard (' + K('1 2 3 4 5') + '), or click an outline and double-click. ' + K('R') + ' changes the roof. They\'re ' + term('solid', 'solids') + ' you can keep shaping.' },
   'sk-point': { t: 'Add point', k: 'A', b: 'Click any edge — a block, lot, island or aisle — to put a new corner there. Keep the button down to drag it into place.' },
+  'sk-radius': { t: 'Radius', k: 'F', b: 'Set the radius in the box, then click corners to round them: blocks, lots, islands, and the curb returns where drive aisles meet the lot or the street. 0 makes an aisle corner sharp.' },
   'sk-pen': { t: 'Draw', k: 'L', b: 'On the ground: a rectangle or outline becomes a flat shape to pull up. On a face: drag or click from edge to edge to split it — lines stop at the edges, and each part then pulls on its own. Or drag a rectangle inside it. ' + term('snap', 'Snaps') + ' as you go.' },
   'sk-push': { t: 'Push / Pull', k: 'U', b: 'Drag a face in or out. Tops snap to whole floors (' + K('Shift') + ' = free). ' + K('Ctrl') + ' always makes new sides. Type an exact distance in the box beside the tool.' },
   'sk-slope': { t: 'Slope', k: 'S', b: 'Drag across a face toward its high side; it tilts at the pitch in the box (walls lean out). The back edge stays put.' },
