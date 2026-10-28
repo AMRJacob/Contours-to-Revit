@@ -1,23 +1,24 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.46.0';
-import { fetchElevation, sample } from './dem.js?v=0.46.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.46.0';
-import { Dxf } from './dxf.js?v=0.46.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.46.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.46.0';
-import { Flow } from './flow.js?v=0.46.0';
-import { createSketch } from './sketch.js?v=0.46.0';
-import { initTips, coachFrom } from './tips.js?v=0.46.0';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.46.0';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.46.0';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.46.0';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.46.0';
-import { loadLidar, applyLidar } from './lidar.js?v=0.46.0';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.46.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.46.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.47.0';
+import { fetchElevation, sample } from './dem.js?v=0.47.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.47.0';
+import { Dxf } from './dxf.js?v=0.47.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.47.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.47.0';
+import { Flow } from './flow.js?v=0.47.0';
+import { createSketch } from './sketch.js?v=0.47.0';
+import { initTips, coachFrom } from './tips.js?v=0.47.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.47.0';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.47.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.47.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.47.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.47.0';
+import { findTrees } from './trees.js?v=0.47.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.47.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.47.0';
 
-const VERSION = '0.46.0';
+const VERSION = '0.47.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -275,7 +276,7 @@ function saveSettings() {
     units: units(), spacing: $('spacing').value, interval: $('interval').value,
     localOrigin: $('local-origin').checked, smooth: $('smooth').checked,
     zone: $('zone').value, bldgMode: $('bldg-mode').value, bldgFfe: $('bldg-ffe').value, bldgH: $('bldg-h').value,
-    bldgLidar: $('bldg-lidar').checked, bldgLidarRes: $('bldg-lidar-res').value, bldgStyle: $('bldg-style').value,
+    bldgLidar: $('bldg-lidar').checked, bldgLidarRes: $('bldg-lidar-res').value, bldgStyle: $('bldg-style').value, trees: $('trees-lidar').checked,
   });
 }
 
@@ -294,6 +295,7 @@ function restoreSettings() {
   $('bldg-lidar').checked = !!s.bldgLidar;
   if (['1', '2', '5'].includes(String(s.bldgLidarRes))) $('bldg-lidar-res').value = String(s.bldgLidarRes);
   if (['clean', 'planes'].includes(s.bldgStyle)) $('bldg-style').value = s.bldgStyle;
+  if (typeof s.trees === 'boolean') $('trees-lidar').checked = s.trees;
   bldgUi();
 }
 /** Building massing style: 'clean' (squared footprints, simple roofs) or 'planes' (lidar roof planes). */
@@ -315,7 +317,7 @@ $('local-origin').addEventListener('change', () => { saveSettings(); applyOrigin
 $('bldg-mode').addEventListener('change', bldgUi);
 $('bldg-lidar').addEventListener('change', bldgUi);
 $('bldg-style').addEventListener('change', bldgUi);
-['spacing', 'interval', 'smooth', 'bldg-mode', 'bldg-ffe', 'bldg-h', 'bldg-lidar', 'bldg-lidar-res', 'bldg-style'].forEach(id => $(id).addEventListener('change', () => {
+['spacing', 'interval', 'smooth', 'bldg-mode', 'bldg-ffe', 'bldg-h', 'bldg-lidar', 'bldg-lidar-res', 'bldg-style', 'trees-lidar'].forEach(id => $(id).addEventListener('change', () => {
   onSiteChanged(false); saveSettings(); invalidate();
 }));
 $('zone').addEventListener('change', () => { updateZoneHint(); onSiteChanged(false); saveSettings(); invalidate(); });
@@ -616,6 +618,24 @@ async function generate() {
       console.error(err);
       lidarInfo = { error: err.message || String(err) };
       contextNotes.push(`Lidar building heights unavailable: ${lidarInfo.error}. Buildings use their dataset heights.`);
+    }
+  }
+
+  // Existing trees found in the lidar canopy (a lighter whole-site read: ~1–2 points per m² is enough for crowns).
+  if ($('trees-lidar').checked && context) {
+    try {
+      const lidT = await loadLidar(bbox, p.fwd, msg => setStatus(msg.replace('Reading lidar', 'Reading lidar for trees')), null, { maxSpacing: 0.7 });
+      setStatus('Finding trees in the lidar canopy…');
+      await tick();
+      const rings = ['bldgBest', 'buildings', 'bldgMs', 'bldgOsm'].flatMap(k => ((k === 'buildings' ? context.buildings : context[k]) || []).map(b => b.ring)).filter(r => r?.length > 2);
+      const T = findTrees(lidT, box, nativePerM, rings);
+      context.trees = T.trees.map(t => ({ x: t.x, y: t.y, z: zAt(t.x, t.y), h: t.h * zPerM, hM: t.h, r: t.r * nativePerM, rM: t.r })).filter(t => Number.isFinite(t.z));
+      context.treeInfo = { name: lidT.name, year: lidT.year, canopy: T.canopy, hasGround: T.hasGround, mb: lidT.mb };
+    } catch (err) {
+      console.error(err);
+      context.trees = [];
+      context.treeInfo = { error: err.message || String(err) };
+      contextNotes.push(`Trees from lidar unavailable: ${context.treeInfo.error}.`);
     }
   }
 
@@ -1036,6 +1056,8 @@ function showResults(site) {
     const np = site.context.roads.length - nr;
     if (site.ctxInclude.b) html += `<div>Footprints — USA Structures: ${nb}${dates.length ? ` (imagery ${escapeHtml(dates[0].slice(0, 4))}${dates.length > 1 && dates.at(-1).slice(0, 4) !== dates[0].slice(0, 4) ? '–' + escapeHtml(dates.at(-1).slice(0, 4)) : ''})` : ''}, ${nh} with heights · Microsoft: ${(site.context.bldgMs || []).length}, ${(site.context.bldgMs || []).filter(b => b.heightKnown).length} with estimated heights · OpenStreetMap: ${(site.context.bldgOsm || []).length}, ${(site.context.bldgOsm || []).filter(b => b.heightKnown).length} with heights</div>`;
     if (site.lidar) html += `<div>${lidarSummary(site, true)}</div>`;
+    const ti = site.context.treeInfo;
+    if (ti) html += `<div>${ti.error ? `Trees: not found (${escapeHtml(ti.error)})` : `${(site.context.trees || []).length} trees from USGS lidar ${escapeHtml(ti.name)} — ${Math.round(ti.canopy * 100)}% canopy cover; positions, heights and crown spread are estimates`}</div>`;
     if (site.ctxInclude.r) html += `<div>${nr} road segment${nr === 1 ? '' : 's'}${np ? `, ${np} path${np === 1 ? '' : 's'}` : ''} (${site.roadsSource === 'tiger' ? 'US Census TIGER' : 'OpenStreetMap'}) — centerlines only; no source publishes pavement edges</div>`;
     if (site.ctxInclude.p) {
       const npc = site.context.parcels.length;
@@ -1072,6 +1094,7 @@ const LAYERS = [
   { key: 'streetAreas', label: 'Street surfaces · OSM', swatch: '#f59e0b' },
   { key: 'parking', label: 'Parking lots · OSM', swatch: '#cbd5e1' },
   { key: 'sidewalks', label: 'Sidewalks · OSM', swatch: '#f8fafc' },
+  { key: 'trees', label: 'Trees · lidar', swatch: '#16a34a' },
   { key: 'parcels', label: 'Parcels', swatch: '#ff4fd8' },
   { key: 'flood', label: 'Flood zones', swatch: '#3b82f6' },
   { key: 'labels', label: 'Labels', swatch: '#ffffff', note: 'preview · PNG · DXF' },
@@ -1079,7 +1102,7 @@ const LAYERS = [
   { key: 'points', label: 'Grid points', swatch: '#7bd88f', note: 'DXF only' },
 ];
 const visibility = (() => {
-  const v = { siteImage: true, contours: true, bldgBest: true, buildings: false, bldgMs: false, bldgOsm: false, roads: true, roadWidths: true, roadEdges: true, streetAreas: true, parking: true, sidewalks: true, imageFrame: true, parcels: true, flood: true, labels: true, points: false };
+  const v = { trees: true, siteImage: true, contours: true, bldgBest: true, buildings: false, bldgMs: false, bldgOsm: false, roads: true, roadWidths: true, roadEdges: true, streetAreas: true, parking: true, sidewalks: true, imageFrame: true, parcels: true, flood: true, labels: true, points: false };
   try { Object.assign(v, JSON.parse(localStorage.getItem('c2r-layers') || '{}')); } catch { /* ignore */ }
   return v;
 })();
@@ -1127,6 +1150,7 @@ function updateLayerCounts(site) {
     sidewalks: c ? (site.areasFailed ? 'failed' : String((c.sidewalks || []).length)) : '',
     roadEdges: c ? (!site.ctxInclude.p ? 'AR only' : site.widthsFailed ? 'failed' : String((c.widths || []).length)) : '',
     parcels: c ? (!site.ctxInclude.p ? 'AR only' : site.parcelsFailed ? 'failed' : String(c.parcels.length)) : '',
+    trees: c ? (c.treeInfo?.error ? 'failed' : c.trees ? String(c.trees.length) : 'off') : '',
     flood: c ? (site.floodFailed ? 'failed' : c.floodZones.length ? String(c.floodZones.length) : 'none') : '',
     points: site ? `${fmt(site.pts.nx * site.pts.ny - site.pStats.missing, 0)} · DXF only` : 'DXF only',
     labels: 'preview · PNG · DXF',
@@ -1172,7 +1196,7 @@ function drawContoursOnMap(site) {
   const p = projector(site.zone);
   const renderer = L.canvas({ padding: 0.3 });
   const ll = ([x, y]) => { const [lon, lat] = p.inv([x, y]); return [lat, lon]; };
-  const groups = { contours: L.layerGroup(), roads: L.layerGroup(), roadWidths: L.layerGroup(), roadEdges: L.layerGroup(), streetAreas: L.layerGroup(), parking: L.layerGroup(), sidewalks: L.layerGroup(), parcels: L.layerGroup(), flood: L.layerGroup() };
+  const groups = { contours: L.layerGroup(), roads: L.layerGroup(), roadWidths: L.layerGroup(), roadEdges: L.layerGroup(), streetAreas: L.layerGroup(), parking: L.layerGroup(), sidewalks: L.layerGroup(), parcels: L.layerGroup(), flood: L.layerGroup(), trees: L.layerGroup() };
   for (const src of BUILDING_SOURCES) groups[src.key] = L.layerGroup();
   for (const c of site.contours) {
     const major = isMajor(c.level, site.interval);
@@ -1197,6 +1221,12 @@ function drawContoursOnMap(site) {
     for (const a of site.context.parking || []) L.polygon(a.rings.map(r => r.map(ll)), { renderer, color: '#cbd5e1', weight: 1.4, fillColor: '#cbd5e1', fillOpacity: 0.15, interactive: false }).addTo(groups.parking);
     for (const a of site.context.streetAreas || []) L.polygon(a.rings.map(r => r.map(ll)), { renderer, color: '#f59e0b', weight: 1.4, fillColor: '#f59e0b', fillOpacity: 0.1, interactive: false }).addTo(groups.streetAreas);
     for (const sw of site.context.sidewalks || []) L.polyline(sw.line.map(ll), { renderer, color: '#f8fafc', weight: 1.2, opacity: 0.9, interactive: false }).addTo(groups.sidewalks);
+    // Trees: crown outlines (a slightly wobbly circle reads as a tree) and a trunk dot.
+    for (const t of site.context.trees || []) {
+      const ring = Array.from({ length: 18 }, (_, k) => { const a = k / 18 * 2 * Math.PI, w = 1 + 0.07 * Math.sin(5 * a + t.x); return [t.x + t.r * w * Math.cos(a), t.y + t.r * w * Math.sin(a)]; });
+      L.polygon(ring.map(ll), { renderer, color: '#4ade80', weight: 1, opacity: 0.9, fillColor: '#16a34a', fillOpacity: 0.28, interactive: false }).addTo(groups.trees);
+      L.circleMarker(ll([t.x, t.y]), { renderer, radius: 1.5, color: '#bbf7d0', weight: 0, fillOpacity: 0.9, interactive: false }).addTo(groups.trees);
+    }
     for (const w of site.context.widths || []) {
       // Recorded widths: ArDOT's own centerline, hover for the record.
       L.polyline(w.center.map(ll), { color: '#fde68a', weight: 5, opacity: 0.35, interactive: true }).bindTooltip(`${w.text}<br><small>${w.source}</small>`, { sticky: true }).addTo(groups.roadWidths);
@@ -1464,6 +1494,17 @@ function addBuildings(d, list, otln, mass, P) {
 
 function addContext(d, site, v, labels) {
   const P = (x, y, z) => [...outXY(site, x, y), z];
+  if (v.trees && site.context.trees?.length) {
+    // Trees: crown outline at the ground, a trunk point, and the height as text (lidar estimate).
+    const h = labelHeight(site) * 0.6, u = site.units === 'm' ? 'M' : "'";
+    d.layer('L-PLNT-TREE', 3);
+    if (v.labels !== false) d.layer('L-PLNT-TEXT', 3);
+    for (const t of site.context.trees) {
+      d.polyline3d('L-PLNT-TREE', Array.from({ length: 16 }, (_, k) => P(t.x + t.r * Math.cos(k / 16 * 2 * Math.PI), t.y + t.r * Math.sin(k / 16 * 2 * Math.PI), t.z)), true);
+      d.point('L-PLNT-TREE', ...P(t.x, t.y, t.z));
+      if (v.labels !== false && t.r > h * 2) { const [x, y] = outXY(site, t.x, t.y); d.text('L-PLNT-TEXT', x, y + h * 0.7, t.z, h, `${Math.round(t.h)}${u}`); }
+    }
+  }
   for (const src of BUILDING_SOURCES) {
     if (!v[src.key]) continue;
     const otln = `C-BLDG-OTLN-${src.tag}`, mass = `A-MASS-${src.tag}`;
@@ -1642,6 +1683,7 @@ function makeReadme(site, v = vis()) {
     ...(v.roadEdges ? ['                 C-ROAD-EDGE-ARDOT / C-ROAD-PAVE-ARDOT  edges from ArDOT RECORDED widths (traveled way / paved), draped'] : []),
     ...(v.roadWidths && v.labels !== false ? ['                 C-ROAD-WDTH  ArDOT lanes / widths labels'] : []),
     ...(v.parcels && site.ctxInclude.p ? ['                 C-PROP-LINE  parcel lines draped on terrain; C-PROP-TEXT parcel ID / owner'] : []),
+    ...(v.trees && site.context?.trees?.length ? ['                 L-PLNT-TREE  existing trees from lidar: crown outline at the ground + trunk point; L-PLNT-TEXT height (estimate, not a tree survey)'] : []),
     ...(v.flood ? ['                 C-FLOD-ZONE  flood zone boundaries draped; C-FLOD-PATT hatch (floodway cross-hatched,', '                 SFHA single hatch, shaded X sparse); C-FLOD-TEXT labels; C-FLOD-BFE lines AT the BFE'] : []),
     `                 REVIT: Insert > Link CAD (or Import CAD) > set "Import units" to ${u === 'm' ? 'METERS' : 'FEET'} — do not rely on`,
     '                 Auto-Detect (older DXF readers default to inches). Positioning: "Auto - Origin to Origin"',
@@ -1703,6 +1745,11 @@ function makeReadme(site, v = vis()) {
       '                      Heights are measured against the lidar ground beside each footprint; roofs are a',
       `                      ${site.lidar.cellFt || 5} ft grid fitted to the returns. The lidar has roughly one return per 2–3 ft, so a`,
       '                      finer grid is interpolated between them; small dormers, parapets and equipment are smoothed.');
+    const ti = site.context.treeInfo;
+    if (v.trees && ti && !ti.error) L_(`Trees:                ${(site.context.trees || []).length} from USGS 3DEP lidar (${ti.name}${ti.year ? `, flown ${ti.year}` : ''}), ${Math.round(ti.canopy * 100)}% canopy cover.`,
+      '                      Canopy height above the lidar\'s own ground at 1 m cells; treetops are local highs and crowns are grown',
+      '                      down from each top. Positions, heights and crown spread are estimates (dense groves may merge or split;',
+      '                      leaf-off flights show smaller crowns). Not a tree survey: species, trunk size and condition are not known.');
     if (v.bldgOsm) {
       const os = site.context.bldgOsm || [];
       L_(`Buildings (OSM):      ${os.length} footprints from OpenStreetMap (© OpenStreetMap contributors, ODbL; hand-mapped).`,
@@ -4481,6 +4528,7 @@ function v3Build(resetView = false) {
   v3.setBuildings(v3Buildings(site));
   v3.setSketch(sketch.tris(v3.ex || 1), sketch.parking3d());
   v3.setDiagram(dz.mode === 'diagram');
+  v3.setTrees(visibility.trees ? site.context?.trees : null);
   v3.setNotes(sketch.notes3d());
   sunApply3d();
 }
@@ -4725,6 +4773,12 @@ function sunWhen() {
 }
 function sunBuildings(site) {
   const out = [...sketch.buildings()];
+  // Trees as solid crowns (a dome from the crown base up to the top) — real canopies let some light through.
+  if (visibility.trees) for (const t of site.context?.trees || []) {
+    const base = t.z + t.h * 0.38, half = t.h * 0.62;
+    out.push({ ring: [[t.x - t.r, t.y - t.r], [t.x + t.r, t.y - t.r], [t.x + t.r, t.y + t.r], [t.x - t.r, t.y + t.r]], base: t.z, top: t.z + t.h, tree: true,
+      roofAt: (x, y) => { const d2 = ((x - t.x) ** 2 + (y - t.y) ** 2) / (t.r * t.r); return d2 > 1 ? NaN : base + half * Math.sqrt(1 - d2); } });
+  }
   for (const src of BUILDING_SOURCES) {
     if (!visibility[src.key]) continue;
     for (const b of (src.key === 'buildings' ? site.context?.buildings : site.context?.[src.key]) || []) out.push(b);
@@ -4733,7 +4787,7 @@ function sunBuildings(site) {
 }
 /** Height raster of ground + visible buildings for the current site (cached per site, layers and size). */
 function sunRaster(site, maxSide) {
-  const key = `${maxSide}|${BUILDING_SOURCES.map(b => (visibility[b.key] ? 1 : 0)).join('')}|${site.generated?.getTime()}|${sketch.version}`;
+  const key = `${maxSide}|${BUILDING_SOURCES.map(b => (visibility[b.key] ? 1 : 0)).join('')}|${visibility.trees ? 1 : 0}|${site.generated?.getTime()}|${sketch.version}`;
   if (sunS.R && sunS.Rsite === site && sunS.Rkey === key) return sunS.R;
   sunS.R = heightRaster(site, sunBuildings(site), maxSide); sunS.Rsite = site; sunS.Rkey = key;
   return sunS.R;
@@ -4819,7 +4873,7 @@ function sunApply3d() {
     v3.setSun('hours', { colorAt, surf: { S: H.surf.S, idx: H.surf.idx, col } });
   } else v3.setSun('off');
 }
-const sunHoursKey = site => `${$('sun-date').value}|${BUILDING_SOURCES.map(b => (visibility[b.key] ? 1 : 0)).join('')}|${site.generated?.getTime()}|${v3?.ex || 1}|${sketch.version}`;
+const sunHoursKey = site => `${$('sun-date').value}|${BUILDING_SOURCES.map(b => (visibility[b.key] ? 1 : 0)).join('')}|${visibility.trees ? 1 : 0}|${site.generated?.getTime()}|${v3?.ex || 1}|${sketch.version}`;
 async function sunComputeHours(site) {
   const key = sunHoursKey(site);
   if (sunS.hours && sunS.hours.site === site && sunS.hours.key === key) return true;

@@ -77,6 +77,7 @@ export const TIPS = {
   hosted: { t: 'Hosted map data', b: 'Parking lots, sidewalks and street surfaces come from OpenStreetMap data this site hosts for the listed states (refreshed weekly). Elsewhere the app asks the public OpenStreetMap servers, which can be busy.' },
   smoothing: { t: 'Smooth contours', b: 'Removes lidar noise from the contour lines; the points stay raw.' },
   'bldg-lidar': { t: 'Building heights & roofs from lidar', b: 'Measures each footprint in the USGS ' + term('lidar', 'lidar') + ' point cloud (flat or sloped roofs). Larger download; footprints the lidar can\'t read keep their data height.' },
+  trees: { t: 'Existing trees', b: 'Read from the USGS ' + term('lidar', 'lidar') + ' over the whole site at about 1–2 points per m²: a canopy height model (vegetation height above the lidar\'s own ground), treetops as local highs, and each crown grown down from its top. Gives position, height and crown spread — fine for diagrams, context and shade, not a tree survey (species, trunk size and condition need one). Leaf-off flights show smaller crowns.' },
   'curb-defaults': { t: 'Starting sizes', b: 'Stalls 9×18 ft; aisles 24 ft (90°), 18 ft one-way (60°), 13 ft one-way (45°); islands 9 ft wide with 3 ft corners; drive turn radius 15 ft. Typical starting sizes, not a code — change them per lot or aisle.' },
 };
 

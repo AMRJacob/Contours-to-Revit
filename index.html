@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.46.0">
+  <link rel="stylesheet" href="css/app.css?v=0.47.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -453,6 +453,7 @@
               </select>
             </div>
           </div>
+          <label class="check"><input type="checkbox" id="trees-lidar" checked><span data-tip="trees"><strong>Find existing trees in the lidar</strong> <span class="qm">?</span></span></label>
           <details class="sub-details" open>
             <summary data-tip="stateplane">Coordinate system</summary>
             <div class="field">
@@ -606,7 +607,7 @@
           </div>
           <div class="env-legend" id="sun-legend" hidden><span>0 h</span><i></i><span id="sun-legend-max"></span></div>
           <p class="env-note" id="sun-msg"></p>
-          <p class="env-note">Ground and building masses only — trees aren't modelled. Times are this computer's time zone.</p>
+          <p class="env-note">Ground, buildings and trees (crowns treated as solid). Times are this computer's time zone.</p>
         </section>
         <section class="env-panel" id="wind-panel" hidden aria-label="Prevailing wind">
           <div class="env-h"><button type="button" class="env-title" title="Show / hide the rose">Prevailing wind</button>
@@ -663,6 +664,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.46.0"></script>
+  <script type="module" src="js/app.js?v=0.47.0"></script>
 </body>
 </html>

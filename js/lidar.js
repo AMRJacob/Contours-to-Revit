@@ -3,7 +3,7 @@
 // the browser with laz-perf (WASM), and turned into a roof surface per footprint. Heights are measured against the
 // lidar's own ground points next to each building, so the lidar's vertical datum never matters.
 
-import { orthogonalize, dominantAngle, prismMass, mergeMass, polyArea, wingRects, wingShape, wingRoof, convexHalfplanes } from './massing.js?v=0.46.0';
+import { orthogonalize, dominantAngle, prismMass, mergeMass, polyArea, wingRects, wingShape, wingRoof, convexHalfplanes } from './massing.js?v=0.47.0';
 
 const RESOURCES = 'https://raw.githubusercontent.com/hobuinc/usgs-lidar/master/boundaries/resources.geojson';
 const R_EARTH = 6378137;
@@ -88,7 +88,7 @@ function focusIndex(boxes, cell = 200) {
  * Read the EPT nodes overlapping the bbox (EPSG:3857) — only those near a focus box when focus is given (the
  * buildings, so a big site with fields and woods doesn't download them). Returns typed arrays of the points kept.
  */
-async function readEpt(url, [x0, y0, x1, y1], onStatus, focus = null) {
+async function readEpt(url, [x0, y0, x1, y1], onStatus, focus = null, maxSpacing = 0) {
   const base = url.replace(/ept\.json$/, '');
   const ept = await (await fetch(url)).json();
   if (ept.dataType !== 'laszip') throw new Error(`unsupported lidar format ${ept.dataType}`);
@@ -99,7 +99,10 @@ async function readEpt(url, [x0, y0, x1, y1], onStatus, focus = null) {
     return [B[0] + x * sx, B[1] + y * sy, B[0] + (x + 1) * sx, B[1] + (y + 1) * sy];
   };
   const F = focusIndex(focus);
-  const hits = k => { const b = nodeBox(k); return !(b[2] < x0 || b[0] > x1 || b[3] < y0 || b[1] > y1) && (!F || F.box(b)); };
+  // Lighter reads: stop at the octree depth whose point spacing reaches maxSpacing (m), instead of every point.
+  let maxDepth = Infinity;
+  if (maxSpacing > 0) { const span = ept.span || 128; maxDepth = 0; while ((B[3] - B[0]) / 2 ** maxDepth / span > maxSpacing && maxDepth < 30) maxDepth++; }
+  const hits = k => { const b = nodeBox(k); return Number(k.split('-')[0]) <= maxDepth && !(b[2] < x0 || b[0] > x1 || b[3] < y0 || b[1] > y1) && (!F || F.box(b)); };
   // Hierarchy: -1 marks a subtree stored in its own file.
   const nodes = [];
   let pending = ['0-0-0-0'];
@@ -160,7 +163,7 @@ function decode(L, buf, x0, y0, x1, y1, xs, ys, zs, cs, rs, F = null) {
  * focusLL: optional [w, s, e, n] lon/lat boxes (buildings plus a margin) — only lidar near them is read.
  * Returns { name, year, n, hasBuildingClass, x, y (native), z (m), c } or throws.
  */
-export async function loadLidar(bbox, fwd, onStatus, focusLL = null) {
+export async function loadLidar(bbox, fwd, onStatus, focusLL = null, opts = {}) {
   const [w, s, e, n] = bbox;
   onStatus?.('Finding lidar for this site…');
   const cols = await collectionsAt((w + e) / 2, (s + n) / 2);
@@ -171,7 +174,7 @@ export async function loadLidar(bbox, fwd, onStatus, focusLL = null) {
     try {
       onStatus?.(`Reading lidar — ${col.name}…`);
       const focus = focusLL ? focusLL.map(([a, b, c, d]) => [...toMerc(a, b), ...toMerc(c, d)]) : null;
-      pc = await readEpt(col.url, [mx0, my0, mx1, my1], onStatus, focus);
+      pc = await readEpt(col.url, [mx0, my0, mx1, my1], onStatus, focus, opts.maxSpacing || 0);
       if (pc.x.length > 100) { used = col; break; }
     } catch (err) { console.warn('lidar', col.name, err); }
   }

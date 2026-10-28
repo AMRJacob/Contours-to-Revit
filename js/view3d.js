@@ -281,6 +281,41 @@ export class SiteView3D {
     m.material.needsUpdate = true;
   }
 
+  /**
+   * Existing trees: [{ x, y (native), z (ground, output), h (output), r (native) }] as low-poly crowns on trunks, at
+   * true height on the exaggerated ground (like the buildings). Diagram look: pale crowns with outlines.
+   */
+  setTrees(list) {
+    if (this.trees) { this.scene.remove(this.trees); this.trees.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); this.trees = null; }
+    this._treeList = list;
+    if (!list?.length || !this.g) return;
+    const g = new THREE.Group(), n = list.length, dg = !!this.diagram;
+    const crownGeo = new THREE.IcosahedronGeometry(1, 1), trunkGeo = new THREE.CylinderGeometry(1, 1, 1, 6);
+    const crowns = new THREE.InstancedMesh(crownGeo, new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: !dg }), n);
+    const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshLambertMaterial({ color: dg ? 0xb9b4aa : 0x6b4f3a }), n);
+    const M = new THREE.Matrix4(), q = new THREE.Quaternion(), c = new THREE.Color();
+    list.forEach((t, i) => {
+      const X = (t.x - this.cx) * this.k, Z = -(t.y - this.cy) * this.k, Y0 = (t.z - this.z0) * this.ex;
+      const r = Math.max(0.5, t.r * this.k), h = Math.max(1, t.h), crownH = Math.max(h * 0.62, Math.min(h, r * 1.6)), trunkH = h - crownH;
+      M.compose(new THREE.Vector3(X, Y0 + trunkH + crownH / 2, Z), q, new THREE.Vector3(r, crownH / 2, r)); crowns.setMatrixAt(i, M);
+      const tr = Math.max(0.25, r * 0.07);
+      M.compose(new THREE.Vector3(X, Y0 + trunkH / 2 + 0.2, Z), q, new THREE.Vector3(tr, trunkH + 0.4, tr)); trunks.setMatrixAt(i, M);
+      if (dg) c.setRGB(0.86, 0.9, 0.85); else c.setHSL(0.3 + ((i * 37) % 10) / 160, 0.42, 0.24 + ((i * 53) % 10) / 90);
+      crowns.setColorAt(i, c);
+    });
+    crowns.castShadow = trunks.castShadow = true;
+    g.add(crowns, trunks);
+    if (dg) {                                             // crisp outlines for the diagram look
+      const eg = new THREE.EdgesGeometry(crownGeo, 30), pos = eg.attributes.position.array, out = new Float32Array(pos.length * n), v = new THREE.Vector3();
+      list.forEach((t, i) => { crowns.getMatrixAt(i, M); for (let k = 0; k < pos.length; k += 3) { v.set(pos[k], pos[k + 1], pos[k + 2]).applyMatrix4(M); out.set([v.x, v.y, v.z], i * pos.length + k); } });
+      const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(out, 3));
+      g.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x7c8a7c, transparent: true, opacity: 0.6 })));
+      eg.dispose();
+    }
+    g.name = 'trees';
+    this.trees = g; this.scene.add(g);
+  }
+
   /** Diagram annotations: [{ tris: flat display [x,y,z…], edges: flat display pairs, color, opacity }]. */
   setNotes(items) {
     if (this.notes) { this.scene.remove(this.notes); this.notes.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); this.notes = null; }
@@ -308,6 +343,7 @@ export class SiteView3D {
     this._hemi = this._hemi || this.scene.children.find(o => o.isHemisphereLight);
     if (this._hemi) this._hemi.intensity = on ? 1.15 : 0.85;
     this._bldgStyle();
+    if (this._treeList && this._treeDg !== on) { this._treeDg = on; this.setTrees(this._treeList); }
   }
   _bldgStyle() {
     if (!this.bldg) return;
