@@ -340,9 +340,10 @@ export function driveJoins(drives, paved) {
         }
       }
     }
-    // Curb cuts at ends outside all paving.
-    if (d.cut === false) return;
-    for (const [end, nb] of [[d.pts[0], d.pts[1]], [d.pts[d.pts.length - 1], d.pts[d.pts.length - 2]]]) {
+    // Curb cuts at ends outside all paving (each end can be switched off: d.cut = [start, end] or a boolean).
+    const cutAt = Array.isArray(d.cut) ? d.cut : [d.cut !== false, d.cut !== false];
+    for (const [ei, end, nb] of [[0, d.pts[0], d.pts[1]], [1, d.pts[d.pts.length - 1], d.pts[d.pts.length - 2]]]) {
+      if (!cutAt[ei]) continue;
       if (regions.some(R => inP(R, end[0], end[1]))) continue;
       const dx = end[0] - nb[0], dy = end[1] - nb[1], Ls = Math.hypot(dx, dy) || 1, dir = [dx / Ls, dy / Ls], nrm = [-dir[1], dir[0]];
       const tips = [];

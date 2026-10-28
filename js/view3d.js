@@ -418,7 +418,7 @@ export class SiteView3D {
         const tr = Math.max(0.2, r * 0.08);
         M.compose(new THREE.Vector3(X, Y0 + trunkH / 2, Z), q, new THREE.Vector3(tr, trunkH, tr)); gt.setMatrixAt(i, M);
       });
-      gc.renderOrder = gt.renderOrder = 3; gc.name = 'ghost-trees';
+      gc.renderOrder = gt.renderOrder = 3; gc.name = 'ghost-trees'; gc.userData.list = ghosts;
       g.add(gc, gt);
     }
     g.name = 'trees';
@@ -834,11 +834,11 @@ export class SiteView3D {
   }
   /** What the diagram paint bucket hits: the nearest sketch block, existing building or tree under the cursor.
    *  → { kind: 'mass', id } | { kind: 'bldg', key } | { kind: 'tree', tree } | null */
-  pickPaint(sx, sy) {
+  pickPaint(sx, sy, ghosts = false) {
     const objs = [];
     const sm = this.sketch?.getObjectByName('sketchMass'); if (sm) objs.push(sm);
     if (this.bldg?.visible) objs.push(this.bldg);
-    this.trees?.children.forEach(o => { if (o.name === 'crowns') objs.push(o); });
+    this.trees?.children.forEach(o => { if (o.name === 'crowns' || (ghosts && o.name === 'ghost-trees')) objs.push(o); });
     this.revit?.children.forEach(o => { if (o.name === 'revitBuilding') objs.push(o); });
     if (!objs.length) return null;
     const hit = this._ray(sx, sy).intersectObjects(objs, false)[0];

@@ -8,13 +8,13 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, roundEach, driveJoins } from './parking.js?v=0.64.2';
-import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.64.2';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.64.2';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.64.2';
-import * as SO from './solid.js?v=0.64.2';
-import { noteGeom, WIDTHS } from './notes.js?v=0.64.2';
-import { booleanSolids } from './bool.js?v=0.64.2';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, roundEach, driveJoins } from './parking.js?v=0.65.0';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.65.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.65.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.65.0';
+import * as SO from './solid.js?v=0.65.0';
+import { noteGeom, WIDTHS } from './notes.js?v=0.65.0';
+import { booleanSolids } from './bool.js?v=0.65.0';
 import { CODES, codeFor, spacesFor } from './parking-codes.js?v=0.51.1';
 
 const TOOLS = [
@@ -114,6 +114,21 @@ export function createSketch(ctx) {
   const overlap = (a, b) => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
   const list = kind => sk.model[LISTS[kind]];
   const ex3 = () => (sk.v3 ? ctx.ex3d?.() || 1 : 1);
+  /** One-way arrows along an aisle (native polylines): a shaft and a head every ~40 ft. */
+  function driveArrows(d) {
+    const out = [], ft = perFt(), step = 40 * ft, len = 9 * ft, hw = 2.6 * ft;
+    for (let i = 0; i < d.pts.length - 1; i++) {
+      const a = d.pts[i], b = d.pts[i + 1], L = Math.hypot(b[0] - a[0], b[1] - a[1]); if (L < len * 1.5) continue;
+      const ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L, n = Math.max(1, Math.floor(L / step));
+      for (let k = 0; k < n; k++) {
+        const t = (k + 0.5) * L / n, cx = a[0] + ux * t, cy = a[1] + uy * t, tip = [cx + ux * len / 2, cy + uy * len / 2], tail = [cx - ux * len / 2, cy - uy * len / 2];
+        out.push([tail, tip], [[tip[0] - ux * hw * 1.4 - uy * hw, tip[1] - uy * hw * 1.4 + ux * hw], tip, [tip[0] - ux * hw * 1.4 + uy * hw, tip[1] - uy * hw * 1.4 - ux * hw]]);
+      }
+    }
+    return out;
+  }
+  /** Curb cuts at an aisle's [start, end] (older saves: one boolean for both). */
+  const cutsOf = d => (Array.isArray(d.cut) ? d.cut.slice(0, 2) : [d.cut !== false, d.cut !== false]);
   const zGround = p => { const z = ctx.zAt(p[0], p[1]); return Number.isFinite(z) ? z : 0; };
   const isLine = kind => kind === 'drive' || kind === 'walk';
   const closed = kind => !isLine(kind);
@@ -176,7 +191,7 @@ export function createSketch(ctx) {
   function joins() {
     if (sk.joins?.ver === sk.ver) return sk.joins.J;
     const rAt = d => p => { for (const [k, r] of Object.entries(d.rj || {})) { const [x, y] = k.split(',').map(Number); if (Math.hypot(x - p[0], y - p[1]) < 3 * perFt()) return r * perFt(); } return (d.r ?? 15) * perFt(); };
-    const J = driveJoins(sk.model.drives.map(d => ({ pts: d.pts, w: (d.w || 24) * perFt(), r: (d.r ?? 15) * perFt(), rAt: rAt(d), cut: d.cut !== false })), sk.model.lots.map(l => shapeOf(l)));
+    const J = driveJoins(sk.model.drives.map(d => ({ pts: d.pts, w: (d.w || 24) * perFt(), r: (d.r ?? 15) * perFt(), rAt: rAt(d), cut: cutsOf(d) })), sk.model.lots.map(l => shapeOf(l)));
     sk.joins = { ver: sk.ver, J };
     return J;
   }
@@ -464,7 +479,11 @@ export function createSketch(ctx) {
       for (let i = 0; i < d.pts.length - 1; i++) { path(lanePoly(d.pts[i], d.pts[i + 1], w)); g.fillStyle = siteColor(`d:${d.id}`, 'lot'); g.globalAlpha = 0.9; g.fill(); g.globalAlpha = 1; }
     }
     for (const W of J.wedges) { path(W); g.fillStyle = colorOf(scheme(), 'lot'); g.globalAlpha = 0.9; g.fill(); g.globalAlpha = 1; }
-    for (const d of sk.model.drives) { path(d.pts, false); g.setLineDash([8, 6]); g.strokeStyle = '#fde047'; g.lineWidth = 1.5; g.stroke(); g.setLineDash([]); }
+    for (const d of sk.model.drives) {
+      if (!d.oneWay) { path(d.pts, false); g.setLineDash([8, 6]); g.strokeStyle = '#fde047'; g.lineWidth = 1.5; g.stroke(); g.setLineDash([]); }
+      else for (const ar of driveArrows(d)) { path(ar, false); g.strokeStyle = '#ffffff'; g.lineWidth = 2.2; g.stroke(); }
+      if (sk.sel?.id === d.id) for (const [p, t] of [[d.pts[0], 'S'], [d.pts[d.pts.length - 1], 'E']]) { const q = scr(p); if (!q) continue; g.font = 'bold 11px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = 'rgba(15,23,42,.85)'; g.beginPath(); g.arc(q[0], q[1] - 14, 8, 0, Math.PI * 2); g.fill(); g.fillStyle = '#fff'; g.fillText(t, q[0], q[1] - 14); }
+    }
     for (const [a, b] of J.cuts) { path([a, b], false); g.strokeStyle = '#ffffff'; g.lineWidth = 3; g.setLineDash([4, 3]); g.stroke(); g.setLineDash([]); }
     for (const isl of sk.model.islands) { path(shapeOf(isl, 'island')); g.fillStyle = siteColor(`i:${isl.id}`, 'green'); g.fill(); g.strokeStyle = sk.sel?.id === isl.id ? ORANGE : 'rgba(20,83,45,0.8)'; g.lineWidth = sk.sel?.id === isl.id ? 2.5 : 1.2; g.stroke(); }
     for (const l of sk.model.lots) {
@@ -803,7 +822,12 @@ export function createSketch(ctx) {
     if (kind === 'drive') {
       return `<div class="skc-row"><span>Drive aisle</span>${num('w', o.w || 24, 10, 60, 1)}<span>${uLen()} wide</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div>
         <div class="skc-row"><span title="Curb return where it meets a lot or another aisle, and at curb cuts">Turn radius</span>${num('r', o.r ?? 15, 0, 60, 1, 42)}<span>${uLen()}</span>
-          <label class="skc-chk" title="Flared apron and depressed curb where an end leaves all paving (at the street)"><input type="checkbox" data-k="cut"${o.cut !== false ? ' checked' : ''}> Curb cut at street end</label></div>
+</div>
+        <div class="skc-row"><span title="Flared apron and depressed curb where an end leaves all paving (at the street)">Curb cut</span>
+          <label class="skc-chk" title="The end you started drawing from (marked S)"><input type="checkbox" data-k="cut0"${cutsOf(o)[0] ? ' checked' : ''}> start</label>
+          <label class="skc-chk" title="The end you finished drawing at (marked E)"><input type="checkbox" data-k="cut1"${cutsOf(o)[1] ? ' checked' : ''}> end</label></div>
+        <div class="skc-row"><label class="skc-chk" title="Traffic one way — arrows on the aisle"><input type="checkbox" data-k="oneWay"${o.oneWay ? ' checked' : ''}> One way</label>
+          ${o.oneWay ? '<button type="button" data-k="flipDir" title="Turn the arrows around">⇄ reverse</button>' : ''}</div>
         <div class="skc-row skc-read" data-o="read"></div>`;
     }
     if (kind === 'revit') return `<div class="skc-row"><b>${escapeHtml(o.name || 'Revit building')}</b><span class="skc-read">from Revit ${escapeHtml(o.at || '')}</span><button type="button" data-k="del" title="Remove it from the site (Del)">🗑</button></div>
@@ -825,7 +849,7 @@ export function createSketch(ctx) {
     for (const q of pts) { if (!q) continue; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; }
     if (!Number.isFinite(x1)) { cardEl.hidden = true; return; }
     const W = cardEl.parentElement.clientWidth, H = cardEl.parentElement.clientHeight;
-    const sig = `${kind}:${o.id}:${sk.sel2?.id || ''}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use, o.color, o.stand, o.curve, o.size, o.r, o.cut, o.islandR, !!o.accAt, o.d, o.h, o.form, o.gfa])}`;
+    const sig = `${kind}:${o.id}:${sk.sel2?.id || ''}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use, o.color, o.stand, o.curve, o.size, o.r, o.cut, o.oneWay, o.islandR, !!o.accAt, o.d, o.h, o.form, o.gfa])}`;
     if (cardEl.dataset.sig !== sig && !cardEl.contains(document.activeElement)) { cardEl.dataset.sig = sig; cardEl.innerHTML = cardHtml(kind, o); }
     const read = cardEl.querySelector('[data-o="read"]') || {};
     if (kind === 'note') { /* nothing to read out */ } else if (kind === 'mass') {
@@ -858,6 +882,7 @@ export function createSketch(ctx) {
     if (k.startsWith('bool-')) { combine(k.slice(5)); return; }
     if (k === 'fl-' || k === 'fl+') { before(); if (floorsBy(o, k === 'fl+' ? 1 : -1)) { remember(o); changed(true); } else sk.undo.pop(); }
     if (k === 'accAuto') { before(); delete o.accAt; changed(true); }
+    if (k === 'flipDir') { before(); o.pts = o.pts.slice().reverse(); if (Array.isArray(o.cut)) o.cut = [o.cut[1], o.cut[0]]; changed(true); }
     if (k === 'rv-fit' || k === 'rv-ground') {
       const I = rvInfo(o), [x0, y0, x1, y1] = I.bb, box = ctx.siteBox?.();
       before();
@@ -918,7 +943,8 @@ export function createSketch(ctx) {
     if (k === 'form' && sk.sel.kind === 'tree') { o.form = t.value; sk.treeForm = t.value; }
     if (k === 'gfa' && sk.sel.kind === 'revit') o.gfa = Math.max(0, v || 0);
     if (k === 'r') o.r = Math.max(0, Number.isFinite(v) ? v : 0);
-    if (k === 'cut') o.cut = t.checked;
+    if (k === 'cut0' || k === 'cut1') { const c = cutsOf(o); c[k === 'cut0' ? 0 : 1] = t.checked; o.cut = c; }
+    if (k === 'oneWay') { o.oneWay = t.checked; t.blur(); }
     if (k === 'islandR') o.islandR = Math.max(0, Number.isFinite(v) ? v : 0);
     if (sk.sel.kind === 'mass') remember(o);
     cardEl.dataset.sig = '';
@@ -2362,6 +2388,7 @@ export function createSketch(ctx) {
       tess(shapeOf(pl), arr, 0.08);
     }
     for (const [a, b] of J.cuts) lines.push(a[0], a[1], z(...a) + 0.1, b[0], b[1], z(...b) + 0.1);
+    for (const d of sk.model.drives) if (d.oneWay) for (const ar of driveArrows(d)) for (let i = 0; i < ar.length - 1; i++) { const [p, q] = [ar[i], ar[i + 1]]; lines.push(p[0], p[1], z(...p) + 0.1, q[0], q[1], z(...q) + 0.1); }
     if (lotPave.length) extra.unshift({ tris: lotPave, color: colorOf(scheme(), 'lot'), role: 'paving' });
     return { lines, acc, islands, drives, marks, extra, stripe: colorOf(scheme(), 'stripe'), accColor: colorOf(scheme(), 'accessible'), lotColor: colorOf(scheme(), 'lot'), greenColor: colorOf(scheme(), 'green') };
   }

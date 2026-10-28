@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.64.2">
+  <link rel="stylesheet" href="css/app.css?v=0.65.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -233,6 +233,7 @@
             <summary data-tip="grading"><span class="num">1</span><span class="st-title">Grading tools</span><span class="st-sum" id="sum-tool"></span></summary>
             <div class="step-body">
               <div class="tool-grid" role="radiogroup" aria-label="Grading tool">
+                <button type="button" class="tool" data-tool="select" title="Select — click a pad, wall, slope or swale to edit it; drag it or its handles to move it"><svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 1.5L10 19z"/></svg><span>Select</span></button>
                 <button type="button" class="tool" data-tool="raise" title="Raise ground (fill) — brush"><svg viewBox="0 0 24 24"><path d="M3 19c4 0 5-8 9-8s5 8 9 8"/><path d="M12 8V2M9 5l3-3 3 3"/></svg><span>Raise</span></button>
                 <button type="button" class="tool" data-tool="lower" title="Lower ground (cut) — brush"><svg viewBox="0 0 24 24"><path d="M3 9c4 0 5 8 9 8s5-8 9-8"/><path d="M12 2v6M9 5l3 3 3-3"/></svg><span>Lower</span></button>
                 <button type="button" class="tool" data-tool="flatten" title="Flatten to a target elevation — brush"><svg viewBox="0 0 24 24"><path d="M3 18c3 0 4-4 6-4h6c2 0 3 4 6 4"/><path d="M8 10h8"/></svg><span>Flatten</span></button>
@@ -556,6 +557,7 @@
         <section class="set-sec" data-sec="design">
           <h4 class="set-h">Display</h4>
               <label class="check"><input type="checkbox" id="dz-show-exist" checked><span>Show existing contours (grey)</span></label>
+              <label class="check"><input type="checkbox" id="dz-show-trees" checked><span>Show trees clearly in plan (the map layers are dimmed while designing)</span></label>
               <label class="check"><input type="checkbox" id="dz-show-labels" checked><span>Contour labels</span></label>
               <label class="check"><input type="checkbox" id="dz-show-cursor" checked><span>Elevation at the cursor</span></label>
               <label class="check"><input type="checkbox" id="dz-show-cf" checked><span>Show cut / fill colors</span></label>
@@ -606,7 +608,7 @@
 
     <main class="stage">
       <div class="view-tabs" role="tablist">
-        <button role="tab" class="tab active" data-view="map" aria-selected="true">Map</button>
+        <button role="tab" class="tab active" data-view="map" aria-selected="true">Plan</button>
         <button role="tab" class="tab" data-view="preview" aria-selected="false" disabled>Preview</button>
         <button role="tab" class="tab" data-view="3d" aria-selected="false" disabled title="Orbit the site in 3D">3D</button>
         <span class="tab-sep" aria-hidden="true"></span>
@@ -696,6 +698,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.64.2"></script>
+  <script type="module" src="js/app.js?v=0.65.0"></script>
 </body>
 </html>

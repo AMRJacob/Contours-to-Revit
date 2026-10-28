@@ -1,25 +1,25 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.64.2';
-import { fetchElevation, sample } from './dem.js?v=0.64.2';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.64.2';
-import { Dxf } from './dxf.js?v=0.64.2';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.64.2';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.64.2';
-import { Flow } from './flow.js?v=0.64.2';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.65.0';
+import { fetchElevation, sample } from './dem.js?v=0.65.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.65.0';
+import { Dxf } from './dxf.js?v=0.65.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.65.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.65.0';
+import { Flow } from './flow.js?v=0.65.0';
 import { placeAt } from './parking-codes.js?v=0.51.1';
-import { createSketch } from './sketch.js?v=0.64.2';
-import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.64.2';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.64.2';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT, WindFlow, SHELTER, SHELTER_SRC, SHELTER_URL, wallCp, kzRel } from './wind.js?v=0.64.2';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.64.2';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.64.2';
-import { loadLidar, applyLidar } from './lidar.js?v=0.64.2';
-import { findTrees } from './trees.js?v=0.64.2';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.64.2';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.64.2';
+import { createSketch } from './sketch.js?v=0.65.0';
+import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.65.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.65.0';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT, WindFlow, SHELTER, SHELTER_SRC, SHELTER_URL, wallCp, kzRel } from './wind.js?v=0.65.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.65.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.65.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.65.0';
+import { findTrees } from './trees.js?v=0.65.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.65.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.65.0';
 
-const VERSION = '0.64.2';
+const VERSION = '0.65.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -2441,9 +2441,9 @@ const SHAPES = ['slope', 'wall', 'pad', 'swale'];
 const PATHS = ['slope', 'swale'];
 const BRUSHES = ['raise', 'lower', 'flatten', 'smooth'];
 const DEMO = ['trees', 'bldgs'];   // remove-brushes (trees, buildings)
-const DZ_DEFAULTS = { amount: 2, size: 25, soft: 60, strength: 50, slope: 2, width: 20, wheight: 4, wthick: 1, shelf: 10, front: 5, wside: 'left', wmode: 'fill', welev: 'ground', ratio: 3, pshape: 'rect', psmooth: false, treeAuto: 'half', treeShow: true, path: 'line', sslope: 1, swidth: 10, sdepth: 1, smode: 'exact' };
+const DZ_DEFAULTS = { amount: 2, size: 25, soft: 60, strength: 50, slope: 2, width: 20, wheight: 4, wthick: 1, shelf: 10, front: 5, wside: 'left', wmode: 'fill', welev: 'ground', ratio: 3, pshape: 'rect', psmooth: false, treeAuto: 'half', treeShow: true, showTrees: true, path: 'line', sslope: 1, swidth: 10, sdepth: 1, smode: 'exact' };
 const dz = {
-  mode: 'existing', tool: 'raise', design: null, site: null,
+  mode: 'existing', tool: 'select', design: null, site: null,
   exist: null, prop: null, raster: null,
   lastContour: 0, raf: 0, contourVer: -1,
   cursor: null, stroking: false, last: null, spaceDown: false,
@@ -2710,6 +2710,15 @@ function dzDraw() {
   ctx.strokeStyle = 'rgba(232,145,63,0.9)'; ctx.lineWidth = 1.5 * px; ctx.setLineDash([6 * px, 4 * px]);
   ctx.strokeRect(site.box.xmin, site.box.ymin, site.box.xmax - site.box.xmin, site.box.ymax - site.box.ymin);
   ctx.setLineDash([]);
+  // Trees, full strength (the map's own layers are dimmed while designing) — always while removing trees.
+  if ((dz.params.showTrees !== false || dz.tool === 'trees') && visibility.trees) {
+    const gone = treesRemoved();
+    ctx.beginPath();
+    for (const t of site.context?.trees || []) { if (gone.has(treeKey(t))) continue; ctx.moveTo(t.x + t.r, t.y); ctx.arc(t.x, t.y, t.r, 0, Math.PI * 2); }
+    ctx.fillStyle = 'rgba(22,163,74,0.32)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.45)'; ctx.lineWidth = 2.6 * px; ctx.stroke();
+    ctx.strokeStyle = '#4ade80'; ctx.lineWidth = 1.2 * px; ctx.stroke();
+  }
   // Removed trees, full strength here (the map's own layers are dimmed while designing).
   const rmSet = dz.params.treeShow !== false ? treesRemoved() : TREE_EMPTY;
   if (rmSet.size) {
@@ -3320,8 +3329,27 @@ function dzTreeDown(ev) {
   dzTreeMove(ev);
 }
 /** Brush hover: highlight what the brush would remove (or bring back, with Shift); while dragging, do it. */
+/** Brush radius on screen at a ground point (3D). */
+function dzBrushPx(xy) {
+  if (!xy) return 20;
+  const R = dz.params.size / (dz.site.toOut || 1), a = dzScr(xy[0], xy[1]), b = dzScr(xy[0] + R, xy[1]), c = dzScr(xy[0], xy[1] + R);
+  const r = Math.max(Math.hypot(b[0] - a[0], b[1] - a[1]) || 0, Math.hypot(c[0] - a[0], c[1] - a[1]) || 0);
+  return Math.max(6, Math.min(300, r || 20));
+}
+/** 3D: what the brush covers on screen — rays through the brush circle hit the trees / buildings you see. */
+function dzDemoKeys3d(ev, kind) {
+  const c = ev.cp, R = dzBrushPx(ev.xy), keys = new Set(), pts = [[0, 0]];
+  for (const [f, n] of [[0.35, 6], [0.7, 12], [1, 18]]) for (let i = 0; i < n; i++) { const a = i / n * 2 * Math.PI; pts.push([Math.cos(a) * R * f, Math.sin(a) * R * f]); }
+  for (const [dx, dy] of pts) {
+    const h = v3.pickPaint(c.x + dx, c.y + dy, true); if (!h) continue;
+    if (kind === 'trees' && h.kind === 'tree' && !h.tree.sketch) keys.add(treeKey(h.tree));
+    if (kind === 'bldgs' && h.kind === 'bldg') keys.add(h.key);
+  }
+  return [...keys];
+}
 function dzTreeMove(ev) {
-  const st = dz.tstroke, kind = st?.kind || dz.tool, keys = dzDemoKeysAt(ev.xy, kind), restore = st ? !st.remove : !!ev.shift;
+  const st = dz.tstroke, kind = st?.kind || dz.tool, in3 = dzIn3d(), keys = in3 ? dzDemoKeys3d(ev, kind) : dzDemoKeysAt(ev.xy, kind), restore = st ? !st.remove : !!ev.shift;
+  dz.cp3 = in3 ? { x: ev.cp.x, y: ev.cp.y, r: dzBrushPx(ev.xy) } : null;
   dz.demoHover = { kind, keys: new Set(keys), restore };
   if (st) {
     for (const k of keys) {
@@ -3527,6 +3555,7 @@ function dzSyncUi() {
 }
 
 const TOOL_HINTS = {
+  select: 'Click a pad, wall, slope or swale to edit it — drag it, or its handles, to move it. Click empty ground to let go.',
   raise: 'Drag to raise the ground — at most the height change per stroke.',
   lower: 'Drag to lower the ground — at most the height change per stroke.',
   flatten: 'Drag to flatten to the target elevation. First click (or Alt+click) samples it.',
@@ -3542,7 +3571,7 @@ const TOOL_HINTS = {
 function dzApplyTool() {
   const t = dz.tool;
   document.querySelectorAll('.dz-bar [data-tool]').forEach(b => { const on = b.dataset.tool === t; b.classList.toggle('active', on); b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); });
-  const tOpt = document.getElementById('dz-opts-t'); if (tOpt) tOpt.textContent = { raise: 'Raise', lower: 'Lower', flatten: 'Flatten', smooth: 'Smooth', slope: 'Slope', wall: 'Wall', pad: 'Pad', swale: 'Swale', trees: 'Remove trees', bldgs: 'Remove buildings' }[t] || '';
+  const tOpt = document.getElementById('dz-opts-t'); if (tOpt) tOpt.textContent = { select: 'Select', raise: 'Raise', lower: 'Lower', flatten: 'Flatten', smooth: 'Smooth', slope: 'Slope', wall: 'Wall', pad: 'Pad', swale: 'Swale', trees: 'Remove trees', bldgs: 'Remove buildings' }[t] || '';
   const brush = BRUSHES.includes(t);
   $('f-amount').hidden = !(t === 'raise' || t === 'lower');
   $('f-target').hidden = t !== 'flatten';
@@ -3558,6 +3587,7 @@ function dzApplyTool() {
   $('f-bldgs').hidden = t !== 'bldgs';
   $('f-ratio').hidden = !(t === 'wall' || t === 'pad' || t === 'swale');
   const selF = dz.sel && dz.design?.feature(dz.sel);
+  dzOpts.classList.toggle('dz-opts-empty', t === 'select');
   $('tool-hint').innerHTML = selF && selF.type === t
     ? `<strong>Editing ${FEATURE_NAMES[t]} — changes apply to it.</strong> Drag its handles or body to move it. <kbd>Esc</kbd> to stop editing.`
     : TOOL_HINTS[t];
@@ -3568,27 +3598,28 @@ function dzApplyTool() {
   $('sum-tool').textContent = {
     raise: `raise ${dz.params.amount} ${u}`, lower: `lower ${dz.params.amount} ${u}`,
     flatten: dz.target != null ? `flatten to ${dz.target.toFixed(1)}` : 'flatten', smooth: 'smooth',
-    trees: 'remove trees', bldgs: 'remove buildings',
+    trees: 'remove trees', bldgs: 'remove buildings', select: 'select',
     slope: `slope ${SMODE_SIGN[dz.params.smode || 'exact']}${dz.params.slope}%`, swale: `swale ${dz.params.sslope}% · ${dz.params.swidth} ${u} wide`, wall: `wall ${dz.params.wheight} ${u}`, pad: dz.padElev != null ? `pad at ${dz.padElev.toFixed(1)}` : 'pad',
   }[t];
   dzDraw();
   dzBarShow();
 }
 document.querySelectorAll('.tool').forEach(b => b.addEventListener('click', () => {
+  dz.fromSelect = false;
   if (dz.sel && dz.design?.feature(dz.sel)?.type !== b.dataset.tool) dz.sel = null;
   dz.tool = b.dataset.tool;
   dzApplyTool(); dzFeatureList();
 }));
 
 // ----- Grading toolbar on the map (like the Sketch toolbar) with the tool's options beside it -----
-const DZ_KEYS = { raise: 'R', lower: 'L', flatten: 'F', smooth: 'M', slope: 'S', wall: 'W', pad: 'P', swale: 'D', trees: 'X', bldgs: 'B' };
+const DZ_KEYS = { select: 'V', raise: 'R', lower: 'L', flatten: 'F', smooth: 'M', slope: 'S', wall: 'W', pad: 'P', swale: 'D', trees: 'X', bldgs: 'B' };
 var dzBar = document.createElement('div'); dzBar.className = 'sketch-bar dz-bar'; dzBar.hidden = true;
 var dzOpts = document.createElement('div'); dzOpts.className = 'dz-opts'; dzOpts.hidden = true;
 {
   const grid = document.querySelector('.tool-grid');
   const grp = name => { const g = document.createElement('div'); g.className = 'sk-grp'; g.textContent = name; dzBar.appendChild(g); };
   [...grid.querySelectorAll('.tool')].forEach((b, i) => {
-    if (i === 0) grp('Brush'); if (i === 4) grp('Grade'); if (i === 8) grp('Site');
+    if (i === 1) grp('Brush'); if (i === 5) grp('Grade'); if (i === 9) grp('Site');
     b.classList.remove('tool'); b.classList.add('sk-tool');
     b.dataset.tipText = `${b.getAttribute('title')} (${DZ_KEYS[b.dataset.tool]})`; b.removeAttribute('title');
     b.insertAdjacentHTML('beforeend', `<kbd>${DZ_KEYS[b.dataset.tool]}</kbd>`);
@@ -3689,7 +3720,25 @@ function dzDraw3d() {
   }
   if (dz.poly && path([...dz.poly.pts, ...(dz.cursor ? [dz.cursor] : [])], false)) g.stroke();
   g.setLineDash([]);
-  if (dz.cursor && (BRUSHES.includes(dz.tool) || DEMO.includes(dz.tool)) && !dz.edit) {
+  if (DEMO.includes(dz.tool) && dz.cp3) {
+    // Remove brushes in 3D: outline what's picked where you see it, and the brush as a circle on screen.
+    const hov = dz.demoHover, col = hov?.restore ? '#4ade80' : '#f87171', ex = v3.ex || 1, P = (x, y, z) => v3.project(x, y, z);
+    if (hov?.keys.size) {
+      g.lineWidth = 2.5; g.strokeStyle = col; g.fillStyle = hov.restore ? 'rgba(74,222,128,.22)' : 'rgba(239,68,68,.25)';
+      if (hov.kind === 'trees') for (const t of dz.site.context?.trees || []) {
+        if (!hov.keys.has(treeKey(t))) continue;
+        const zc = t.z + t.h * 0.62 / ex, a = P(t.x, t.y, zc), b = P(t.x + t.r, t.y, zc), b2 = P(t.x, t.y + t.r, zc), top = P(t.x, t.y, t.z + t.h / ex);
+        if (!a || !b) continue;
+        const rx = Math.max(4, Math.hypot(b[0] - a[0], b[1] - a[1]), b2 ? Math.hypot(b2[0] - a[0], b2[1] - a[1]) : 0), ry = Math.max(4, top ? Math.abs(a[1] - top[1]) * 0.75 : rx);
+        g.beginPath(); g.ellipse(a[0], a[1], rx, ry, 0, 0, Math.PI * 2); g.fill(); g.stroke();
+      } else for (const b of shownBuildings(dz.site)) {
+        if (!hov.keys.has(bldgKey(b))) continue;
+        const top = b.base + (b.top - b.base) / ex;
+        for (const z of [b.base, top]) { const Q = b.ring.map(([x, y]) => P(x, y, z)); if (Q.some(q => !q)) continue; g.beginPath(); Q.forEach((q, i) => (i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]))); g.closePath(); if (z === top) g.fill(); g.stroke(); }
+      }
+    }
+    g.beginPath(); g.arc(dz.cp3.x, dz.cp3.y, dz.cp3.r, 0, Math.PI * 2); g.strokeStyle = 'rgba(0,0,0,.5)'; g.lineWidth = 4; g.stroke(); g.strokeStyle = col; g.lineWidth = 2; g.setLineDash([5, 3]); g.stroke(); g.setLineDash([]);
+  } else if (dz.cursor && (BRUSHES.includes(dz.tool) || DEMO.includes(dz.tool)) && !dz.edit) {
     const col = { raise: '#4ade80', lower: '#f87171', flatten: '#facc15', smooth: '#e5e7eb', trees: dz.demoHover?.restore ? '#4ade80' : '#f87171', bldgs: dz.demoHover?.restore ? '#4ade80' : '#f87171' }[dz.tool];
     if (path(circle(dz.cursor, dz.params.size / dz.site.toOut), true)) { g.strokeStyle = 'rgba(0,0,0,.5)'; g.lineWidth = 4; g.stroke(); g.strokeStyle = col; g.lineWidth = 2; g.stroke(); }
   }
@@ -3777,6 +3826,8 @@ document.querySelectorAll('#slope-chips button').forEach(b => b.addEventListener
 document.querySelectorAll('input[name="smode"]').forEach(r => r.addEventListener('change', () => { dz.params.smode = r.value; dzFieldsChanged(); }));
 document.querySelectorAll('#dz-body input, #dz-body select').forEach(el => el.addEventListener('blur', () => { dz.fieldCheckpoint = false; }));
 $('dz-show-exist').addEventListener('change', e => { dz.showExist = e.target.checked; dzDraw(); });
+$('dz-show-trees').checked = dz.params.showTrees !== false;
+$('dz-show-trees').addEventListener('change', e => { dz.params.showTrees = e.target.checked; saveDzParams(); dzDraw(); });
 $('dz-tree-auto').value = dz.params.treeAuto || 'half';
 $('dz-tree-auto').addEventListener('change', e => { dz.params.treeAuto = e.target.value; saveDzParams(); dzTreeChanged(); });
 for (const id of ['dz-tree-show', 'dz-bldg-show', 'dz-show-demo']) {
@@ -3914,6 +3965,18 @@ function dzDown(ev) {
     return;
   }
   if (dz.tool === 'trees' || dz.tool === 'bldgs') { dzTreeDown(ev); return; }
+  // Select tool (and editing what it picked): pick / move features only — never draws or sculpts.
+  if (dz.tool === 'select' || dz.fromSelect) {
+    const h = dz.design.features.length ? dzHit(ev.cp) : null;
+    if (h) {
+      if (dz.sel !== h.f.id) dzSelect(h.f.id);
+      dz.fromSelect = true;
+      dz.edit = { id: h.f.id, handle: h.handle, from: xy, geom0: JSON.parse(JSON.stringify(h.f.geom)), p0: { ...h.f.p }, moved: false, pivot: h.pivot, cursorS: [ev.cp.x, ev.cp.y], angle: 0 };
+      return;
+    }
+    dz.sel = null; dz.tool = 'select'; dz.fromSelect = false; dzApplyTool(); dzFeatureList();
+    return;
+  }
   // Features: drag a handle of the selected one, or (with a shape tool) select / move one.
   const hit = dz.design.features.length ? dzHit(ev.cp) : null;
   if (hit && (shapeTool || hit.edge)) {
@@ -4012,7 +4075,7 @@ function dzMove(ev) {
     const hit = dzHit(ev.cp), el = dzIn3d() ? v3.el : map.getContainer();
     el.classList.toggle('over-handle', !!hit && hit.handle >= 0);
     el.classList.toggle('over-rotate', !!hit && hit.handle === 'rot');
-    el.classList.toggle('over-feature', !!hit && hit.handle < 0 && (hit.edge || SHAPES.includes(dz.tool)));
+    el.classList.toggle('over-feature', !!hit && hit.handle < 0 && (hit.edge || SHAPES.includes(dz.tool) || dz.tool === 'select' || dz.fromSelect));
   }
   dzReadout(xy);
   dzRefresh();
@@ -4084,7 +4147,7 @@ map.on('zoomend', () => { dzCanvas.style.visibility = ''; if (dz.mode === 'desig
 const typing = e => /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName) && e.target.type !== 'range' && e.target.type !== 'checkbox' && e.target.type !== 'radio';
 document.addEventListener('keydown', e => {
   if (dz.mode !== 'design') return;
-  if (e.key === 'Escape') { if (dz.poly) { dz.poly = null; dzDraw(); } else if (dz.drawing) { dz.drawing = null; dzDraw(); } else if (dz.sel) { dz.sel = null; dzApplyTool(); dzFeatureList(); } if (typing(e)) e.target.blur(); return; }
+  if (e.key === 'Escape') { if (dz.poly) { dz.poly = null; dzDraw(); } else if (dz.drawing) { dz.drawing = null; dzDraw(); } else if (dz.sel) { dz.sel = null; if (dz.fromSelect) { dz.tool = 'select'; dz.fromSelect = false; } dzApplyTool(); dzFeatureList(); } if (typing(e)) e.target.blur(); return; }
   if (typing(e)) { if (e.key === 'Enter') e.target.blur(); return; }
   if (e.code === 'Space' && !dz.spaceDown) { dz.spaceDown = true; dzApplyTool(); e.preventDefault(); return; }
   if (!e.ctrlKey && !e.metaKey && !e.altKey && !dz.poly && !dz.drawing) {
