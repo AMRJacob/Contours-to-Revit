@@ -1,25 +1,25 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.66.0';
-import { fetchElevation, sample } from './dem.js?v=0.66.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.66.0';
-import { Dxf } from './dxf.js?v=0.66.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.66.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.66.0';
-import { Flow } from './flow.js?v=0.66.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.66.1';
+import { fetchElevation, sample } from './dem.js?v=0.66.1';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.66.1';
+import { Dxf } from './dxf.js?v=0.66.1';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.66.1';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.66.1';
+import { Flow } from './flow.js?v=0.66.1';
 import { placeAt } from './parking-codes.js?v=0.51.1';
-import { createSketch } from './sketch.js?v=0.66.0';
-import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.66.0';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.66.0';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT, WindFlow, SHELTER, SHELTER_SRC, SHELTER_URL, wallCp, kzRel } from './wind.js?v=0.66.0';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.66.0';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.66.0';
-import { loadLidar, applyLidar } from './lidar.js?v=0.66.0';
-import { findTrees } from './trees.js?v=0.66.0';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.66.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.66.0';
+import { createSketch } from './sketch.js?v=0.66.1';
+import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.66.1';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.66.1';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT, WindFlow, SHELTER, SHELTER_SRC, SHELTER_URL, wallCp, kzRel } from './wind.js?v=0.66.1';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.66.1';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.66.1';
+import { loadLidar, applyLidar } from './lidar.js?v=0.66.1';
+import { findTrees } from './trees.js?v=0.66.1';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.66.1';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.66.1';
 
-const VERSION = '0.66.0';
+const VERSION = '0.66.1';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -2539,7 +2539,7 @@ const sketch = createSketch({
   siteBox: () => state.result?.box || null,
   unitsPerFt: site => zoneUnitsPerMeter(site.zone) * 0.3048,
   mode: () => dz.mode,
-  onChange: () => { projTouch(); syncWalkGrades(); v3Dirty(); if (sunS?.on) sunLater(); dgMapStyle(); if (windS?.on) windKick(); if (dz.mode === 'design') dzDraw(); },
+  onChange: () => { projTouch(); syncWalkGrades(); try { dzTreeSummary(); } catch { /* (before the design is set up) */ } v3Dirty(); if (sunS?.on) sunLater(); dgMapStyle(); if (windS?.on) windKick(); if (dz.mode === 'design') dzDraw(); },
   // Diagram paint bucket: keys for existing trees and buildings, and what's under a plan point.
   treeKey: t => treeKey(t),
   pickContext: (xy, kind) => pickContext(xy, kind),
@@ -3259,7 +3259,7 @@ function treesRemovedInfo() {
   const trees = site.context?.trees || [], mode = dz.params.treeAuto || 'half';
   const key = `${des.version}|${des.treeVer || 0}|${mode}|${trees.length}|${des.features.length}|${sketch.version}`;
   if (treeRm?.key === key && treeRm.site === site && treeRm.des === des) return treeRm;
-  const auto = new Set(), set = new Set(), g = site.grid, D = des.delta, thr = site.units === 'm' ? 0.03 : 0.1;
+  const auto = new Set(), pave = new Set(), set = new Set(), g = site.grid, D = des.delta, thr = site.units === 'm' ? 0.03 : 0.1;
   if (mode !== 'off' && des.changed) for (const t of trees) {
     // Grade change (≥ 0.1 ft) within the tree's root zone: half the crown by default (setting).
     const rad = Math.max(g.s * 0.75, mode === 'trunk' ? 0 : t.r * (mode === 'crown' ? 1 : 0.5));
@@ -3281,12 +3281,12 @@ function treesRemovedInfo() {
       const k = treeKey(t); if (auto.has(k)) continue;
       if (keep.some(P => P?.length > 2 && inRingXY(P, t.x, t.y))) continue;
       const rad = mode === 'trunk' ? 0 : t.r * (mode === 'crown' ? 1 : 0.5);
-      if (PB.some(({ P, b }) => t.x >= b[0] - rad && t.x <= b[2] + rad && t.y >= b[1] - rad && t.y <= b[3] + rad && (inRingXY(P, t.x, t.y) || (rad > 0 && segD(t.x, t.y, P) <= rad)))) auto.add(k);
+      if (PB.some(({ P, b }) => t.x >= b[0] - rad && t.x <= b[2] + rad && t.y >= b[1] - rad && t.y <= b[3] + rad && (inRingXY(P, t.x, t.y) || (rad > 0 && segD(t.x, t.y, P) <= rad)))) { auto.add(k); pave.add(k); }
     }
   }
   for (const k of auto) if (!des.treesKeep.has(k)) set.add(k);
   for (const k of des.treesOut) set.add(k);
-  treeRm = { key, site, des, set, auto };
+  treeRm = { key, site, des, set, auto, pave };
   return treeRm;
 }
 function treesRemoved() { return treesRemovedInfo()?.set || TREE_EMPTY; }
@@ -3374,8 +3374,9 @@ function dzTreeSummary() {
   const info = treesRemovedInfo(), tot = dz.site?.context?.trees?.length || 0;
   if (!tot) el.textContent = 'No lidar trees on this site (Site › Trees).';
   else {
-  const n = info?.set.size || 0, a = info ? [...info.set].filter(k => info.auto.has(k)).length : 0, kept = dz.design?.treesKeep.size || 0;
-  el.textContent = `${n} of ${tot} trees removed${a ? ` — ${a} because the grade changes under them` : ''}${kept ? `; ${kept} kept by hand` : ''}.`;
+  const n = info?.set.size || 0, pv = info ? [...info.set].filter(k => info.pave.has(k)).length : 0, a = info ? [...info.set].filter(k => info.auto.has(k)).length - pv : 0, kept = dz.design?.treesKeep.size || 0;
+  const why = [a ? `${a} where the grade changes` : '', pv ? `${pv} under parking paving` : ''].filter(Boolean).join(', ');
+  el.textContent = `${n} of ${tot} trees removed${why ? ` — ${why}` : ''}${kept ? `; ${kept} kept by hand` : ''}.`;
   }
   const eb = $('dz-bldg-n'); if (eb && dz.site) { const nb = shownBuildings(dz.site).filter(b => bldgsRemoved().has(bldgKey(b))).length; eb.textContent = `${nb} of ${shownBuildings(dz.site).length} buildings removed (layers shown on the map).`; }
 }
@@ -3492,6 +3493,7 @@ function setMode(mode) {
   map.getContainer().classList.toggle('diagram-view', diagramOn);
   dgFade();
   dgMapStyle();
+  try { dzTreeSummary(); } catch { /* (before the design is set up) */ }
   map.getContainer().classList.toggle('sketch-mode', sketchOn);
   document.querySelectorAll('.mode').forEach(b => { const on = b.dataset.mode === mode; b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on)); });
   const design = mode === 'design';
