@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.44.0">
+  <link rel="stylesheet" href="css/app.css?v=0.45.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -296,7 +296,7 @@
               <p class="hint" id="sk-hint"></p>
               <div id="sk-stats"></div>
               <div class="sk-list" id="sk-list"></div>
-              <p class="hint">Keys: <kbd>V</kbd> select · <kbd>M</kbd> shapes (<kbd>1</kbd>–<kbd>5</kbd>) · <kbd>L</kbd> draw · <kbd>U</kbd> push/pull · <kbd>S</kbd> slope · <kbd>P</kbd> parking · <kbd>I</kbd> island · <kbd>D</kbd> drive aisle · <kbd>Ctrl</kbd>+drag move a point / edge / face (<kbd>Shift</kbd> up-down) · <kbd>↑</kbd><kbd>↓</kbd> floors / slide rows · <kbd>R</kbd> roof · <kbd>[</kbd><kbd>]</kbd> turn rows · <kbd>Alt</kbd>+drag duplicate · <kbd>Del</kbd> · <kbd>Ctrl</kbd>+<kbd>Z</kbd>. Sketches save with the site and with projects.</p>
+              <p class="hint">Keys: <kbd>V</kbd> select · <kbd>M</kbd> shapes (<kbd>1</kbd>–<kbd>5</kbd>) · <kbd>L</kbd> draw · <kbd>U</kbd> push/pull · <kbd>S</kbd> slope · <kbd>P</kbd> parking · <kbd>I</kbd> island · <kbd>D</kbd> drive aisle · <kbd>Ctrl</kbd>+drag move a point / edge / face (<kbd>Shift</kbd> up-down) · <kbd>↑</kbd><kbd>↓</kbd> floors / slide rows · <kbd>R</kbd> roof · <kbd>[</kbd><kbd>]</kbd> turn rows · <kbd>Alt</kbd>+drag duplicate · <kbd>Del</kbd> · <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd> undo / redo. Drawing snaps to corners, midpoints, edges, parcel lines and buildings, and lines pull square to what's already drawn — <kbd>Shift</kbd> locks square, hold <kbd>Alt</kbd> to draw without snapping. Sketches save with the site and with projects.</p>
             </div>
           </details>
           <details class="step" data-tone="settings">
@@ -317,7 +317,7 @@
             <summary><span class="num">3</span><span class="st-title">Parking ratios</span><span class="st-sum">required spaces</span></summary>
             <div class="step-body">
               <div class="sk-ratios" id="sk-ratios"></div>
-              <p class="hint">Starting values are examples only — set them to the local code. Required = floor area of each use ÷ 1,000 × ratio, or units (floor area ÷ average unit size) × ratio. Stalls 9×18 ft; aisles 24 ft (90°), 18 ft one-way (60°), 13 ft one-way (45°) — typical sizes, not a code.</p>
+              <p class="hint">Starting values are examples only — set them to the local code. Required = floor area of each use ÷ 1,000 × ratio, or units (floor area ÷ average unit size) × ratio. Stalls 9×18 ft; aisles 24 ft (90°), 18 ft one-way (60°), 13 ft one-way (45°); island corner radius 3 ft; drive turn radius 15 ft — typical starting sizes, not a code.</p>
             </div>
           </details>
         </div>
@@ -656,6 +656,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.44.0"></script>
+  <script type="module" src="js/app.js?v=0.45.0"></script>
 </body>
 </html>

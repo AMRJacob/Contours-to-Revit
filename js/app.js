@@ -1,22 +1,22 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.44.0';
-import { fetchElevation, sample } from './dem.js?v=0.44.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.44.0';
-import { Dxf } from './dxf.js?v=0.44.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.44.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.44.0';
-import { Flow } from './flow.js?v=0.44.0';
-import { createSketch } from './sketch.js?v=0.44.0';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.44.0';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.44.0';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.44.0';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.44.0';
-import { loadLidar, applyLidar } from './lidar.js?v=0.44.0';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.44.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.44.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.45.0';
+import { fetchElevation, sample } from './dem.js?v=0.45.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.45.0';
+import { Dxf } from './dxf.js?v=0.45.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.45.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.45.0';
+import { Flow } from './flow.js?v=0.45.0';
+import { createSketch } from './sketch.js?v=0.45.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.45.0';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.45.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.45.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.45.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.45.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.45.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.45.0';
 
-const VERSION = '0.44.0';
+const VERSION = '0.45.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -2356,7 +2356,19 @@ const sketch = createSketch({
   // While dragging in 3D: just the sketch geometry (the full rebuild waits for the drag to pause).
   onLive: () => { if (v3 && curView() === '3d' && state.result) { v3.setSketch(sketch.tris(v3.ex || 1), sketch.parking3d()); v3.setNotes(sketch.notes3d()); } },
   ex3d: () => v3?.ex || 1,
+  // Site lines the sketch tools snap to: parcel lines, building footprints and road edges (cached per site).
+  contextSegs: () => {
+    const site = state.result; if (!site?.context) return [];
+    if (ctxSnap.site === site) return ctxSnap.list;
+    const list = [];
+    for (const pc of site.context.parcels || []) for (const l of pc.lines || []) list.push({ pts: l, t: 'parcel', closed: false });
+    for (const b of site.context.buildings || []) if (b.ring?.length > 2) list.push({ pts: b.ring, t: 'building', closed: true });
+    for (const r of site.context.roads || []) for (const e of r.edges || []) list.push({ pts: e, t: 'road edge', closed: false });
+    ctxSnap.site = site; ctxSnap.list = list;
+    return list;
+  },
 });
+var ctxSnap = { site: null, list: [] };
 sketch.wirePanel();
 
 // ----- Diagram tab: the same sketch with annotation tools, a faded / white ground and image export -----

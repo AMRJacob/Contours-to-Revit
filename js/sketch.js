@@ -8,19 +8,20 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly } from './parking.js?v=0.44.0';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.44.0';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.44.0';
-import * as SO from './solid.js?v=0.44.0';
-import { noteGeom, WIDTHS } from './notes.js?v=0.44.0';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins } from './parking.js?v=0.45.0';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.45.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.45.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.45.0';
+import * as SO from './solid.js?v=0.45.0';
+import { noteGeom, WIDTHS } from './notes.js?v=0.45.0';
 
 const TOOLS = [
   { id: 'select', key: 'V', label: 'Select', icon: '<path d="M5 3l14 8-6 1.5L10 19z"/>' },
-  { id: 'mass', key: 'M', label: 'Shapes', icon: '<path d="M4 9l8-4 8 4v9l-8 4-8-4z"/><path d="M4 9l8 4 8-4M12 13v9" opacity=".6"/>' },
+  { id: 'mass', key: 'M', group: 'Building', label: 'Shapes', icon: '<path d="M4 9l8-4 8 4v9l-8 4-8-4z"/><path d="M4 9l8 4 8-4M12 13v9" opacity=".6"/>' },
   { id: 'pen', key: 'L', label: 'Draw', icon: '<path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3" opacity=".6"/>' },
   { id: 'push', key: 'U', label: 'Push/Pull', icon: '<path d="M5 14h14v6H5z"/><path d="M12 12V3M8.5 6.5L12 3l3.5 3.5"/>' },
   { id: 'slope', key: 'S', label: 'Slope', icon: '<path d="M3 19L21 9v10z"/><path d="M6 15l9-5M12 9.5l3 .5-1 3" opacity=".8"/>' },
-  { id: 'lot', key: 'P', label: 'Parking', icon: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v6M11 4v6M15 4v6M7 20v-6M11 20v-6M15 20v-6" opacity=".7"/>' },
+  { id: 'lot', key: 'P', group: 'Parking', label: 'Lot', icon: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v6M11 4v6M15 4v6M7 20v-6M11 20v-6M15 20v-6" opacity=".7"/>' },
   { id: 'island', key: 'I', label: 'Island', icon: '<rect x="3" y="8" width="18" height="8" rx="4"/><path d="M9 12h6" opacity=".7"/>' },
   { id: 'drive', key: 'D', label: 'Drive aisle', icon: '<path d="M5 21L10 3M19 21L14 3"/><path d="M12 5v3M12 11v3M12 17v3" opacity=".7"/>' },
 ];
@@ -54,8 +55,8 @@ const HINTS = {
   push: 'Drag a face in or out. Tops snap to whole floors (Shift = free). Ctrl = always make new sides. Type an exact distance in the box.',
   slope: 'Drag across a face toward its high side to tilt it at the pitch in the box (walls lean out). The back edge stays put.',
   lot: 'Drag a rectangle, or click corners and double-click to finish. [ ] turn the rows, ↑ ↓ slide them.',
-  island: 'Drag or click out a planter island inside a lot — the stalls under it go away.',
-  drive: 'Drag a straight drive aisle, or click points and double-click to finish. Stalls it crosses are cleared.',
+  island: 'Drag or click out a planter island — it snaps to stall lines, aisles and the lot edge; the stalls under it go away.',
+  drive: 'Drag a straight drive aisle, or click points and double-click. It snaps to aisle centres and lot edges; stalls it crosses are cleared; an end off the paving gets a curb cut.',
 };
 const DEFAULT_RATIOS = {   // examples only — every jurisdiction sets its own
   residential: { mode: 'unit', r: 1.5, unitSf: 900 }, office: { mode: 'ksf', r: 3 }, retail: { mode: 'ksf', r: 4 },
@@ -146,6 +147,14 @@ export function createSketch(ctx) {
     sk.layouts.set(l.id, { key, res });
     return res;
   }
+  /** Curb returns and curb cuts of the drive aisles (cached per sketch version). */
+  function joins() {
+    if (sk.joins?.ver === sk.ver) return sk.joins.J;
+    const J = driveJoins(sk.model.drives.map(d => ({ pts: d.pts, w: (d.w || 24) * perFt(), r: (d.r ?? 15) * perFt(), cut: d.cut !== false })), sk.model.lots.map(l => l.pts));
+    sk.joins = { ver: sk.ver, J };
+    return J;
+  }
+  const islandShape = (P, r) => roundPoly(P, (r ?? 3) * perFt());
   function nearestMass(l) {
     const c = centroid(l.pts);
     let best = null, bd = Infinity;
@@ -250,11 +259,12 @@ export function createSketch(ctx) {
     if (!sk.site || !visible()) return;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     if (sk.v3) drawLabels3d(g); else drawPlan(g);
-    if (diagramOn()) { drawNotes(g); drawNoteSel(g); drawNoteDraft(g); return; }
+    if (diagramOn()) { drawNotes(g); drawNoteSel(g); drawNoteDraft(g); drawSnap(g); return; }
     drawSelection(g);
     drawHover(g);
     drawInProgress(g);
     drawOp(g);
+    drawSnap(g);
   }
   /** Screen path of a ring (null if any corner is behind the camera). */
   function sPath(g, P, zf, close = true, begin = true) {
@@ -293,15 +303,18 @@ export function createSketch(ctx) {
           g.beginPath(); g.moveTo(...q[0]); g.lineTo(...q[3]); g.lineTo(...q[2]); g.lineTo(...q[1]); g.stroke();
         }
       }
-      for (const isl of L.islands || []) { path(isl); g.fillStyle = green; g.fill(); g.strokeStyle = 'rgba(20,83,45,0.6)'; g.lineWidth = 1; g.stroke(); }
+      for (const isl of L.islands || []) { path(islandShape(isl, l.islandR)); g.fillStyle = green; g.fill(); g.strokeStyle = 'rgba(20,83,45,0.6)'; g.lineWidth = 1; g.stroke(); }
       path(l.pts); g.lineWidth = sel ? 2.5 : 1.5; g.strokeStyle = sel ? ORANGE : 'rgba(30,41,59,0.85)'; g.stroke();
     }
+    const J = joins();
     for (const d of sk.model.drives) {
       const w = (d.w || 24) * perFt();
       for (let i = 0; i < d.pts.length - 1; i++) { path(lanePoly(d.pts[i], d.pts[i + 1], w)); g.fillStyle = colorOf(scheme(), 'lot'); g.globalAlpha = 0.9; g.fill(); g.globalAlpha = 1; }
-      path(d.pts, false); g.setLineDash([8, 6]); g.strokeStyle = '#fde047'; g.lineWidth = 1.5; g.stroke(); g.setLineDash([]);
     }
-    for (const isl of sk.model.islands) { path(isl.pts); g.fillStyle = green; g.fill(); g.strokeStyle = sk.sel?.id === isl.id ? ORANGE : 'rgba(20,83,45,0.8)'; g.lineWidth = sk.sel?.id === isl.id ? 2.5 : 1.2; g.stroke(); }
+    for (const W of J.wedges) { path(W); g.fillStyle = colorOf(scheme(), 'lot'); g.globalAlpha = 0.9; g.fill(); g.globalAlpha = 1; }
+    for (const d of sk.model.drives) { path(d.pts, false); g.setLineDash([8, 6]); g.strokeStyle = '#fde047'; g.lineWidth = 1.5; g.stroke(); g.setLineDash([]); }
+    for (const [a, b] of J.cuts) { path([a, b], false); g.strokeStyle = '#ffffff'; g.lineWidth = 3; g.setLineDash([4, 3]); g.stroke(); g.setLineDash([]); }
+    for (const isl of sk.model.islands) { path(islandShape(isl.pts, isl.r)); g.fillStyle = green; g.fill(); g.strokeStyle = sk.sel?.id === isl.id ? ORANGE : 'rgba(20,83,45,0.8)'; g.lineWidth = sk.sel?.id === isl.id ? 2.5 : 1.2; g.stroke(); }
     for (const l of sk.model.lots) {
       if (!showTags()) break;
       const L = lotLayout(l);
@@ -445,8 +458,13 @@ export function createSketch(ctx) {
     const d = sk.draw;
     if (d.rect) {
       if (d.kind === 'drive') return [d.a, d.b];
-      if (d.kind === 'mass' && d.shape !== 'box') return presetShape(d.shape === 'court' ? 'box' : d.shape, d.a, d.b);
-      return rectPts(d.a, d.b);
+      const F = rectFrame(d.a, d.b, d.frame || 0, d.square && d.shape !== 'circle');
+      if (d.kind === 'mass' && d.shape !== 'box' && d.shape !== 'court') {
+        // Preset drawn in the frame's own coordinates, then turned to match it.
+        const loc = d.shape === 'circle' ? presetShape('circle', [0, 0], [Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]), 0]) : presetShape(d.shape, [0, 0], [F.du, F.dv]);
+        return loc.map(([x, y]) => F.P(x, y));
+      }
+      return F.pts;
     }
     return [...(d.pts || []), ...(d.hover ? [d.hover] : [])];
   }
@@ -463,9 +481,8 @@ export function createSketch(ctx) {
   function buildBar() {
     const T = tools();
     bar.dataset.set = sk.set;
-    bar.innerHTML = T.map(t => `<button type="button" class="sk-tool" data-tool="${t.id}" title="${t.label} (${t.key})" aria-label="${t.label}">${svg(t.icon)}<kbd>${t.key}</kbd><span>${t.label}</span></button>`).join('')
-      + '<div class="sk-sep"></div><button type="button" class="sk-tool sk-mini" data-act="undo" title="Undo (Ctrl+Z)" aria-label="Undo"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg><kbd>^Z</kbd></button>'
-      + '<button type="button" class="sk-tool sk-mini" data-act="redo" title="Redo (Ctrl+Y)" aria-label="Redo"><svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h3"/></svg><kbd>^Y</kbd></button>'
+    // Tools in groups (Building / Parking), each with its hotkey. Undo / redo are Ctrl+Z / Ctrl+Y.
+    bar.innerHTML = T.map(t => `${t.group ? `<div class="sk-grp">${t.group}</div>` : ''}<button type="button" class="sk-tool" data-tool="${t.id}" title="${t.label} (${t.key})" aria-label="${t.label}">${svg(t.icon)}<kbd>${t.key}</kbd><span>${t.label}</span></button>`).join('')
       + (sk.set === 'diagram'
         ? `<div class="sk-fly dg-style" data-for="style" hidden><div class="dg-sws">${swatchHtml(sk.style.color)}</div>
             <div class="dg-row"><span class="seg seg-dark">${SIZES.map((z, i) => `<label><input type="radio" name="dg-size" value="${i}"${sk.style.size === i ? ' checked' : ''}><span>${z}</span></label>`).join('')}</span>
@@ -572,16 +589,20 @@ export function createSketch(ctx) {
           <button type="button" data-k="del" title="Delete (Del)">🗑</button></div>
         <div class="skc-row"><span>Rows</span><button type="button" data-k="rot-" title="Turn ([)">⟲</button><button type="button" data-k="rot0" title="Line up with the longest side">auto</button><button type="button" data-k="rot+" title="Turn (])">⟳</button>
           <button type="button" data-k="sh-" title="Slide rows (↑)">▲</button><button type="button" data-k="sh+" title="Slide rows (↓)">▼</button></div>
-        <div class="skc-row"><span title="Landscape strip inside the lot edge">Edge buffer</span>${num('setback', o.setback || 0, 0, 100, 1, 42)}<span>${uLen()}</span></div>
+        <div class="skc-row"><span title="Landscape strip inside the lot edge">Edge buffer</span>${num('setback', o.setback || 0, 0, 100, 1, 42)}<span>${uLen()}</span>
+          <span title="Corner radius of the end / every-N islands">Island corners r</span>${num('islandR', o.islandR ?? 3, 0, 20, 0.5, 40)}<span>${uLen()}</span></div>
         <div class="skc-row"><label class="skc-chk"><input type="checkbox" data-k="endIslands"${o.endIslands ? ' checked' : ''}> End islands</label>
           <span>Island every</span>${num('islandEvery', o.islandEvery || 0, 0, 40, 1, 38)}<span>stalls</span></div>
         <div class="skc-row skc-read" data-o="read"></div>`;
     }
     if (kind === 'drive') {
       return `<div class="skc-row"><span>Drive aisle</span>${num('w', o.w || 24, 10, 60, 1)}<span>${uLen()} wide</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div>
+        <div class="skc-row"><span title="Curb return where it meets a lot or another aisle, and at curb cuts">Turn radius</span>${num('r', o.r ?? 15, 0, 60, 1, 42)}<span>${uLen()}</span>
+          <label class="skc-chk" title="Flared apron and depressed curb where an end leaves all paving (at the street)"><input type="checkbox" data-k="cut"${o.cut !== false ? ' checked' : ''}> Curb cut at street end</label></div>
         <div class="skc-row skc-read" data-o="read"></div>`;
     }
-    return `<div class="skc-row"><span>Planter island</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div><div class="skc-row skc-read" data-o="read"></div>`;
+    return `<div class="skc-row"><span>Planter island</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div>
+      <div class="skc-row"><span>Corner radius</span>${num('r', o.r ?? 3, 0, 30, 0.5, 42)}<span>${uLen()}</span></div><div class="skc-row skc-read" data-o="read"></div>`;
   }
   function card() {
     const o = findSel();
@@ -592,7 +613,7 @@ export function createSketch(ctx) {
     for (const q of pts) { if (!q) continue; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; }
     if (!Number.isFinite(x1)) { cardEl.hidden = true; return; }
     const W = cardEl.parentElement.clientWidth, H = cardEl.parentElement.clientHeight;
-    const sig = `${kind}:${o.id}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use, o.color, o.stand, o.curve, o.size])}`;
+    const sig = `${kind}:${o.id}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use, o.color, o.stand, o.curve, o.size, o.r, o.cut, o.islandR])}`;
     if (cardEl.dataset.sig !== sig && !cardEl.contains(document.activeElement)) { cardEl.dataset.sig = sig; cardEl.innerHTML = cardHtml(kind, o); }
     const read = cardEl.querySelector('[data-o="read"]') || {};
     if (kind === 'note') { /* nothing to read out */ } else if (kind === 'mass') {
@@ -663,6 +684,9 @@ export function createSketch(ctx) {
     if (k === 'endIslands') o.endIslands = t.checked;
     if (k === 'islandEvery') o.islandEvery = Math.max(0, Math.round(v) || 0);
     if (k === 'w') o.w = Math.max(10, Math.min(60, v || 24));
+    if (k === 'r') o.r = Math.max(0, Number.isFinite(v) ? v : 0);
+    if (k === 'cut') o.cut = t.checked;
+    if (k === 'islandR') o.islandR = Math.max(0, Number.isFinite(v) ? v : 0);
     if (sk.sel.kind === 'mass') remember(o);
     cardEl.dataset.sig = '';
     changed();
@@ -741,6 +765,105 @@ export function createSketch(ctx) {
     return null;
   }
 
+  // ---------------------------------------------------------------- snapping (plan points)
+  /** What drawing can snap to: sketch outlines, parking layout (for the parking tools), and the site's parcels,
+   *  buildings and road edges. Cached until the sketch changes. */
+  function snapCands(kind, exclude) {
+    const key = `${sk.ver}:${kind}:${exclude || ''}`;
+    if (sk.sc?.key === key) return sk.sc;
+    const pts = [], segs = [], fsegs = [];
+    const ring = (P, t, cl = true, frame = true) => {
+      if (!P || P.length < 2) return;
+      for (const p of P) pts.push({ p: [p[0], p[1]], t: `${t} corner` });
+      for (let i = 0; i < (cl ? P.length : P.length - 1); i++) { const sg = { a: P[i], b: P[(i + 1) % P.length], t: `${t} edge` }; segs.push(sg); if (frame) fsegs.push(sg); }
+    };
+    for (const m of sk.model.masses) {
+      if (m.id === exclude) continue;
+      if (m.prm) ring(m.prm.pts, 'block');
+      else {
+        const I = info(m);
+        for (const [a, b] of I.edges) if (m.v[a][2] < 1e-6 && m.v[b][2] < 1e-6) { const sg = { a: m.v[a].slice(0, 2), b: m.v[b].slice(0, 2), t: 'block edge' }; segs.push(sg); fsegs.push(sg); }
+        for (const p of I.foot) pts.push({ p: p.slice(0, 2), t: 'block corner' });
+      }
+    }
+    const parking = ['lot', 'island', 'drive'].includes(kind);
+    for (const l of sk.model.lots) {
+      if (l.id === exclude) continue;
+      ring(l.pts, 'lot');
+      if (!parking) continue;
+      const Lr = lotLayout(l);
+      if (Lr.inner?.length > 2 && l.setback > 0) ring(Lr.inner, 'buffer', true, false);
+      for (const st of Lr.stalls) for (const p of [st.pts[0], st.pts[1]]) pts.push({ p, t: 'stall line' });
+      for (const A of Lr.aisles) {
+        const a = [(A[0][0] + A[3][0]) / 2, (A[0][1] + A[3][1]) / 2], b = [(A[1][0] + A[2][0]) / 2, (A[1][1] + A[2][1]) / 2];
+        segs.push({ a, b, t: 'aisle centre' }); pts.push({ p: a, t: 'aisle end' }, { p: b, t: 'aisle end' });
+      }
+    }
+    for (const i of sk.model.islands) if (i.id !== exclude) ring(i.pts, 'island');
+    for (const d of sk.model.drives) if (d.id !== exclude) ring(d.pts, 'drive aisle', false);
+    for (const c of ctx.contextSegs?.() || []) ring(c.pts, c.t, c.closed, c.frame !== false);
+    sk.sc = { key, C: { pts, segs }, frames: frameAngles(fsegs) };
+    return sk.sc;
+  }
+  /** Snapped plan point under the cursor (null off the ground). prev: the point the current line starts from. */
+  function groundSnap(ev, prev, opt = {}) {
+    const c = ev.xy; if (!c) return null;
+    if (ev.alt || sk.snapOff) { sk.snap = null; return c; }
+    const S = snapCands(opt.kind || sk.tool, opt.exclude);
+    const s0 = scr(c), s1 = scr([c[0] + 10 * perFt(), c[1]]);
+    const ppn = s0 && s1 ? Math.max(1e-6, Math.hypot(s1[0] - s0[0], s1[1] - s0[1]) / (10 * perFt())) : 1;
+    const Rn = 420 / ppn, near = p => Math.abs(p[0] - c[0]) < Rn && Math.abs(p[1] - c[1]) < Rn;
+    const pts = S.C.pts.filter(q => near(q.p)), segs = S.C.segs.filter(g => Math.min(g.a[0], g.b[0]) < c[0] + Rn && Math.max(g.a[0], g.b[0]) > c[0] - Rn && Math.min(g.a[1], g.b[1]) < c[1] + Rn && Math.max(g.a[1], g.b[1]) > c[1] - Rn);
+    for (const p of opt.own || []) pts.push({ p, t: 'start point' });
+    let frames = S.frames;
+    if (opt.own?.length >= 2) { const a = opt.own[0], b = opt.own[1]; let f = Math.atan2(b[1] - a[1], b[0] - a[0]) % (Math.PI / 2); if (f < 0) f += Math.PI / 2; frames = [f, ...frames]; }
+    const res = snapTo(c, { pts, segs }, { scr: p => scr(p), prev, shift: ev.shift, frames });
+    sk.snap = res.t ? res : null;
+    return res.p;
+  }
+  /** The frame (radians) of the outline nearest p, for rectangles that line up with what's there. */
+  function frameNear(p) {
+    const S = snapCands(sk.tool);
+    const s0 = scr(p); if (!s0) return 0;
+    let best = null;
+    for (const g of S.C.segs) {
+      if (g.t === 'aisle centre' || g.t === 'stall line') continue;
+      const dx = g.b[0] - g.a[0], dy = g.b[1] - g.a[1], L2 = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, ((p[0] - g.a[0]) * dx + (p[1] - g.a[1]) * dy) / L2));
+      const q = scr([g.a[0] + dx * t, g.a[1] + dy * t]); if (!q) continue;
+      const d = Math.hypot(q[0] - s0[0], q[1] - s0[1]);
+      if (d < 150 && (!best || d < best.d)) { let f = Math.atan2(dy, dx) % (Math.PI / 2); if (f < 0) f += Math.PI / 2; best = { d, f }; }
+    }
+    return best ? best.f : 0;
+  }
+  const fu = f => [Math.cos(f), Math.sin(f)], fv = f => [-Math.sin(f), Math.cos(f)];
+  /** Rectangle from a to b in frame f (square with Shift). */
+  function rectFrame(a, b, f, square) {
+    const u = fu(f), v = fv(f), w = [b[0] - a[0], b[1] - a[1]];
+    let du = w[0] * u[0] + w[1] * u[1], dv = w[0] * v[0] + w[1] * v[1];
+    if (square) { const m = Math.max(Math.abs(du), Math.abs(dv)); du = Math.sign(du || 1) * m; dv = Math.sign(dv || 1) * m; }
+    const P = (x, y) => [a[0] + u[0] * x + v[0] * y, a[1] + u[1] * x + v[1] * y];
+    return { P, du, dv, pts: [P(0, 0), P(du, 0), P(du, dv), P(0, dv)] };
+  }
+  function drawSnap(g) {
+    const sn = sk.snap; if (!sn || !(sk.draw || sk.drag || sk.op || sk.tool !== 'select')) return;
+    const q = scr(sn.p); if (!q) return;
+    g.save();
+    for (const [a, b] of sn.guides || []) {
+      const qa = scr(a), qb = scr(b); if (!qa || !qb) continue;
+      const vx = qb[0] - qa[0], vy = qb[1] - qa[1], L = Math.hypot(vx, vy) || 1, ext = sn.t === 'align' ? 0 : 60;
+      g.beginPath(); g.moveTo(qa[0], qa[1]); g.lineTo(qb[0] + vx / L * ext, qb[1] + vy / L * ext);
+      g.setLineDash(sn.t === 'align' ? [2, 4] : [7, 5]); g.strokeStyle = sn.t === 'lock' ? '#d946ef' : sn.t === 'align' ? '#a855f7' : '#d946ef'; g.lineWidth = 1.5; g.stroke();
+    }
+    g.setLineDash([]);
+    g.beginPath();
+    if (sn.t === 'corner') { g.rect(q[0] - 6, q[1] - 6, 12, 12); g.strokeStyle = '#16a34a'; g.lineWidth = 2.5; g.stroke(); }
+    else if (sn.t === 'mid') { g.moveTo(q[0], q[1] - 7); g.lineTo(q[0] + 7, q[1] + 5); g.lineTo(q[0] - 7, q[1] + 5); g.closePath(); g.strokeStyle = '#0891b2'; g.lineWidth = 2.5; g.stroke(); }
+    else if (sn.t === 'edge') { g.moveTo(q[0] - 6, q[1] - 6); g.lineTo(q[0] + 6, q[1] + 6); g.moveTo(q[0] + 6, q[1] - 6); g.lineTo(q[0] - 6, q[1] + 6); g.strokeStyle = '#dc2626'; g.lineWidth = 2.5; g.stroke(); }
+    else { g.arc(q[0], q[1], 4, 0, Math.PI * 2); g.fillStyle = '#d946ef'; g.fill(); }
+    g.restore();
+    if (sn.label) { g.save(); g.font = '600 11px system-ui, sans-serif'; const w = g.measureText(sn.label).width + 10; g.fillStyle = 'rgba(28,34,38,0.9)'; g.beginPath(); g.roundRect(q[0] + 10, q[1] + 10, w, 18, 4); g.fill(); g.fillStyle = '#e7e4dd'; g.textBaseline = 'middle'; g.fillText(sn.label, q[0] + 15, q[1] + 19); g.restore(); }
+  }
+
   // ---------------------------------------------------------------- creating things on the ground
   function finishDraw(pts) {
     const d = sk.draw;
@@ -757,7 +880,7 @@ export function createSketch(ctx) {
       if (kind === 'sheet') Object.assign(o, SO.sheet(pts));
       else {
         o.prm = { pts, floors: sk.last?.floors || 3, court: 0, step: null, roof: sk.last?.roof && sk.last.roof !== 'flat' ? { type: sk.last.roof, pitch: 6 } : null };
-        if (d.shape === 'court' && d.rect) { const bb = bbox(pts); o.prm.court = Math.max(10, Math.round(Math.min(bb[2] - bb[0], bb[3] - bb[1]) * 0.3 / perFt() * outPerFt() / 5) * 5); }
+        if (d.shape === 'court' && d.rect) { const side = Math.min(Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]), Math.hypot(pts[2][0] - pts[1][0], pts[2][1] - pts[1][1])); o.prm.court = Math.max(10, Math.round(side * 0.3 / perFt() * outPerFt() / 5) * 5); }
         regen(o);
       }
       sk.model.masses.push(o);
@@ -798,7 +921,18 @@ export function createSketch(ctx) {
     const d = sk.draw, m = massById(d.id); if (!m) return null;
     const r = rayIn(m, ev); if (!r) return null;
     const p = SO.rayFace(m, d.fi, r.o, r.d); if (!p) return null;
-    return snapOnFace(m, d.fi, p);
+    const s = snapOnFace(m, d.fi, p);
+    // Lines across a face pull square to the face (Shift locks), like on the ground.
+    const prev = d.pts?.length && !d.rect && !d.pending ? d.pts[d.pts.length - 1].p : null;
+    if (!s.t && prev && !ev.alt) {
+      const F = SO.faceFrame(m, d.fi), w = SO.sub(p, prev), cu = SO.dot(w, F.u), cv = SO.dot(w, F.v);
+      const ang = Math.atan2(Math.abs(cv), Math.abs(cu));
+      if (ev.shift || ang < 3 * Math.PI / 180 || ang > 87 * Math.PI / 180) {
+        const alongU = Math.abs(cu) >= Math.abs(cv);
+        return { p: SO.add(prev, SO.mul(alongU ? F.u : F.v, alongU ? cu : cv)), axis: true };
+      }
+    }
+    return s;
   }
   function penRect(d, m) {
     const F = SO.faceFrame(m, d.fi), a = d.pts[0].p, b = d.b.p;
@@ -894,7 +1028,8 @@ export function createSketch(ctx) {
       let delta;
       if (ev.shift) { const dz = along(m, op, ev, [0, 0, 1]); delta = [0, 0, Math.round(dz / perFt()) * perFt()]; }
       else {
-        const zo = zOut(m, op.p0[2]), xy = sk.v3 ? ev.at(zo) : ev.xy;
+        const zo = zOut(m, op.p0[2]);
+        const xy = sk.v3 ? ev.at(zo) : groundSnap(ev, null, { exclude: m.id });
         if (!xy) return;
         delta = [xy[0] - op.p0[0], xy[1] - op.p0[1], 0];
       }
@@ -1020,7 +1155,11 @@ export function createSketch(ctx) {
   }
   /** Point on the drawing surface of a note in progress / being moved. */
   function notePoint(ev, sfc) {
-    if (sfc.on === 'ground') return ev.xy;
+    if (sfc.on === 'ground') {
+      const d = sk.draw;
+      if (!d?.note) return ev.xy;
+      return groundSnap(ev, d.pts?.at(-1) || (d.rect ? d.a : null), { kind: 'note', own: d.pts });
+    }
     const m = massById(sfc.mid); if (!m) return null;
     const r = rayIn(m, ev); if (!r) return null;
     const den = SO.dot(sfc.n, r.d); if (Math.abs(den) < 1e-9) return null;
@@ -1030,7 +1169,7 @@ export function createSketch(ctx) {
   function noteSurface(ev) {
     const f = pickFace(ev);
     if (f) { const m = massById(f.id); return { on: 'mass', mid: f.id, n: SO.faceNormal(m, f.fi), p0: f.p, p: f.p }; }
-    const xy = ev.xy; return xy ? { on: 'ground', p: xy } : null;
+    const xy = groundSnap(ev, null, { kind: 'note' }); return xy ? { on: 'ground', p: xy } : null;
   }
   function noteRect(d) {
     if (d.on === 'ground') return rectPts(d.a, d.b);
@@ -1092,6 +1231,7 @@ export function createSketch(ctx) {
   }
   function noteMove(ev) {
     const d = sk.draw;
+    if (!d && !sk.drag && sk.tool !== 'select') { const had = !!sk.snap; if (!pickFace(ev)) groundSnap(ev, null, { kind: 'note' }); else sk.snap = null; if (had || sk.snap) draw(); return; }
     if (d?.note) {
       const p = notePoint(ev, d); if (!p) return;
       if (d.pending && Math.hypot(ev.sx - d.cp[0], ev.sy - d.cp[1]) > 6) { d.pending = false; d.rect = true; }
@@ -1170,14 +1310,16 @@ export function createSketch(ctx) {
       }
     }
     if (t !== 'select') {
-      const xy = ev.xy; if (!xy) return true;
+      const kind = t === 'pen' ? 'sheet' : t;
       if (sk.draw?.pts && !sk.draw.face) {      // outline in progress
         const q = scr(sk.draw.pts[0], sk.v3 ? zGround(sk.draw.pts[0]) + 0.3 : undefined);
         if (sk.draw.kind !== 'drive' && sk.draw.pts.length >= 3 && q && Math.hypot(q[0] - ev.sx, q[1] - ev.sy) < 10) { finishDraw(sk.draw.pts); return true; }
-        sk.draw.pts.push(ev.shift ? ortho(sk.draw.pts.at(-1), xy) : xy);
+        const xy = groundSnap(ev, sk.draw.pts.at(-1), { own: sk.draw.pts }); if (!xy) return true;
+        sk.draw.pts.push(xy);
         draw(); return true;
       }
-      sk.draw = { kind: t === 'pen' ? 'sheet' : t, shape: t === 'mass' ? sk.shape : 'box', a: xy, b: xy, cp: [ev.sx, ev.sy], rect: false, pending: true };
+      const xy = groundSnap(ev, null); if (!xy) return true;
+      sk.draw = { kind, shape: t === 'mass' ? sk.shape : 'box', a: xy, b: xy, cp: [ev.sx, ev.sy], rect: false, pending: true, frame: kind === 'drive' ? 0 : frameNear(xy) };
       card();
       return true;
     }
@@ -1228,20 +1370,23 @@ export function createSketch(ctx) {
     if (d && d.pending !== undefined && !d.pts) {
       if (d.pending && Math.hypot(ev.sx - d.cp[0], ev.sy - d.cp[1]) > 6) { d.pending = false; d.rect = true; }
       if (d.rect) {
-        const xy = ev.xy; if (!xy) return;
-        let b = xy;
-        if (ev.shift && d.kind !== 'drive' && d.shape !== 'circle') { const mm = Math.max(Math.abs(xy[0] - d.a[0]), Math.abs(xy[1] - d.a[1])); b = [d.a[0] + Math.sign(xy[0] - d.a[0]) * mm, d.a[1] + Math.sign(xy[1] - d.a[1]) * mm]; }
-        if (ev.shift && d.kind === 'drive') b = ortho(d.a, xy);
-        d.b = b; draw();
+        // A drive aisle is a line (pull / Shift lock from its start); shapes snap their far corner, Shift = square.
+        const b = d.kind === 'drive' ? groundSnap(ev, d.a, { own: [d.a] }) : groundSnap({ ...ev, shift: false }, null);
+        if (!b) return;
+        d.b = b; d.square = ev.shift && d.kind !== 'drive'; draw();
       }
       return;
     }
-    if (d?.pts) { const xy = ev.xy; if (xy) { d.hover = ev.shift ? ortho(d.pts.at(-1), xy) : xy; draw(); } return; }
+    if (d?.pts) { const xy = groundSnap(ev, d.pts.at(-1), { own: d.pts }); if (xy) { d.hover = xy; draw(); } return; }
     if (!sk.drag) {                                   // hover feedback for the face tools / Ctrl-move
       const want = sk.tool === 'push' || sk.tool === 'slope' || sk.tool === 'pen' || (sk.tool === 'select' && ev.ctrl);
       const h = want ? (sk.tool === 'select' ? pickElement(ev) : (() => { const f = pickFace(ev); return f && { id: f.id, t: 'f', fi: f.fi }; })()) : null;
       const key = h ? JSON.stringify([h.id, h.t, h.fi, h.i, h.a, h.b]) : '';
-      if (key !== (sk.hovKey || '')) { sk.hov = h; sk.hovKey = key; draw(); }
+      // Before the first click, show what the start point would snap to.
+      const pre = ['mass', 'lot', 'island', 'drive'].includes(sk.tool) || (sk.tool === 'pen' && !h);
+      const had = !!sk.snap;
+      if (pre) groundSnap(ev, null); else sk.snap = null;
+      if (key !== (sk.hovKey || '') || pre || had) { sk.hov = h; sk.hovKey = key; draw(); }
       return;
     }
     const g = sk.drag, o = list(g.kind).find(q => q.id === g.id);
@@ -1261,10 +1406,16 @@ export function createSketch(ctx) {
     if (t === 'v') {
       const i = g.h.i;
       let p = [P[i][0] + dx, P[i][1] + dy];
-      if (ev.shift) p = ortho(P[(i - 1 + n) % n], p);
-      // A rectangle stays a rectangle when a corner is dragged (its two neighbours follow).
-      if (n === 4 && closed(g.kind) && isRect(P)) { const a = (i + 1) % 4, c = (i + 3) % 4, opp = P[(i + 2) % 4]; P[i] = p; if (Math.abs(P[a][0] - opp[0]) < 1e-6) { P[a] = [opp[0], p[1]]; P[c] = [p[0], opp[1]]; } else { P[a] = [p[0], opp[1]]; P[c] = [opp[0], p[1]]; } }
-      else P[i] = p;
+      const nb = P[(i - 1 + n) % n];
+      if (!sk.v3 || g.kind !== 'mass') p = groundSnap({ ...ev, xy: p }, closed(g.kind) || i > 0 ? nb : P[1], { exclude: o.id }) || p;
+      else if (ev.shift) p = ortho(nb, p);
+      // A rectangle stays a rectangle when a corner is dragged (its two neighbours follow), whatever its angle.
+      if (n === 4 && closed(g.kind) && isRect(P)) {
+        const a = (i + 1) % 4, c = (i + 3) % 4, opp = P[(i + 2) % 4];
+        const ua = SO.unit([P[a][0] - opp[0], P[a][1] - opp[1], 0]), uc = SO.unit([P[c][0] - opp[0], P[c][1] - opp[1], 0]), w = [p[0] - opp[0], p[1] - opp[1], 0];
+        const ka = SO.dot(w, ua), kc = SO.dot(w, uc);
+        P[i] = [opp[0] + ua[0] * ka + uc[0] * kc, opp[1] + ua[1] * ka + uc[1] * kc]; P[a] = [opp[0] + ua[0] * ka, opp[1] + ua[1] * ka]; P[c] = [opp[0] + uc[0] * kc, opp[1] + uc[1] * kc];
+      } else P[i] = p;
       if (o.prm) regen(o);
     } else if (t === 'r' || t === 's') {
       const c = g.h.c;
@@ -1281,8 +1432,14 @@ export function createSketch(ctx) {
         mapObj(o, sc); carryAll(g, sc);
       }
     } else {
-      mapObj(o, ([x, y]) => [x + dx, y + dy]);
-      carryAll(g, ([x, y]) => [x + dx, y + dy]);
+      // Moving: the moved outline's nearest corner snaps to a corner of something else.
+      let mx = dx, my = dy;
+      if (!sk.v3 || g.kind !== 'mass') {
+        const S = snapCands(g.kind, o.id), sn = ev.alt ? null : snapMove(P.map(([x, y]) => [x + dx, y + dy]), S.C, q => scr(q));
+        if (sn) { mx += sn.dx; my += sn.dy; sk.snap = { p: sn.p, t: 'corner', label: sn.label, guides: [] }; } else sk.snap = null;
+      }
+      mapObj(o, ([x, y]) => [x + mx, y + my]);
+      carryAll(g, ([x, y]) => [x + mx, y + my]);
     }
     g.moved = true;
     dragged();
@@ -1294,9 +1451,11 @@ export function createSketch(ctx) {
       if (cq.n) { const a = fn([0, 0]), b = fn([cq.n[0], cq.n[1]]); const hx = b[0] - a[0], hy = b[1] - a[1], l = Math.hypot(hx, hy), hl = Math.hypot(cq.n[0], cq.n[1]); cq.q.n = l > 1e-12 ? [hx / l * hl, hy / l * hl, cq.n[2]] : cq.n.slice(); }
     }
   }
-  const isRect = P => P.length === 4 && [0, 1, 2, 3].every(i => { const a = P[i], b = P[(i + 1) % 4]; return Math.abs(a[0] - b[0]) < 1e-6 || Math.abs(a[1] - b[1]) < 1e-6; });
+  /** Four corners, all square (any rotation). */
+  const isRect = P => P.length === 4 && [0, 1, 2, 3].every(i => { const a = P[(i + 3) % 4], b = P[i], c = P[(i + 1) % 4]; const u = [a[0] - b[0], a[1] - b[1]], v = [c[0] - b[0], c[1] - b[1]]; return Math.abs(u[0] * v[0] + u[1] * v[1]) < 1e-6 * (Math.hypot(...u) * Math.hypot(...v) + 1e-12); });
   function up(ev) {
     if (!sk.active) return;
+    sk.snap = null;
     if (sk.set === 'diagram') { noteUp(ev); return; }
     if (sk.op) { endOp(); return; }
     if (sk.clickEmpty) {
@@ -1585,11 +1744,14 @@ export function createSketch(ctx) {
         if (st.aisle) continue;
         for (const [i, j] of [[0, 3], [3, 2], [2, 1]]) lines.push(q[i][0], q[i][1], z(...q[i]), q[j][0], q[j][1], z(...q[j]));
       }
-      for (const isl of Lr.islands || []) planter(isl);
+      for (const isl of Lr.islands || []) planter(islandShape(isl, l.islandR));
       if (l.setback > 0 && Lr.inner?.length > 2) for (let i = 0; i < Lr.inner.length; i++) { const a = Lr.inner[i], b = Lr.inner[(i + 1) % Lr.inner.length]; lines.push(a[0], a[1], z(...a), b[0], b[1], z(...b)); }
     }
-    for (const isl of sk.model.islands) planter(isl.pts);
+    for (const isl of sk.model.islands) planter(islandShape(isl.pts, isl.r));
     for (const d of sk.model.drives) for (let i = 0; i < d.pts.length - 1; i++) drape(d.pts[i], d.pts[i + 1], (d.w || 24) * perFt(), drives);
+    const J = joins();
+    for (const W of J.wedges) for (let i = 1; i < W.length - 1; i++) for (const q of [W[0], W[i], W[i + 1]]) drives.push(q[0], q[1], z(...q) + 0.05);
+    for (const [a, b] of J.cuts) lines.push(a[0], a[1], z(...a) + 0.1, b[0], b[1], z(...b) + 0.1);
     return { lines, acc, islands, drives, marks, stripe: colorOf(scheme(), 'stripe'), accColor: colorOf(scheme(), 'accessible'), lotColor: colorOf(scheme(), 'lot'), greenColor: colorOf(scheme(), 'green') };
   }
 

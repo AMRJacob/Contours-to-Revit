@@ -261,3 +261,93 @@ export function layoutLot(poly, opts = {}) {
     required: adaRequired(prov), short: Math.max(0, adaRequired(prov).acc - placed.acc), rows: rowRuns.length, angle: ang,
   };
 }
+
+// ---------------------------------------------------------------- curb geometry for drawing (not counting)
+/** Polygon with every corner rounded to radius r (limited to fit), arcs as `segs` pieces. */
+export function roundPoly(P, r, segs = 6) {
+  if (!(r > 0) || P.length < 3) return P.slice();
+  const n = P.length, out = [];
+  let a2 = 0; for (let i = 0, j = n - 1; i < n; j = i++) a2 += P[j][0] * P[i][1] - P[i][0] * P[j][1];
+  for (let i = 0; i < n; i++) {
+    const p = P[i], a = P[(i - 1 + n) % n], b = P[(i + 1) % n];
+    const u = [a[0] - p[0], a[1] - p[1]], v = [b[0] - p[0], b[1] - p[1]], lu = Math.hypot(...u), lv = Math.hypot(...v);
+    if (lu < 1e-9 || lv < 1e-9) { out.push(p); continue; }
+    const ux = [u[0] / lu, u[1] / lu], vx = [v[0] / lv, v[1] / lv];
+    const cos = Math.max(-1, Math.min(1, ux[0] * vx[0] + ux[1] * vx[1])), th = Math.acos(cos);
+    if (th < 1e-3 || Math.PI - th < 1e-3) { out.push(p); continue; }
+    const t = Math.min(r / Math.tan(th / 2), lu * 0.49, lv * 0.49), rr = t * Math.tan(th / 2);
+    const A = [p[0] + ux[0] * t, p[1] + ux[1] * t], B = [p[0] + vx[0] * t, p[1] + vx[1] * t];
+    const bis = [ux[0] + vx[0], ux[1] + vx[1]], lb = Math.hypot(...bis), h = rr / Math.sin(th / 2);
+    const C = [p[0] + bis[0] / lb * h, p[1] + bis[1] / lb * h];
+    let s0 = Math.atan2(A[1] - C[1], A[0] - C[0]), s1 = Math.atan2(B[1] - C[1], B[0] - C[0]);
+    let ds = s1 - s0; while (ds > Math.PI) ds -= 2 * Math.PI; while (ds < -Math.PI) ds += 2 * Math.PI;
+    for (let k = 0; k <= segs; k++) { const s = s0 + ds * k / segs; out.push([C[0] + rr * Math.cos(s), C[1] + rr * Math.sin(s)]); }
+  }
+  void a2;
+  return out;
+}
+/**
+ * Paving that rounds the outside corner at P between two curb lines leaving P along d1 and d2 (unit vectors):
+ * the wedge between P, the two tangent points and the arc of radius r. Returns a polygon, or null.
+ */
+export function filletWedge(P, d1, d2, r, segs = 8) {
+  const cos = Math.max(-1, Math.min(1, d1[0] * d2[0] + d1[1] * d2[1])), th = Math.acos(cos);
+  if (th < 0.05 || th > Math.PI - 0.05 || !(r > 0)) return null;
+  const t = r / Math.tan(th / 2), A = [P[0] + d1[0] * t, P[1] + d1[1] * t], B = [P[0] + d2[0] * t, P[1] + d2[1] * t];
+  const bis = [d1[0] + d2[0], d1[1] + d2[1]], lb = Math.hypot(...bis), h = r / Math.sin(th / 2);
+  const C = [P[0] + bis[0] / lb * h, P[1] + bis[1] / lb * h];
+  let s0 = Math.atan2(A[1] - C[1], A[0] - C[0]), s1 = Math.atan2(B[1] - C[1], B[0] - C[0]);
+  let ds = s1 - s0; while (ds > Math.PI) ds -= 2 * Math.PI; while (ds < -Math.PI) ds += 2 * Math.PI;
+  const out = [P];
+  for (let k = 0; k <= segs; k++) { const s = s0 + ds * k / segs; out.push([C[0] + r * Math.cos(s), C[1] + r * Math.sin(s)]); }
+  return out;
+}
+const inP = (P, x, y) => { let c = false; for (let i = 0, j = P.length - 1; i < P.length; j = i++) { const [xi, yi] = P[i], [xj, yj] = P[j]; if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c; } return c; };
+function segX(p, q, a, b) {
+  const r = [q[0] - p[0], q[1] - p[1]], s = [b[0] - a[0], b[1] - a[1]], den = r[0] * s[1] - r[1] * s[0];
+  if (Math.abs(den) < 1e-12) return null;
+  const t = ((a[0] - p[0]) * s[1] - (a[1] - p[1]) * s[0]) / den, u = ((a[0] - p[0]) * r[1] - (a[1] - p[1]) * r[0]) / den;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? { t, u, x: [p[0] + r[0] * t, p[1] + r[1] * t] } : null;
+}
+/**
+ * Curb returns where drive aisles meet paving (lots and other aisles), and curb cuts where an aisle ends at the
+ * street (an end outside every paved area). drives: [{ pts, w (native), r (native radius), cut (bool) }],
+ * paved: [polygon…] (lots). Returns { wedges: [polygon…], cuts: [[a, b]…] (curb line across each cut) }.
+ */
+export function driveJoins(drives, paved) {
+  const wedges = [], cuts = [];
+  const lanes = drives.map(d => { const L = []; for (let i = 0; i < d.pts.length - 1; i++) L.push(lanePoly(d.pts[i], d.pts[i + 1], d.w)); return L; });
+  drives.forEach((d, di) => {
+    const regions = [...paved, ...lanes.flatMap((L, j) => (j === di ? [] : L))];
+    for (let i = 0; i < d.pts.length - 1; i++) {
+      const a = d.pts[i], b = d.pts[i + 1], dx = b[0] - a[0], dy = b[1] - a[1], Ls = Math.hypot(dx, dy) || 1;
+      const dir = [dx / Ls, dy / Ls], nrm = [-dir[1], dir[0]];
+      for (const sd of [1, -1]) {
+        const p = [a[0] + nrm[0] * sd * d.w / 2, a[1] + nrm[1] * sd * d.w / 2], q = [b[0] + nrm[0] * sd * d.w / 2, b[1] + nrm[1] * sd * d.w / 2];
+        for (const R of regions) for (let k = 0; k < R.length; k++) {
+          const e0 = R[k], e1 = R[(k + 1) % R.length], X = segX(p, q, e0, e1); if (!X) continue;
+          // d2: along the lane side, out of the region; d1: along the region edge, away from the lane.
+          const fw = inP(R, X.x[0] + dir[0] * 1e-3 * Ls, X.x[1] + dir[1] * 1e-3 * Ls) ? -1 : 1;
+          const d2 = [dir[0] * fw, dir[1] * fw];
+          let ed = [e1[0] - e0[0], e1[1] - e0[1]]; const le = Math.hypot(...ed) || 1; ed = [ed[0] / le, ed[1] / le];
+          const d1 = ed[0] * nrm[0] * sd + ed[1] * nrm[1] * sd > 0 ? ed : [-ed[0], -ed[1]];
+          const W = filletWedge(X.x, d1, d2, d.r); if (W) wedges.push(W);
+        }
+      }
+    }
+    // Curb cuts at ends outside all paving.
+    if (d.cut === false) return;
+    for (const [end, nb] of [[d.pts[0], d.pts[1]], [d.pts[d.pts.length - 1], d.pts[d.pts.length - 2]]]) {
+      if (regions.some(R => inP(R, end[0], end[1]))) continue;
+      const dx = end[0] - nb[0], dy = end[1] - nb[1], Ls = Math.hypot(dx, dy) || 1, dir = [dx / Ls, dy / Ls], nrm = [-dir[1], dir[0]];
+      const tips = [];
+      for (const sd of [1, -1]) {
+        const P = [end[0] + nrm[0] * sd * d.w / 2, end[1] + nrm[1] * sd * d.w / 2];
+        const W = filletWedge(P, [nrm[0] * sd, nrm[1] * sd], [-dir[0], -dir[1]], d.r);
+        if (W) { wedges.push(W); tips.push(W[1]); }
+      }
+      if (tips.length === 2) cuts.push([tips[0], tips[1]]);
+    }
+  });
+  return { wedges, cuts };
+}
