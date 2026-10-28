@@ -47,6 +47,11 @@ namespace ContoursToRevit
                     var ms = job.Obj("masses");
                     results.Add(Step("masses", warnings, () => Masses.Run(doc, ms, warnings)));
                 }
+                if (job.Has("shapes"))
+                {
+                    var sh = job.Obj("shapes");
+                    results.Add(Step("shapes", warnings, () => Shapes.Run(doc, sh, warnings)));
+                }
                 if (job.Has("drape"))
                 {
                     var dr = job.Obj("drape");

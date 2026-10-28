@@ -195,7 +195,7 @@ namespace ContoursToRevit
                         ["url"] = Url,
                         ["compatibleRendering"] = Settings.Load().CompatibleRendering,
                         ["update"] = Updater.Status(),
-                        ["features"] = new[] { "drape", "masses" },
+                        ["features"] = new[] { "drape", "masses", "shapes", "building" },
                     };
                 case "getModel":
                     return await App.Instance.Jobs.Run(app => ModelInfo.Get(app));
@@ -224,6 +224,8 @@ namespace ContoursToRevit
                         _files.Clear();
                         return result;
                     }
+                case "getBuilding":
+                    return await App.Instance.Jobs.Run(app => BuildingExport.Get(app, msg));
                 case "select":
                     return await App.Instance.Jobs.Run(app => ModelInfo.Select(app, msg));
                 case "checkUpdate":
