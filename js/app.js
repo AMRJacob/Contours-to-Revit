@@ -1,25 +1,25 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.59.0';
-import { fetchElevation, sample } from './dem.js?v=0.59.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.59.0';
-import { Dxf } from './dxf.js?v=0.59.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.59.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.59.0';
-import { Flow } from './flow.js?v=0.59.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.60.0';
+import { fetchElevation, sample } from './dem.js?v=0.60.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.60.0';
+import { Dxf } from './dxf.js?v=0.60.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.60.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.60.0';
+import { Flow } from './flow.js?v=0.60.0';
 import { placeAt } from './parking-codes.js?v=0.51.1';
-import { createSketch } from './sketch.js?v=0.59.0';
-import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.59.0';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.59.0';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.59.0';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.59.0';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.59.0';
-import { loadLidar, applyLidar } from './lidar.js?v=0.59.0';
-import { findTrees } from './trees.js?v=0.59.0';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.59.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.59.0';
+import { createSketch } from './sketch.js?v=0.60.0';
+import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.60.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.60.0';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.60.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.60.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.60.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.60.0';
+import { findTrees } from './trees.js?v=0.60.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.60.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.60.0';
 
-const VERSION = '0.59.0';
+const VERSION = '0.60.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -1371,7 +1371,7 @@ document.querySelectorAll('.tab[data-view]').forEach(t => t.addEventListener('cl
   $('view3d').hidden = v !== '3d';
   if (v === 'preview') renderPreview();
   else if (v === 'map') map.invalidateSize();
-  if (v === '3d') v3Open(); else { v3?.show(false); sketch.attach3d(null); }
+  if (v === '3d') v3Open(); else { v3?.show(false); sketch.attach3d(null); dzAttach(); }
   // The Layers panel follows into the 3D view (same toggles: they drape on the ground and switch the massing).
   const lp = document.querySelector('.layers-panel');
   if (lp) {
@@ -2637,6 +2637,7 @@ const centroidOf = pts => [pts.reduce((a, c) => a + c[0], 0) / pts.length, pts.r
 
 function dzDraw() {
   if ((dz.sel || null) !== dzPopId) dzPopBuild(); else dzPopPlace();
+  if (dzIn3d()) dzDraw3d();
   const site = dz.site, des = dz.design;
   const cont = map.getContainer();
   const dpr = window.devicePixelRatio || 1;
@@ -2981,9 +2982,8 @@ function dzPopRefresh() {
 function dzPopPlace() {
   const f = dz.sel && dz.design?.feature(dz.sel);
   if (!f || dzPop.hidden) return;
-  const M = dzAffine(dz.site);
-  const [sx, sy] = toScreen(M, ...popAnchor(f));
-  const W = map.getContainer().clientWidth, H = map.getContainer().clientHeight;
+  const [sx, sy] = dzScr(...popAnchor(f));
+  const host = dzPop.parentElement || map.getContainer(), W = host.clientWidth, H = host.clientHeight;
   const pw = dzPop.offsetWidth || 220, ph = dzPop.offsetHeight || 120;
   let x = sx + 24, y = sy - ph / 2;
   if (x + pw > W - 8) x = sx - pw - 24;
@@ -3277,8 +3277,9 @@ function setMode(mode) {
   if (design || sketchOn) map.doubleClickZoom.disable(); else { map.doubleClickZoom.enable(); dz.poly = null; }
   sketch.setActive(sketchOn, diagramOn ? 'diagram' : 'sketch');
   dgMapStyle();
-  if (design) dzEnsure().then(() => { dzApplyTool(); dzRefresh(true); v3Dirty(); });
+  if (design) dzEnsure().then(() => { dzApplyTool(); dzRefresh(true); v3Dirty(); dzAttach(); });
   else { map.dragging.enable(); map.getContainer().classList.remove('sculpting'); $('dz-readout').hidden = true; dzPop.hidden = true; dzPopId = null; v3Dirty(); }
+  dzAttach();
   flowKick();
 }
 document.querySelectorAll('.mode').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
@@ -3350,7 +3351,8 @@ const TOOL_HINTS = {
 
 function dzApplyTool() {
   const t = dz.tool;
-  document.querySelectorAll('.tool').forEach(b => { const on = b.dataset.tool === t; b.classList.toggle('active', on); b.setAttribute('aria-checked', String(on)); });
+  document.querySelectorAll('.dz-bar [data-tool]').forEach(b => { const on = b.dataset.tool === t; b.classList.toggle('active', on); b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); });
+  const tOpt = document.getElementById('dz-opts-t'); if (tOpt) tOpt.textContent = { raise: 'Raise', lower: 'Lower', flatten: 'Flatten', smooth: 'Smooth', slope: 'Slope', wall: 'Wall', pad: 'Pad', swale: 'Swale' }[t] || '';
   const brush = BRUSHES.includes(t);
   $('f-amount').hidden = !(t === 'raise' || t === 'lower');
   $('f-target').hidden = t !== 'flatten';
@@ -3377,12 +3379,128 @@ function dzApplyTool() {
     slope: `slope ${SMODE_SIGN[dz.params.smode || 'exact']}${dz.params.slope}%`, swale: `swale ${dz.params.sslope}% · ${dz.params.swidth} ${u} wide`, wall: `wall ${dz.params.wheight} ${u}`, pad: dz.padElev != null ? `pad at ${dz.padElev.toFixed(1)}` : 'pad',
   }[t];
   dzDraw();
+  dzBarShow();
 }
 document.querySelectorAll('.tool').forEach(b => b.addEventListener('click', () => {
   if (dz.sel && dz.design?.feature(dz.sel)?.type !== b.dataset.tool) dz.sel = null;
   dz.tool = b.dataset.tool;
   dzApplyTool(); dzFeatureList();
 }));
+
+// ----- Grading toolbar on the map (like the Sketch toolbar) with the tool's options beside it -----
+const DZ_KEYS = { raise: 'R', lower: 'L', flatten: 'F', smooth: 'M', slope: 'S', wall: 'W', pad: 'P', swale: 'D' };
+var dzBar = document.createElement('div'); dzBar.className = 'sketch-bar dz-bar'; dzBar.hidden = true;
+var dzOpts = document.createElement('div'); dzOpts.className = 'dz-opts'; dzOpts.hidden = true;
+{
+  const grid = document.querySelector('.tool-grid');
+  const grp = name => { const g = document.createElement('div'); g.className = 'sk-grp'; g.textContent = name; dzBar.appendChild(g); };
+  [...grid.querySelectorAll('.tool')].forEach((b, i) => {
+    if (i === 0) grp('Brush'); if (i === 4) grp('Grade');
+    b.classList.remove('tool'); b.classList.add('sk-tool');
+    b.dataset.tipText = `${b.getAttribute('title')} (${DZ_KEYS[b.dataset.tool]})`; b.removeAttribute('title');
+    b.insertAdjacentHTML('beforeend', `<kbd>${DZ_KEYS[b.dataset.tool]}</kbd>`);
+    dzBar.appendChild(b);
+  });
+  grid.remove();
+  dzOpts.innerHTML = '<div class="dz-opts-h"><b id="dz-opts-t"></b><button type="button" class="dz-opts-x" title="Hide or show the options">–</button></div><div class="dz-opts-b"></div>';
+  const body = dzOpts.querySelector('.dz-opts-b');
+  for (const id of ['f-amount', 'f-target', 'f-strength', 'f-path', 'f-swale', 'f-slope', 'f-wall', 'f-pad', 'f-ratio', 'f-size', 'f-soft']) body.appendChild($(id));
+  dzOpts.querySelector('.dz-opts-x').addEventListener('click', () => { dzOpts.classList.toggle('min'); dzOpts.querySelector('.dz-opts-x').textContent = dzOpts.classList.contains('min') ? '+' : '–'; });
+  map.getContainer().append(dzBar, dzOpts);
+  for (const el of [dzBar, dzOpts]) { L.DomEvent.disableClickPropagation(el); L.DomEvent.disableScrollPropagation(el); }
+}
+/** Toolbar + options show in Site design once there's a site; the options sit beside the toolbar. */
+function dzBarShow() {
+  if (!dzBar || !dzOpts) return;
+  const on = dz.mode === 'design' && !!dz.design;
+  dzBar.hidden = dzOpts.hidden = !on;
+  if (!on) return;
+  const host = dzBar.parentElement, H = host.clientHeight - 16;
+  dzBar.classList.remove('two'); if (dzBar.offsetHeight > H) dzBar.classList.add('two');
+  const br = dzBar.getBoundingClientRect(), hr = host.getBoundingClientRect();
+  dzOpts.style.left = `${Math.round(br.right - hr.left + 8)}px`;
+  dzOpts.style.top = `${Math.round(Math.max(8, br.top - hr.top))}px`;
+}
+window.addEventListener('resize', () => requestAnimationFrame(dzBarShow));
+
+// ----- The grading tools in the 3D view: same handlers, points picked on the ground, a light overlay -----
+function dzIn3d() { return dz.mode === 'design' && !!dz.design && !!v3 && curView() === '3d'; }
+var dz3dCanvas = null;
+/** Screen position of a native point (map, or the 3D view on the proposed ground). */
+function dzScr(x, y) {
+  if (dzIn3d()) {
+    let z = dz.design.proposedAt(x, y); if (!Number.isFinite(z)) z = dz.design.existingAt(x, y);
+    const q = Number.isFinite(z) ? v3.project(x, y, z + 0.2) : null;
+    return q || [NaN, NaN];
+  }
+  return toScreen(dzAffine(dz.site), x, y);
+}
+/** Put the toolbar, options and feature editor where the user is working (map or 3D), and wire 3D once. */
+function dzAttach() {
+  if (!dzBar) return;
+  const in3 = dzIn3d(), host = in3 ? $('view3d') : map.getContainer();
+  for (const el of [dzBar, dzOpts, dzPop]) if (el.parentElement !== host) host.appendChild(el);
+  if (v3) {
+    if (!dz3dCanvas) { dz3dCanvas = document.createElement('canvas'); dz3dCanvas.className = 'dz3d-canvas'; dzWire3d(); }
+    if (in3) { if (dz3dCanvas.parentElement !== v3.el) v3.el.appendChild(dz3dCanvas); v3.frames.dz = dzDraw3d; v3.sketchNav(true); v3.el.classList.add('dz-drawing'); }
+    else { delete v3.frames.dz; dz3dCanvas.remove(); v3.el.classList.remove('dz-drawing'); if (dz.mode !== 'sketch' && dz.mode !== 'diagram') v3.sketchNav(false); }
+  }
+  dzBarShow();
+}
+function dzEv3(e) {
+  const r = v3.el.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top, p = v3.pickGround(sx, sy);
+  return { xy: p ? [p[0], p[1]] : null, cp: { x: sx, y: sy }, shift: e.shiftKey, alt: e.altKey };
+}
+function dzWire3d() {
+  const el = v3.el;
+  el.addEventListener('pointerdown', e => {
+    if (!dzIn3d() || e.button !== 0 || dz.spaceDown) return;
+    const ev = dzEv3(e); if (!ev.xy) return;
+    e.stopPropagation(); e.preventDefault(); dz.p3 = true; dzDown(ev);
+  }, true);
+  window.addEventListener('pointermove', e => {
+    if (!dzIn3d() || (e.buttons & 6) || !(dz.p3 || el.contains(e.target))) return;
+    const ev = dzEv3(e); if (ev.xy) dzMove(ev);
+  });
+  window.addEventListener('pointerup', e => { if (!dz.p3) return; dz.p3 = false; dzUp(dzEv3(e).xy, e.shiftKey); });
+  el.addEventListener('dblclick', e => { if (dzIn3d() && dz.poly) { e.stopPropagation(); dzFinishPoly(); } }, true);
+  el.addEventListener('pointerleave', () => { if (dzIn3d() && !dz.p3) { dz.cursor = null; dzDraw3d(); } });
+}
+/** While grading in 3D, rebuild the 3D surface every few frames so the ground follows the brush. */
+function dz3dLive() {
+  if (dz.v3t) return;
+  dz.v3t = setTimeout(() => { dz.v3t = 0; if (dz.design.stale) dz.design.rebuild(); v3Build(); }, 180);
+}
+function dzDraw3d() {
+  if (!dz3dCanvas || !dzIn3d()) return;
+  const el = v3.el, dpr = window.devicePixelRatio || 1, W = el.clientWidth, H = el.clientHeight;
+  if (dz3dCanvas.width !== Math.round(W * dpr) || dz3dCanvas.height !== Math.round(H * dpr)) { dz3dCanvas.width = Math.round(W * dpr); dz3dCanvas.height = Math.round(H * dpr); dz3dCanvas.style.width = `${W}px`; dz3dCanvas.style.height = `${H}px`; }
+  const g = dz3dCanvas.getContext('2d');
+  g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, dz3dCanvas.width, dz3dCanvas.height); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const path = (pts, close) => {
+    const Q = pts.map(q => dzScr(q[0], q[1])); if (Q.length < 2 || Q.some(q => !Number.isFinite(q[0]))) return false;
+    g.beginPath(); Q.forEach((q, i) => (i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]))); if (close) g.closePath(); return true;
+  };
+  const circle = (c, r, n = 48) => Array.from({ length: n }, (_, i) => [c[0] + r * Math.cos(i / n * 2 * Math.PI), c[1] + r * Math.sin(i / n * 2 * Math.PI)]);
+  const ORG = '#e8913f';
+  const f = dz.sel && dz.design.feature(dz.sel);
+  if (f) {
+    if (path(f.type === 'pad' ? Design.padOutline(f.geom, f.p.rot) : featPath(f), f.type === 'pad')) { g.strokeStyle = ORG; g.lineWidth = 2.5; g.stroke(); }
+    for (const h of featHandles(f)) { const [x, y] = dzScr(h[0], h[1]); if (!Number.isFinite(x)) continue; g.beginPath(); g.rect(x - 4.5, y - 4.5, 9, 9); g.fillStyle = '#fff'; g.fill(); g.strokeStyle = ORG; g.lineWidth = 1.5; g.stroke(); }
+  }
+  g.setLineDash([6, 4]); g.strokeStyle = ORG; g.lineWidth = 2;
+  const d = dz.drawing;
+  if (d) {
+    const pts = d.kind === 'pad' ? (d.shape === 'circle' ? circle(d.a, Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1])) : Design.padCorners({ a: d.a, b: d.b }, dzShapeParams('pad').rot)) : [d.a, d.b];
+    if (path(pts, d.kind === 'pad')) g.stroke();
+  }
+  if (dz.poly && path([...dz.poly.pts, ...(dz.cursor ? [dz.cursor] : [])], false)) g.stroke();
+  g.setLineDash([]);
+  if (dz.cursor && BRUSHES.includes(dz.tool) && !dz.edit) {
+    const col = { raise: '#4ade80', lower: '#f87171', flatten: '#facc15', smooth: '#e5e7eb' }[dz.tool];
+    if (path(circle(dz.cursor, dz.params.size / dz.site.toOut), true)) { g.strokeStyle = 'rgba(0,0,0,.5)'; g.lineWidth = 4; g.stroke(); g.strokeStyle = col; g.lineWidth = 2; g.stroke(); }
+  }
+}
 
 /** Field edits: update the selected feature live (one undo step per editing session), else set defaults. */
 function dzFieldsChanged() {
@@ -3506,10 +3624,10 @@ function dzStrokeTo(xy) {
 
 /** Hit-test features near a container point: a handle of the selected feature first, then any feature body. */
 function dzHit(cp) {
-  const des = dz.design, M = dzAffine(dz.site);
+  const des = dz.design, M = dzAffine(dz.site), toScreen = (_, x, y) => dzScr(x, y);
   const sel = dz.sel && des.feature(dz.sel);
   if (sel) {
-    const ri = rotInfo(sel, M);
+    const ri = dzIn3d() ? null : rotInfo(sel, M);
     if (ri && Math.hypot(ri.hx - cp.x, ri.hy - cp.y) < 11) return { f: sel, handle: 'rot', edge: true, pivot: ri.pivot };
     const hs = featHandles(sel);
     for (let i = 0; i < hs.length; i++) { const [sx, sy] = toScreen(M, ...hs[i]); if (Math.hypot(sx - cp.x, sy - cp.y) < 9) return { f: sel, handle: i, edge: true }; }
@@ -3579,23 +3697,28 @@ document.addEventListener('mousemove', e => {
 document.addEventListener('mouseup', e => { if (e.button === 1 && dz.pan) { dz.pan = null; map.getContainer().classList.remove('panning'); } });
 map.getContainer().addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
 
+/** Pointer events for the grading tools, from the map or the 3D view: { xy (native), cp: {x, y} (view px), shift, alt }. */
+const dzEvMap = e => ({ xy: dzNative(e), cp: e.containerPoint, shift: !!e.originalEvent?.shiftKey, alt: !!e.originalEvent?.altKey });
 map.on('mousedown', e => {
-  if (dz.mode !== 'design' || !dz.design || dz.spaceDown || e.originalEvent.button !== 0) return;
-  const xy = dzNative(e);
+  if (dz.mode !== 'design' || !dz.design || dz.spaceDown || e.originalEvent.button !== 0 || dzIn3d()) return;
+  dzDown(dzEvMap(e));
+});
+function dzDown(ev) {
+  const xy = ev.xy;
   const shapeTool = SHAPES.includes(dz.tool);
   // Polygon pad in progress: each click adds a corner; clicking the first corner closes it.
   if (dz.poly) {
-    const M = dzAffine(dz.site), [fx, fy] = toScreen(M, ...dz.poly.pts[0]);
-    if (dz.poly.kind === 'pad' && dz.poly.pts.length >= 3 && Math.hypot(fx - e.containerPoint.x, fy - e.containerPoint.y) < 10) dzFinishPoly();
-    else dz.poly.pts.push(e.originalEvent.shiftKey ? orthoSnap(dz.poly.pts.at(-1), xy) : xy);
+    const [fx, fy] = dzScr(...dz.poly.pts[0]);
+    if (dz.poly.kind === 'pad' && dz.poly.pts.length >= 3 && Math.hypot(fx - ev.cp.x, fy - ev.cp.y) < 10) dzFinishPoly();
+    else dz.poly.pts.push(ev.shift ? orthoSnap(dz.poly.pts.at(-1), xy) : xy);
     dzDraw();
     return;
   }
   // Features: drag a handle of the selected one, or (with a shape tool) select / move one.
-  const hit = dz.design.features.length ? dzHit(e.containerPoint) : null;
+  const hit = dz.design.features.length ? dzHit(ev.cp) : null;
   if (hit && (shapeTool || hit.edge)) {
     if (dz.sel !== hit.f.id) dzSelect(hit.f.id);
-    dz.edit = { id: hit.f.id, handle: hit.handle, from: xy, geom0: JSON.parse(JSON.stringify(hit.f.geom)), p0: { ...hit.f.p }, moved: false, pivot: hit.pivot, cursorS: [e.containerPoint.x, e.containerPoint.y], angle: 0 };
+    dz.edit = { id: hit.f.id, handle: hit.handle, from: xy, geom0: JSON.parse(JSON.stringify(hit.f.geom)), p0: { ...hit.f.p }, moved: false, pivot: hit.pivot, cursorS: [ev.cp.x, ev.cp.y], angle: 0 };
     return;
   }
   if (shapeTool) {
@@ -3607,16 +3730,16 @@ map.on('mousedown', e => {
     return;
   }
   if (dz.sel) { dz.sel = null; dzApplyTool(); dzFeatureList(); }
-  if (dz.tool === 'flatten' && (e.originalEvent.altKey || dz.target == null)) {
+  if (dz.tool === 'flatten' && (ev.alt || dz.target == null)) {
     const z = dz.design.proposedAt(xy[0], xy[1]);
-    if (Number.isFinite(z)) { dz.target = Math.round(z * 100) / 100; dzSyncUi(); dzApplyTool(); setStatus(`Flatten target set to ${dz.target.toFixed(2)} ${dz.site.units}${e.originalEvent.altKey ? '' : ' (sampled here — Alt+click to sample again)'}.`); }
-    if (e.originalEvent.altKey) return;
+    if (Number.isFinite(z)) { dz.target = Math.round(z * 100) / 100; dzSyncUi(); dzApplyTool(); setStatus(`Flatten target set to ${dz.target.toFixed(2)} ${dz.site.units}${ev.alt ? '' : ' (sampled here — Alt+click to sample again)'}.`); }
+    if (ev.alt) return;
   }
   dz.design.begin(dz.tool, { amount: dz.params.amount, target: dz.target, soft: dz.params.soft / 100, radius: dz.params.size / dz.site.toOut, strength: dz.params.strength / 100 });
   dz.stroking = true; dz.last = null;
   dzStrokeTo(xy);
   dzRefresh();
-});
+}
 
 /** Shift held: lock the direction from `from` to `to` to the project axes (project north if set, else grid). */
 function orthoSnap(from, to) {
@@ -3675,22 +3798,25 @@ function dzEditMove(xy, shift = false) {
 }
 
 map.on('mousemove', e => {
-  if (dz.mode !== 'design' || !dz.design || dz.pan) return;
-  const xy = dzNative(e);
-  const shift = e.originalEvent?.shiftKey;
+  if (dz.mode !== 'design' || !dz.design || dz.pan || dzIn3d()) return;
+  dzMove(dzEvMap(e));
+});
+function dzMove(ev) {
+  const xy = ev.xy, shift = ev.shift;
   dz.cursor = dz.poly && shift ? orthoSnap(dz.poly.pts.at(-1), xy) : xy;
   if (dz.stroking) dzStrokeTo(xy);
   else if (dz.drawing) dz.drawing.b = shift && dz.drawing.kind !== 'pad' ? orthoSnap(dz.drawing.a, xy) : xy;
   else if (dz.edit) dzEditMove(xy, shift);
   else if (dz.design.features.length) {
-    const hit = dzHit(e.containerPoint);
-    map.getContainer().classList.toggle('over-handle', !!hit && hit.handle >= 0);
-    map.getContainer().classList.toggle('over-rotate', !!hit && hit.handle === 'rot');
-    map.getContainer().classList.toggle('over-feature', !!hit && hit.handle < 0 && (hit.edge || SHAPES.includes(dz.tool)));
+    const hit = dzHit(ev.cp), el = dzIn3d() ? v3.el : map.getContainer();
+    el.classList.toggle('over-handle', !!hit && hit.handle >= 0);
+    el.classList.toggle('over-rotate', !!hit && hit.handle === 'rot');
+    el.classList.toggle('over-feature', !!hit && hit.handle < 0 && (hit.edge || SHAPES.includes(dz.tool)));
   }
   dzReadout(xy);
   dzRefresh();
-});
+  if (dzIn3d() && (dz.stroking || dz.edit?.moved)) dz3dLive();
+}
 map.on('mouseout', () => { if (dz.mode === 'design') { dz.cursor = null; dzDraw(); } });
 
 /** Close the polygon pad being clicked out (needs 3+ distinct corners). */
@@ -3716,16 +3842,16 @@ function dzFinishPoly() {
 map.on('dblclick', () => { if (dz.mode === 'design' && dz.poly) dzFinishPoly(); });
 
 document.addEventListener('mouseup', e => {
-  if (e.button !== 0) return;
+  if (e.button !== 0 || dzIn3d()) return;
+  let xy = null;
+  if ((dz.drawing || dz.edit) && dz.site) { try { xy = dzNative(e); } catch { xy = null; } }
+  dzUp(xy, e.shiftKey);
+});
+function dzUp(xy, shift) {
   // Shapes end exactly where the button is released (not at the last mouse-move).
-  if ((dz.drawing || dz.edit) && dz.site) {
-    try {
-      const xy = dzNative(e);
-      if (xy.every(Number.isFinite)) {
-        if (dz.drawing) dz.drawing.b = e.shiftKey && dz.drawing.kind !== 'pad' ? orthoSnap(dz.drawing.a, xy) : xy;
-        else dzEditMove(xy, e.shiftKey);
-      }
-    } catch { /* keep the last mouse-move position */ }
+  if ((dz.drawing || dz.edit) && dz.site && xy?.every(Number.isFinite)) {
+    if (dz.drawing) dz.drawing.b = shift && dz.drawing.kind !== 'pad' ? orthoSnap(dz.drawing.a, xy) : xy;
+    else dzEditMove(xy, shift);
   }
   if (dz.stroking) {
     dz.stroking = false; dz.last = null;
@@ -3748,7 +3874,7 @@ document.addEventListener('mouseup', e => {
     dz.edit = null;
     if (moved) { dz.design.rebuild(); dzAfterChange(); }
   }
-});
+}
 
 map.on('move zoom resize viewreset', () => { if (dz.mode === 'design') dzDraw(); });
 map.on('zoomstart', () => { if (dz.mode === 'design') dzCanvas.style.visibility = 'hidden'; });
@@ -3759,6 +3885,10 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') { if (dz.poly) { dz.poly = null; dzDraw(); } else if (dz.drawing) { dz.drawing = null; dzDraw(); } else if (dz.sel) { dz.sel = null; dzApplyTool(); dzFeatureList(); } if (typing(e)) e.target.blur(); return; }
   if (typing(e)) { if (e.key === 'Enter') e.target.blur(); return; }
   if (e.code === 'Space' && !dz.spaceDown) { dz.spaceDown = true; dzApplyTool(); e.preventDefault(); return; }
+  if (!e.ctrlKey && !e.metaKey && !e.altKey && !dz.poly && !dz.drawing) {
+    const tk = Object.entries(DZ_KEYS).find(([, k]) => k === e.key.toUpperCase());
+    if (tk && dz.design) { e.preventDefault(); dzBar.querySelector(`[data-tool="${tk[0]}"]`)?.click(); return; }
+  }
   if (dz.poly && e.key === 'Enter') { e.preventDefault(); dzFinishPoly(); return; }
   if (dz.poly && e.key === 'Backspace') { e.preventDefault(); dz.poly.pts.pop(); if (!dz.poly.pts.length) dz.poly = null; dzDraw(); return; }
   if ((e.key === 'Delete' || e.key === 'Backspace') && dz.sel) { e.preventDefault(); if (dz.design.removeFeature(dz.sel)) { dz.sel = null; dzApplyTool(); dzAfterChange(); } return; }
@@ -4604,6 +4734,7 @@ async function v3Open() {
   v3.show(true);
   v3Build();
   sketch.attach3d(v3);          // the sketch toolbar and tools carry on in 3D
+  dzAttach();                   // and so do the grading tools
   flowKick();
 }
 
