@@ -205,10 +205,11 @@ function surfaces(site, tol) {
 // ---------------------------------------------------------------- UI
 function ensurePanel() {
   if (!$('rv-settings')) {
+    // Plugin settings & updates: in the Settings drawer (General).
     const box = document.createElement('div');
     box.id = 'rv-settings';
-    const body = $('step-settings')?.querySelector('.step-body');
-    if (body) { body.prepend(box); box.addEventListener('click', onClick); }
+    const body = document.querySelector('.set-sec[data-sec="general"]') || $('step-settings')?.querySelector('.step-body');
+    if (body) { const h = document.createElement('h4'); h.className = 'set-h'; h.textContent = 'Revit plugin'; body.prepend(h, box); box.addEventListener('click', onClick); }
   }
   if ($('step-revit')) return;
   const sec = document.createElement('details');
@@ -216,9 +217,11 @@ function ensurePanel() {
   sec.id = 'step-revit';
   sec.open = true;
   sec.dataset.tone = 'revit';
-  sec.innerHTML = `<summary><span class="num">R</span><span class="st-title">Send to Revit</span><span class="st-sum" id="rv-sum"></span></summary><div class="step-body" id="rv-body"></div>`;
-  const before = $('step-settings');
-  before.parentNode.insertBefore(sec, before);
+  sec.dataset.art = 'revit';
+  sec.innerHTML = `<summary data-tip="place"><span class="num">R</span><span class="st-title">Revit</span><span class="st-sum" id="rv-sum"></span></summary><div class="step-body" id="rv-body"></div>`;
+  // At the end of the menus in every task (Existing site, Site design, Sketch), just above the action bar.
+  const anchor = $('step-generate') || $('step-settings');
+  anchor.parentNode.insertBefore(sec, anchor);
   sec.addEventListener('click', onClick);
   sec.addEventListener('change', onChange);
 }
@@ -253,7 +256,7 @@ function render() {
   $('rv-sum').textContent = `— ${model.doc.title}`;
   if (!site) {
     body.innerHTML = `${banner}<p class="rv-model"><strong>${esc(model.doc.title)}</strong></p>
-      <p class="hint">${snap ? 'This model already has a site from Contours to Revit. Open it to keep working on it, or draw a new boundary and Generate.' : 'Draw a boundary and click Generate, then send the site to this model.'}</p>
+      <p class="hint">${snap ? 'This model already has a site from Contours to Revit. Open it to keep working on it, or draw a new boundary and Generate.' : 'Draw a boundary and click Survey the site, then send it to this model.'}</p>
       <div class="align-row">${snapBtn}<button type="button" class="btn btn-quiet" data-rv="refresh">Refresh</button></div>${footer()}`;
     return;
   }
@@ -482,7 +485,7 @@ async function onClick(e) {
   const site = api.site();
   try {
     if (a === 'refresh') await refresh();
-    else if (a === 'settings') { const d = $('step-settings'); d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+    else if (a === 'settings') { document.getElementById('settings-open')?.click(); }
     else if (a === 'download') call('openUrl', { url: latest?.url || PLUGIN_DOWNLOAD });
     else if (a === 'update' || a === 'check-update') {
       if (!host?.update) { await checkUpdates(); render(); return; }       // plugin 0.1.0: no built-in updater
