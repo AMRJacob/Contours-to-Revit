@@ -711,7 +711,7 @@ button[data-tip], summary[data-tip], .sk-tool[data-tip], label[data-tip] { curso
 .tip .c-g { color: #22c55e; } .tip .c-c { color: #06b6d4; } .tip .c-r { color: #ef4444; } .tip .c-m { color: #d946ef; } .tip .c-p { color: #a855f7; }
 
 /* Tool notes at the bottom of the map */
-.coach { position: absolute; z-index: 1500; left: 50%; bottom: 26px; transform: translate(-50%, 8px); max-width: min(560px, 80%); padding: 8px 14px; border-radius: 8px;
+.coach { position: absolute; z-index: 1500; left: 50%; top: 52px; transform: translate(-50%, -8px); max-width: min(560px, 80%); padding: 8px 14px; border-radius: 8px;
   background: rgba(24,28,31,.92); color: #e7e4dd; font-size: 12.5px; line-height: 1.45; border-left: 3px solid var(--mode); box-shadow: 0 6px 20px rgba(0,0,0,.35);
   opacity: 0; pointer-events: none; transition: opacity .25s, transform .25s; }
 .coach.in { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
@@ -730,3 +730,5 @@ button[data-tip], summary[data-tip], .sk-tool[data-tip], label[data-tip] { curso
 .set-sec .set-h:first-child { margin-top: 12px; }
 @media (max-width: 820px) { .panel-bg, .panel-art { display: none; } .panel { background: color-mix(in srgb, var(--mode) 6%, var(--paper)); } .settings-drawer { position: fixed; width: 100%; } }
 .set-sec .set-h { margin-top: 16px; }
+.skc-bool button { flex: 1; font-weight: 600; padding: 0 8px; }
+.skc-bool button:hover { border-color: var(--mode); color: #fff; }

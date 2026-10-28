@@ -8,12 +8,13 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins } from './parking.js?v=0.47.2';
-import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.47.2';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.47.2';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.47.2';
-import * as SO from './solid.js?v=0.47.2';
-import { noteGeom, WIDTHS } from './notes.js?v=0.47.2';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins } from './parking.js?v=0.48.0';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.48.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.48.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.48.0';
+import * as SO from './solid.js?v=0.48.0';
+import { noteGeom, WIDTHS } from './notes.js?v=0.48.0';
+import { booleanSolids } from './bool.js?v=0.48.0';
 
 const TOOLS = [
   { id: 'select', key: 'V', label: 'Select', icon: '<path d="M5 3l14 8-6 1.5L10 19z"/>' },
@@ -403,6 +404,12 @@ export function createSketch(ctx) {
   }
   function drawSelection(g) {
     const o = findSel(); if (!o || sk.sel.kind === 'note') return;
+    const o2 = sk.sel2 && sk.sel.kind === 'mass' ? massById(sk.sel2.id) : null;
+    if (o2) {                                  // the second block for join / intersect / cut
+      g.save(); g.setLineDash([6, 4]); g.lineWidth = 2.5; g.strokeStyle = '#22d3ee';
+      for (const [a, b] of info(o2).edges) { const p = P3(o2, o2.v[a]), q = P3(o2, o2.v[b]); if (!p || !q) continue; g.beginPath(); g.moveTo(...p); g.lineTo(...q); g.stroke(); }
+      g.restore();
+    }
     const kind = sk.sel.kind, zf = handleZ(kind, o);
     if (sk.v3) {
       if (kind === 'mass') { g.lineWidth = 2; g.strokeStyle = ORANGE; for (const [a, b] of info(o).edges) { const p = P3(o, o.v[a]), q = P3(o, o.v[b]); if (!p || !q) continue; g.beginPath(); g.moveTo(...p); g.lineTo(...q); g.stroke(); } }
@@ -560,6 +567,15 @@ export function createSketch(ctx) {
   L.DomEvent.disableClickPropagation(cardEl); L.DomEvent.disableScrollPropagation(cardEl);
   const num = (k, v, min, max, step, w = 46) => `<input type="number" data-k="${k}" min="${min}" max="${max}" step="${step}" value="${v}" style="width:${w}px">`;
   function cardHtml(kind, o) {
+    if (kind === 'mass' && sk.sel2 && massById(sk.sel2.id)) {
+      const b = massById(sk.sel2.id);
+      return `<div class="skc-row"><b>Two blocks</b><span class="skc-read">${escapeHtml(useLabel(o))} (orange) + ${escapeHtml(useLabel(b))} (dashed)</span></div>
+        <div class="skc-row skc-bool">
+          <button type="button" data-k="bool-join" data-tip="bool-join">⊕ Join</button>
+          <button type="button" data-k="bool-intersect" data-tip="bool-intersect">⊗ Intersect</button>
+          <button type="button" data-k="bool-cut" data-tip="bool-cut">⊖ Cut</button></div>
+        <div class="skc-row skc-note">Cut takes the dashed block out of the orange one. The result keeps the orange block's use and floor height. Shift+click again to drop the second block.</div>`;
+    }
     if (kind === 'note') {
       const nm = { arrow: 'Arrow', line: 'Line', region: 'Region', label: 'Label' }[o.type];
       return `<div class="skc-row"><b>${nm}</b>${o.on === 'mass' ? '<span class="skc-read">on a building face</span>' : ''}<span style="flex:1"></span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div>
@@ -615,7 +631,7 @@ export function createSketch(ctx) {
     for (const q of pts) { if (!q) continue; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; }
     if (!Number.isFinite(x1)) { cardEl.hidden = true; return; }
     const W = cardEl.parentElement.clientWidth, H = cardEl.parentElement.clientHeight;
-    const sig = `${kind}:${o.id}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use, o.color, o.stand, o.curve, o.size, o.r, o.cut, o.islandR])}`;
+    const sig = `${kind}:${o.id}:${sk.sel2?.id || ''}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use, o.color, o.stand, o.curve, o.size, o.r, o.cut, o.islandR])}`;
     if (cardEl.dataset.sig !== sig && !cardEl.contains(document.activeElement)) { cardEl.dataset.sig = sig; cardEl.innerHTML = cardHtml(kind, o); }
     const read = cardEl.querySelector('[data-o="read"]') || {};
     if (kind === 'note') { /* nothing to read out */ } else if (kind === 'mass') {
@@ -630,9 +646,9 @@ export function createSketch(ctx) {
       read.textContent = `${fmtLen(Ln)} long · stalls it crosses are cleared`;
     } else read.textContent = fmtArea(area(o.pts) * sfPerNative2());
     cardEl.hidden = false;
-    const cw = cardEl.offsetWidth || 240, ch = cardEl.offsetHeight || 120;
-    cardEl.style.left = `${Math.max(8, Math.min(W - cw - 8, x1 + 14))}px`;
-    cardEl.style.top = `${Math.max(56, Math.min(H - ch - 8, y0 - 4))}px`;
+    // Pinned at the bottom-left of the view (beside the toolbar), so it never covers the blocks you're clicking.
+    void x1; void y0; void W; void H;
+    cardEl.style.left = '78px'; cardEl.style.top = 'auto'; cardEl.style.bottom = '14px';
   }
   function floorsBy(o, dir) {
     if (o.prm) { o.prm.floors = Math.max(1, Math.min(120, o.prm.floors + dir)); if (o.prm.step && o.prm.step.at >= o.prm.floors) o.prm.step = null; regen(o); return true; }
@@ -644,6 +660,7 @@ export function createSketch(ctx) {
     const b = e.target.closest('button[data-k]'); const o = findSel(); if (!b || !o) return;
     const k = b.dataset.k;
     if (k === 'del') { removeSel(); return; }
+    if (k.startsWith('bool-')) { combine(k.slice(5)); return; }
     if (k === 'fl-' || k === 'fl+') { before(); if (floorsBy(o, k === 'fl+' ? 1 : -1)) { remember(o); changed(true); } else sk.undo.pop(); }
     if (k === 'flip') { before(); o.prm.roof = { ...o.prm.roof, flip: !o.prm.roof?.flip }; regen(o); changed(true); }
     if (k.startsWith('rot') || k.startsWith('sh')) {
@@ -698,6 +715,28 @@ export function createSketch(ctx) {
     o.text = e.target.value; sk.ver++; draw();
   });
   function remember(o) { sk.last = { use: o.use, floors: o.prm?.floors || info(o).floors || 3, ftf: o.ftf, roof: o.prm?.roof?.type || sk.last?.roof || 'flat' }; }
+  /** Join / intersect / cut the selected block with the second one; the result replaces the first. */
+  async function combine(op) {
+    const A = findSel(), B = sk.sel2 && massById(sk.sel2.id);
+    if (!A || !B || sk.busy) return;
+    sk.busy = true; flash(`${op === 'join' ? 'Joining' : op === 'intersect' ? 'Intersecting' : 'Cutting'}…`);
+    const abs = m => { const b = massBase(m) * kz(); return { v: m.v.map(p => [p[0], p[1], p[2] + b]), f: m.f }; };
+    try {
+      const r = await booleanSolids(op, abs(A), abs(B));
+      before();
+      const zmin = Math.min(...r.v.map(p => p[2]));
+      A.v = r.v.map(p => [p[0], p[1], p[2] - zmin]); A.f = r.f; freeze(A);
+      sk.infos.delete(A.id);
+      sk.model.masses = sk.model.masses.filter(m => m.id !== B.id);
+      sk.model.notes = sk.model.notes.filter(n => n.mid !== B.id);
+      sk.sel2 = null; cardEl.dataset.sig = '';
+      flash(`${op === 'join' ? 'Joined' : op === 'intersect' ? 'Intersected' : 'Cut'} — ${info(A).floors} floors, ${fmtArea(massGfa(A))}. Ctrl+Z to undo.`);
+      changed();
+    } catch (e) {
+      console.error(e);
+      flash(`Couldn't ${op === 'cut' ? 'cut' : op}: ${e.message || e}`);
+    } finally { sk.busy = false; }
+  }
   function removeSel() {
     if (!sk.sel) return;
     before();
@@ -1327,6 +1366,12 @@ export function createSketch(ctx) {
     }
     const h = hit(ev);
     if (!h) { sk.clickEmpty = [ev.sx, ev.sy]; return false; }
+    // Shift+click a second block: the two can be joined, intersected or cut (see the card).
+    if (ev.shift && !h.h && h.kind === 'mass' && sk.sel?.kind === 'mass' && h.id !== sk.sel.id) {
+      sk.sel2 = sk.sel2?.id === h.id ? null : { id: h.id };
+      cardEl.dataset.sig = ''; draw(); card(); return true;
+    }
+    if (!ev.shift) sk.sel2 = null;
     const src = list(h.kind).find(o => o.id === h.id);
     if (ev.alt && h.h?.t === 'v') {                         // Alt+click a corner: remove it
       const P = outline(src);
