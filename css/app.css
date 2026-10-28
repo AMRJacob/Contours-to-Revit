@@ -975,3 +975,4 @@ body.theme-legend .dz-opts-h b { font-family: var(--display); color: var(--brass
 
 .skc-warn { color: #f5c97a; font-size: 11px; line-height: 1.35; flex-wrap: wrap; gap: 4px 8px; }
 .skc-warn button { font-size: 11px; padding: 2px 8px; }
+.wind-legend .wl-more summary { cursor: pointer; color: #9cc9ff; margin-top: 4px; }

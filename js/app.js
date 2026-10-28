@@ -1,25 +1,25 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.64.0';
-import { fetchElevation, sample } from './dem.js?v=0.64.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.64.0';
-import { Dxf } from './dxf.js?v=0.64.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.64.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.64.0';
-import { Flow } from './flow.js?v=0.64.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.64.1';
+import { fetchElevation, sample } from './dem.js?v=0.64.1';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.64.1';
+import { Dxf } from './dxf.js?v=0.64.1';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.64.1';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.64.1';
+import { Flow } from './flow.js?v=0.64.1';
 import { placeAt } from './parking-codes.js?v=0.51.1';
-import { createSketch } from './sketch.js?v=0.64.0';
-import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.64.0';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.64.0';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT, WindFlow, SHELTER, SHELTER_SRC, SHELTER_URL, wallCp, kzRel } from './wind.js?v=0.64.0';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.64.0';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.64.0';
-import { loadLidar, applyLidar } from './lidar.js?v=0.64.0';
-import { findTrees } from './trees.js?v=0.64.0';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.64.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.64.0';
+import { createSketch } from './sketch.js?v=0.64.1';
+import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.64.1';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.64.1';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT, WindFlow, SHELTER, SHELTER_SRC, SHELTER_URL, wallCp, kzRel } from './wind.js?v=0.64.1';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.64.1';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.64.1';
+import { loadLidar, applyLidar } from './lidar.js?v=0.64.1';
+import { findTrees } from './trees.js?v=0.64.1';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.64.1';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.64.1';
 
-const VERSION = '0.64.0';
+const VERSION = '0.64.1';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -5671,10 +5671,9 @@ function windMapDraw() {
 }
 /** Face colour for the pressure map: diverging, −0.8 (suction, blue) … +0.8 (pressure, red). */
 function windFaceColor(v) {
-  const t = Math.max(-1, Math.min(1, v / 0.8));
-  const W = [0.93, 0.93, 0.91], R = [0.86, 0.15, 0.12], B = [0.15, 0.39, 0.92];
-  const e = t >= 0 ? R : B, a = Math.abs(t);
-  return [W[0] + (e[0] - W[0]) * a, W[1] + (e[1] - W[1]) * a, W[2] + (e[2] - W[2]) * a];
+  const t = Math.max(-1, Math.min(1, v / 0.8)), a = Math.sqrt(Math.abs(t));        // square-root ramp: small values still show
+  const W = [0.93, 0.93, 0.91], R = [0.86, 0.15, 0.12], B = [0.15, 0.39, 0.92], e = t >= 0 ? R : B;
+  return [0, 1, 2].map(k => (W[k] + (e[k] - W[k]) * a) ** 2.2);                    // sRGB → linear for three.js
 }
 /** 3D: building faces coloured by wind pressure (wall Cp × height factor × shelter², weighted over the flows). */
 function windFaces() {
@@ -5706,10 +5705,10 @@ function windLegend() {
   const rows = Object.values(SHELTER).map(t => `<tr><td>${escapeHtml(t.label)}</td>${t.s.map(v => `<td>${pct(v)}</td>`).join('')}</tr>`).join('');
   let h = '';
   if (g) h += `<h5>Ground wind map — speed vs open wind</h5><div class="wl-bar" style="background:linear-gradient(90deg,${WG_STOPS.map(([v, c]) => `rgb(${c}) ${Math.round(v / 1.6 * 100)}%`).join(',')})"></div><div class="wl-ticks"><span>0</span><span>50%</span><span>100%</span><span>160%+</span></div>`;
-  if (f) h += `<h5>Building faces — wind pressure (3D)</h5><div class="wl-bar" style="background:linear-gradient(90deg,rgb(38,99,235),rgb(237,237,232),rgb(219,38,31))"></div><div class="wl-ticks"><span>−0.8 suction</span><span>0</span><span>+0.8 pressure</span></div>
+  if (f) h += `<h5>Building faces — wind pressure (3D)</h5><div class="wl-bar" style="background:linear-gradient(90deg,rgb(38,99,235),rgb(150,175,240) 25%,rgb(237,237,232) 50%,rgb(240,160,150) 75%,rgb(219,38,31))"></div><div class="wl-ticks"><span>−0.8 suction</span><span>−0.2</span><span>0</span><span>+0.2</span><span>+0.8 pressure</span></div>
     <div>Wall pressure coefficients (ASCE 7): windward <b>+0.8</b> · side walls <b>−0.7</b> · leeward <b>−0.5</b> (L/B ≤ 1), blended between; × height factor K<sub>z</sub> (exposure B, 2.01·(z/1200 ft)<sup>2/7</sup>, z ≥ 15 ft, relative to 33 ft) × shelter². Roofs grey (not computed).</div>`;
-  if (g || a) h += `<h5>Shelter behind obstacles — share of open wind at distance × height H</h5><table><tr><th></th><th>5H</th><th>10H</th><th>15H</th><th>20H</th><th>30H</th></tr>${rows}</table>
-    <div>From <a href="${SHELTER_URL}" target="_blank" rel="noopener">${escapeHtml(SHELTER_SRC)}</a>. Buildings use the solid row, evergreens the conifer row, deciduous trees the deciduous row in winter and the conifer row otherwise.</div>`;
+  if (g || a) h += `<details class="wl-more"><summary>Shelter values and source</summary><h5>Shelter behind obstacles — share of open wind at distance × height H</h5><table><tr><th></th><th>5H</th><th>10H</th><th>15H</th><th>20H</th><th>30H</th></tr>${rows}</table>
+    <div>From <a href="${SHELTER_URL}" target="_blank" rel="noopener">${escapeHtml(SHELTER_SRC)}</a>. Buildings use the solid row, evergreens the conifer row, deciduous trees the deciduous row in winter and the conifer row otherwise.</div></details>`;
   h += `<div class="wl-disc">⚠ Preliminary approximation for early design — not a wind study or CFD. Flow turns around buildings as 2D potential flow (no vortices or downdrafts). The windbreak figures are for long windbreaks across the wind; lone trees and short buildings are scaled by how much of the crosswind they block — a rule of thumb, not from the source.${f ? ' The ASCE 7 values above are quoted from memory and have not been checked against the standard.' : ''}</div>`;
   el.innerHTML = h;
 }
