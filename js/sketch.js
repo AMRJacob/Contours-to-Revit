@@ -8,13 +8,13 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins, filletAt } from './parking.js?v=0.57.0';
-import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.57.0';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.57.0';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.57.0';
-import * as SO from './solid.js?v=0.57.0';
-import { noteGeom, WIDTHS } from './notes.js?v=0.57.0';
-import { booleanSolids } from './bool.js?v=0.57.0';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, roundEach, driveJoins } from './parking.js?v=0.58.0';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.58.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.58.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.58.0';
+import * as SO from './solid.js?v=0.58.0';
+import { noteGeom, WIDTHS } from './notes.js?v=0.58.0';
+import { booleanSolids } from './bool.js?v=0.58.0';
 import { CODES, codeFor, spacesFor } from './parking-codes.js?v=0.51.1';
 
 const TOOLS = [
@@ -24,10 +24,10 @@ const TOOLS = [
   { id: 'pen', key: 'L', label: 'Draw', icon: '<path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3" opacity=".6"/>' },
   { id: 'push', key: 'U', label: 'Push/Pull', icon: '<path d="M5 14h14v6H5z"/><path d="M12 12V3M8.5 6.5L12 3l3.5 3.5"/>' },
   { id: 'slope', key: 'S', label: 'Slope', icon: '<path d="M3 19L21 9v10z"/><path d="M6 15l9-5M12 9.5l3 .5-1 3" opacity=".8"/>' },
-  { id: 'radius', key: 'F', label: 'Radius', icon: '<path d="M4 20V12a8 8 0 0 1 8-8h8"/><path d="M4 20h4M20 4v4" opacity=".5"/>' },
   { id: 'lot', key: 'P', group: 'Parking', label: 'Lot', icon: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v6M11 4v6M15 4v6M7 20v-6M11 20v-6M15 20v-6" opacity=".7"/>' },
   { id: 'island', key: 'I', label: 'Island', icon: '<rect x="3" y="8" width="18" height="8" rx="4"/><path d="M9 12h6" opacity=".7"/>' },
   { id: 'drive', key: 'D', label: 'Drive aisle', icon: '<path d="M5 21L10 3M19 21L14 3"/><path d="M12 5v3M12 11v3M12 17v3" opacity=".7"/>' },
+  { id: 'radius', key: 'F', label: 'Radius', icon: '<path d="M4 20V12a8 8 0 0 1 8-8h8"/><path d="M4 20h4M20 4v4" opacity=".5"/>' },
   { id: 'walk', key: 'W', group: 'Site', label: 'Sidewalk', icon: '<path d="M4 20C9 16 10 9 20 4" stroke-width="4" opacity=".35"/><path d="M4 20C9 16 10 9 20 4"/>' },
   { id: 'plant', key: 'G', label: 'Planting', icon: '<path d="M4 15c2-6 6-9 9-8s6 4 7 8c-2 4-5 5-8 5s-7-1-8-5z" fill="currentColor" fill-opacity=".25"/><path d="M8 15c1-2 2-3 3-3M13 15c1-2 2-3 3-3" opacity=".7"/>' },
   { id: 'tree', key: 'T', label: 'Tree', icon: '<circle cx="12" cy="10" r="7"/><path d="M12 17v4M9 10a3 3 0 0 1 3-3" opacity=".7"/>' },
@@ -68,7 +68,7 @@ const SHAPES = [
 const HINTS = {
   select: 'Click to select · drag to move · drag a corner or an edge of the selection to reshape it (Shift = free direction) · ⟳ rotate, ⤡ scale · Ctrl+drag any point, edge or face (add Shift for up / down) · Alt+drag duplicates · Alt+click a corner removes it.',
   point: 'Click an edge to add a corner there — then drag it with Select.',
-  radius: 'Click a corner to round it at the radius in the box — blocks, lots, islands, and where drive aisles meet the lot or the street (0 makes those sharp).',
+  radius: 'Click a corner of a lot, island or planting bed — or a curb return where an aisle meets the lot or the street — to round it; a box opens there to type the radius (0 = sharp).',
   mass: 'Drag a quick block (1–5: box, round, L, U, courtyard), or click corners and double-click. ↑ ↓ floors · R roof.',
   pen: 'On the ground: drag a rectangle or click an outline — it becomes a flat shape to pull up. On a face: drag or click from edge to edge to split it (lines stop at the edges; the new faces pull separately), or drag a rectangle inside it.',
   push: 'Drag a face in or out. Tops snap to whole floors (Shift = free). Ctrl = always make new sides. Type an exact distance in the box.',
@@ -165,10 +165,10 @@ export function createSketch(ctx) {
   }
   function lotLayout(l) {
     const opts = lotOpts(l);
-    const key = JSON.stringify([l.pts, opts]);
+    const key = JSON.stringify([l.pts, l.rad, opts]);
     const c = sk.layouts.get(l.id);
     if (c && c.key === key) return c.res;
-    const res = layoutLot(l.pts, opts);
+    const res = layoutLot(shapeOf(l), opts);
     sk.layouts.set(l.id, { key, res });
     return res;
   }
@@ -176,11 +176,17 @@ export function createSketch(ctx) {
   function joins() {
     if (sk.joins?.ver === sk.ver) return sk.joins.J;
     const rAt = d => p => { for (const [k, r] of Object.entries(d.rj || {})) { const [x, y] = k.split(',').map(Number); if (Math.hypot(x - p[0], y - p[1]) < 3 * perFt()) return r * perFt(); } return (d.r ?? 15) * perFt(); };
-    const J = driveJoins(sk.model.drives.map(d => ({ pts: d.pts, w: (d.w || 24) * perFt(), r: (d.r ?? 15) * perFt(), rAt: rAt(d), cut: d.cut !== false })), sk.model.lots.map(l => l.pts));
+    const J = driveJoins(sk.model.drives.map(d => ({ pts: d.pts, w: (d.w || 24) * perFt(), r: (d.r ?? 15) * perFt(), rAt: rAt(d), cut: d.cut !== false })), sk.model.lots.map(l => shapeOf(l)));
     sk.joins = { ver: sk.ver, J };
     return J;
   }
   const islandShape = (P, r) => roundPoly(P, (r ?? 3) * perFt());
+  /** An outline with its rounded corners (o.rad: { corner index: radius }). Free islands round every corner by o.r (3) unless set. */
+  function shapeOf(o, kind) {
+    const def = kind === 'island' ? (o.r ?? 3) : 0;
+    if (!def && !(o.rad && Object.keys(o.rad).length)) return o.pts;
+    return roundEach(o.pts, i => (o.rad?.[i] ?? def) * perFt());
+  }
   function nearestMass(l) {
     const c = centroid(l.pts);
     let best = null, bd = Infinity;
@@ -347,13 +353,14 @@ export function createSketch(ctx) {
     const green = colorOf(scheme(), 'green');
     // Planting beds and sidewalks sit under everything else.
     for (const pl of sk.model.plants) {
-      if (!path(pl.pts)) continue;
+      const plS = shapeOf(pl);
+      if (!path(plS)) continue;
       g.fillStyle = siteColor(`g:${pl.id}`, 'green'); g.globalAlpha = 0.85; g.fill(); g.globalAlpha = 1;
       g.save(); g.clip(); g.strokeStyle = 'rgba(20,83,45,0.35)'; g.lineWidth = 1;          // a light stipple of shrubs
       const bb = bbox(pl.pts), st = Math.max(6 / px, 6 * perFt());
       for (let x = bb[0]; x < bb[2]; x += st) for (let y = bb[1] + ((x / st) % 2) * st / 2; y < bb[3]; y += st) { const q = scr([x, y]); if (q) { g.beginPath(); g.arc(q[0], q[1], Math.max(1.2, st * px * 0.18), 0, Math.PI * 2); g.stroke(); } }
       g.restore();
-      path(pl.pts); g.strokeStyle = sk.sel?.id === pl.id ? ORANGE : 'rgba(20,83,45,0.85)'; g.lineWidth = sk.sel?.id === pl.id ? 2.5 : 1.2; g.stroke();
+      path(plS); g.strokeStyle = sk.sel?.id === pl.id ? ORANGE : 'rgba(20,83,45,0.85)'; g.lineWidth = sk.sel?.id === pl.id ? 2.5 : 1.2; g.stroke();
     }
     for (const w of sk.model.walks) {
       if (!path(w.pts, false)) continue;
@@ -365,8 +372,9 @@ export function createSketch(ctx) {
     for (const l of sk.model.lots) {
       const L = lotLayout(l), sel = sk.sel?.id === l.id;
       const lc = siteColor(`l:${l.id}`, 'lot');
-      path(l.pts); g.fillStyle = lc; g.globalAlpha = 0.75; g.fill(); g.globalAlpha = 1;
-      if (l.setback > 0 && L.inner?.length > 2) { path(l.pts); g.save(); g.clip(); g.fillStyle = green; g.globalAlpha = 0.55; g.fill(); g.restore(); path(L.inner); g.fillStyle = lc; g.globalAlpha = 0.9; g.fill(); g.globalAlpha = 1; }
+      const lS = shapeOf(l);
+      path(lS); g.fillStyle = lc; g.fill();                       // solid paving: hides the aerial under the lot
+      if (l.setback > 0 && L.inner?.length > 2) { path(lS); g.save(); g.clip(); g.fillStyle = green; g.globalAlpha = 0.55; g.fill(); g.restore(); path(L.inner); g.fillStyle = lc; g.globalAlpha = 0.9; g.fill(); g.globalAlpha = 1; }
       for (const dp of L.drives || []) { path(dp); g.fillStyle = lc; g.fill(); }
       if (px * 9 * perFt() > 2.2) {   // stalls only when they're big enough to see
         g.lineWidth = 1; g.strokeStyle = colorOf(scheme(), 'stripe');
@@ -378,7 +386,7 @@ export function createSketch(ctx) {
         }
       }
       for (const isl of L.islands || []) { path(islandShape(isl, l.islandR)); g.fillStyle = green; g.fill(); g.strokeStyle = 'rgba(20,83,45,0.6)'; g.lineWidth = 1; g.stroke(); }
-      path(l.pts); g.lineWidth = sel ? 2.5 : 1.5; g.strokeStyle = sel ? ORANGE : 'rgba(30,41,59,0.85)'; g.stroke();
+      path(lS); g.lineWidth = sel ? 2.5 : 1.5; g.strokeStyle = sel ? ORANGE : 'rgba(30,41,59,0.85)'; g.stroke();
     }
     const J = joins();
     for (const d of sk.model.drives) {
@@ -388,7 +396,7 @@ export function createSketch(ctx) {
     for (const W of J.wedges) { path(W); g.fillStyle = colorOf(scheme(), 'lot'); g.globalAlpha = 0.9; g.fill(); g.globalAlpha = 1; }
     for (const d of sk.model.drives) { path(d.pts, false); g.setLineDash([8, 6]); g.strokeStyle = '#fde047'; g.lineWidth = 1.5; g.stroke(); g.setLineDash([]); }
     for (const [a, b] of J.cuts) { path([a, b], false); g.strokeStyle = '#ffffff'; g.lineWidth = 3; g.setLineDash([4, 3]); g.stroke(); g.setLineDash([]); }
-    for (const isl of sk.model.islands) { path(islandShape(isl.pts, isl.r)); g.fillStyle = siteColor(`i:${isl.id}`, 'green'); g.fill(); g.strokeStyle = sk.sel?.id === isl.id ? ORANGE : 'rgba(20,83,45,0.8)'; g.lineWidth = sk.sel?.id === isl.id ? 2.5 : 1.2; g.stroke(); }
+    for (const isl of sk.model.islands) { path(shapeOf(isl, 'island')); g.fillStyle = siteColor(`i:${isl.id}`, 'green'); g.fill(); g.strokeStyle = sk.sel?.id === isl.id ? ORANGE : 'rgba(20,83,45,0.8)'; g.lineWidth = sk.sel?.id === isl.id ? 2.5 : 1.2; g.stroke(); }
     for (const l of sk.model.lots) {
       if (!showTags()) break;
       const L = lotLayout(l);
@@ -636,6 +644,7 @@ export function createSketch(ctx) {
   window.addEventListener('resize', () => requestAnimationFrame(fitBar));
   function setTool(t) {
     if (!tools().some(x => x.id === t)) t = 'select';
+    if (t !== 'radius') sk.rpopClose?.();
     sk.tool = t; sk.draw = null; sk.hov = null;
     card();
     bar.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
@@ -946,6 +955,7 @@ export function createSketch(ctx) {
     }
     const P = outline(o), n = P.length, a = P[T.i], b = P[(T.i + 1) % n], q = [a[0] + (b[0] - a[0]) * T.t, a[1] + (b[1] - a[1]) * T.t];
     P.splice(T.i + 1, 0, q);
+    if (o.rad) o.rad = Object.fromEntries(Object.entries(o.rad).map(([k, r]) => [+k > T.i ? +k + 1 : +k, r]));      // rounded corners keep their place
     if (o.prm) regen(o);
     sk.sel = { kind: T.kind, id: o.id };
     // Keep the button held to drag the new corner straight away.
@@ -953,39 +963,74 @@ export function createSketch(ctx) {
     sk.drag = { kind: T.kind, id: o.id, h: { t: 'v', i: T.i + 1 }, z, start, orig: JSON.stringify(o), carry: [], pushed: true, sx: ev.sx, sy: ev.sy };
     sk.hovE = null; changed(true);
   }
-  /** The corner the Radius tool would round: a drive-aisle join / entry, or an outline corner. */
+  /** The corner the Radius tool would round: a drive-aisle curb return, or a corner of a lot / island / planting bed
+   *  (picked at the corner or on its arc when it's already rounded). */
   function radiusTarget(ev) {
     let best = null;
-    const near = (q, d0 = 12) => q && Math.hypot(q[0] - ev.sx, q[1] - ev.sy) < d0;
-    for (const c of joins().corners) { const q = scr(c.p); if (near(q)) { const d = Math.hypot(q[0] - ev.sx, q[1] - ev.sy); if (!best || d < best.d) best = { type: 'joint', di: c.di, p: c.p, entry: c.entry, d }; } }
-    for (const kind of ['island', 'lot', 'plant', 'mass']) for (const o of list(kind)) {
-      if (kind === 'mass' && !o.prm) { for (const p of info(o).foot) { const q = P3(o, [p[0], p[1], 0]); if (near(q, 9) && !best) best = { type: 'free', id: o.id, p, d: 99 }; } continue; }
-      const P = outline(o), zf = handleZ(kind, o);
-      P.forEach((p, i) => { const q = scr(p, zf(p)); if (!near(q)) return; const d = Math.hypot(q[0] - ev.sx, q[1] - ev.sy); if (!best || d < best.d) best = { type: 'vertex', kind, id: o.id, i, p, d }; });
+    const consider = (q, r, tol = 14) => { if (!q) return; const d = Math.hypot(q[0] - ev.sx, q[1] - ev.sy); if (d < tol && (!best || d < best.d)) best = { ...r, d, q }; };
+    for (const c of joins().corners) {
+      const d = sk.model.drives[c.di], key = `${Math.round(c.p[0])},${Math.round(c.p[1])}`;
+      consider(scr(c.p), { type: 'joint', di: c.di, p: c.p, key, r: d.rj?.[key] ?? d.r ?? 15 });
+    }
+    for (const kind of ['island', 'lot', 'plant']) for (const o of list(kind)) {
+      const P = o.pts, n = P.length, zf = handleZ(kind, o), def = kind === 'island' ? (o.r ?? 3) : 0;
+      P.forEach((p, i) => {
+        const r = o.rad?.[i] ?? def, info0 = { type: 'vertex', kind, id: o.id, i, p, r };
+        consider(scr(p, zf(p)), info0);
+        if (r > 0) {                                     // the middle of its arc
+          const arc = roundEach([P[(i - 1 + n) % n], p, P[(i + 1) % n]], k => (k === 1 ? r * perFt() : 0));
+          const m = arc[Math.floor(arc.length / 2)]; consider(scr(m, zf(m)), { ...info0, p: m });
+        }
+      });
     }
     return best;
   }
+  function setCornerR(T, r) {
+    if (T.type === 'joint') { const d = sk.model.drives[T.di]; d.rj = { ...(d.rj || {}), [T.key]: r }; return; }
+    const o = list(T.kind).find(q => q.id === T.id); if (!o) return;
+    o.rad = { ...(o.rad || {}), [T.i]: r };
+  }
   function applyRadius(ev) {
     const T = radiusTarget(ev);
-    if (!T) { flash('Click a corner — of a block, lot or island, or where a drive aisle meets the paving or the street.'); return; }
-    if (T.type === 'free') { flash('That block was shaped by hand — rounding its corners isn\'t supported yet. Round the outline before pulling it up.'); return; }
+    if (!T) { flash('Click a corner of a lot, island or planting bed, or a curb return where an aisle meets the lot or the street.'); return; }
+    // A sharp corner takes the radius in the box; a rounded one keeps its radius — either way the box opens to type a new one.
     before();
-    if (T.type === 'joint') {
-      const d = sk.model.drives[T.di]; d.rj = { ...(d.rj || {}), [`${Math.round(T.p[0])},${Math.round(T.p[1])}`]: sk.radius };
-    } else {
-      if (!(sk.radius > 0)) { sk.undo.pop(); flash('Set a radius above 0 to round a corner.'); return; }
-      const o = list(T.kind).find(q => q.id === T.id), P = outline(o), R = filletAt(P, T.i, sk.radius * perFt());
-      P.splice(0, P.length, ...R);
-      if (o.prm) regen(o);
-      sk.infos.delete(o.id);
-    }
+    if (!(T.r > 0)) { setCornerR(T, sk.radius); T.r = sk.radius; }
     sk.hovR = null; changed();
+    openRadiusPop(T);
   }
+  // A small box at the corner to type its radius.
+  const rpop = document.createElement('div');
+  rpop.className = 'sk-rpop'; rpop.hidden = true;
+  rpop.innerHTML = '<span>Radius</span><input type="number" min="0" max="500" step="1"><span class="sk-u"></span><button type="button" data-rp="ok" title="Enter">✓</button><button type="button" data-rp="x" title="Make it sharp">0</button>';
+  L.DomEvent.disableClickPropagation(rpop); L.DomEvent.disableScrollPropagation(rpop);
+  function openRadiusPop(T) {
+    (sk.v3 ? sk.v3.el.parentElement : map.getContainer()).appendChild(rpop);
+    const q = scr(T.p, T.type === 'vertex' ? handleZ(T.kind, list(T.kind).find(o => o.id === T.id))(T.p) : undefined) || T.q;
+    rpop.style.left = `${Math.round(q[0] + 14)}px`; rpop.style.top = `${Math.round(q[1] - 16)}px`;
+    rpop.querySelector('.sk-u').textContent = uLen();
+    const inp = rpop.querySelector('input'); inp.value = String(+T.r.toFixed(1));
+    rpop.hidden = false; rpop.T = T;
+    setTimeout(() => { inp.focus(); inp.select(); }, 0);
+  }
+  const closeRadiusPop = () => { rpop.hidden = true; rpop.T = null; };
+  sk.rpopClose = closeRadiusPop;
+  const commitRadius = v => {
+    const T = rpop.T; if (!T) return;
+    const r = Math.max(0, Math.min(500, Number(v)));
+    if (!Number.isFinite(r) || r === T.r) { closeRadiusPop(); return; }
+    before(); setCornerR(T, r); T.r = r; sk.radius = r || sk.radius;
+    const inp = bar.querySelector('[data-fly="radius"]'); if (inp && r) inp.value = String(r);
+    changed(); closeRadiusPop();
+  };
+  rpop.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') commitRadius(e.target.value); if (e.key === 'Escape') closeRadiusPop(); });
+  rpop.addEventListener('click', e => { const b = e.target.closest('[data-rp]'); if (!b) return; commitRadius(b.dataset.rp === 'x' ? 0 : rpop.querySelector('input').value); });
+  map.on('movestart zoomstart', closeRadiusPop);
   function drawRadiusHover(g) {
     const T = sk.hovR; if (!T || sk.tool !== 'radius') return;
-    const q = T.type === 'vertex' ? scr(T.p, handleZ(T.kind, list(T.kind).find(o => o.id === T.id))(T.p)) : scr(T.p); if (!q) return;
-    g.save(); g.beginPath(); g.arc(q[0], q[1], 9, 0, Math.PI * 2); g.strokeStyle = T.type === 'free' ? '#ef4444' : ORANGE; g.lineWidth = 2.5; g.stroke();
-    g.restore(); tag(g, q, T.type === 'free' ? 'shaped by hand' : sk.radius > 0 ? `R ${sk.radius} ${uLen()}` : T.type === 'joint' ? 'make sharp' : 'set a radius');
+    const q = T.q; if (!q) return;
+    g.save(); g.beginPath(); g.arc(q[0], q[1], 9, 0, Math.PI * 2); g.strokeStyle = ORANGE; g.lineWidth = 2.5; g.stroke(); g.restore();
+    tag(g, q, T.r > 0 ? `R ${+T.r.toFixed(1)} ${uLen()} — click to change` : `round · R ${sk.radius} ${uLen()}`);
   }
   function drawEdgeHover(g) {
     const e = sk.hovE; if (!e) return;
@@ -1524,7 +1569,7 @@ export function createSketch(ctx) {
     if (!sk.v3) { const ms = sk.model.masses.slice().sort((a, b) => massTop(b) - massTop(a)); for (const m of ms) if (info(m).top(...xy)) return { key: `m:${m.id}` }; }
     const tree = !sk.v3 && ctx.pickContext?.(xy, 'tree'); if (tree) return { key: `t:${tree}` };
     for (const t of sk.model.trees) if (Math.hypot(xy[0] - t.pts[0][0], xy[1] - t.pts[0][1]) < t.d / 2 * perFt()) return { key: `t:${treeKeyOf(t)}` };
-    for (const i of sk.model.islands) if (inPoly(islandShape(i.pts, i.r), ...xy)) return { key: `i:${i.id}` };
+    for (const i of sk.model.islands) if (inPoly(shapeOf(i, 'island'), ...xy)) return { key: `i:${i.id}` };
     for (const w of sk.model.walks) for (let i = 0; i < w.pts.length - 1; i++) if (distSeg(xy, w.pts[i], w.pts[i + 1]) < (w.w || 5) * perFt() / 2) return { key: `w:${w.id}` };
     for (const d of sk.model.drives) for (let i = 0; i < d.pts.length - 1; i++) if (distSeg(xy, d.pts[i], d.pts[i + 1]) < (d.w || 24) * perFt() / 2) return { key: `d:${d.id}` };
     for (const l of sk.model.lots) if (inPoly(l.pts, ...xy)) return { key: `l:${l.id}` };
@@ -1695,7 +1740,7 @@ export function createSketch(ctx) {
     const src = list(h.kind).find(o => o.id === h.id);
     if (ev.alt && h.h?.t === 'v') {                         // Alt+click a corner: remove it
       const P = outline(src);
-      if (P.length > (closed(h.kind) ? 3 : 2)) { before(); P.splice(h.h.i, 1); if (src.prm) regen(src); changed(); }
+      if (P.length > (closed(h.kind) ? 3 : 2)) { before(); P.splice(h.h.i, 1); if (src.rad) src.rad = Object.fromEntries(Object.entries(src.rad).filter(([k]) => +k !== h.h.i).map(([k, r]) => [+k > h.h.i ? +k - 1 : +k, r])); if (src.prm) regen(src); changed(); }
       return true;
     }
     let target = h, obj = src;
@@ -1751,7 +1796,7 @@ export function createSketch(ctx) {
     }
     if (d?.pts) { const xy = groundSnap(ev, d.pts.at(-1), { own: d.pts }); if (xy) { d.hover = xy; draw(); } return; }
     if (!sk.drag && sk.tool === 'radius') {
-      const T = radiusTarget(ev), k = T ? JSON.stringify([T.type, T.id, T.di, T.i, Math.round(T.p[0]), Math.round(T.p[1])]) : '';
+      const T = radiusTarget(ev), k = T ? JSON.stringify([T.type, T.id, T.di, T.i, T.key, Math.round(T.q[0]), Math.round(T.q[1])]) : '';
       if (k !== (sk.hovRKey || '')) { sk.hovR = T; sk.hovRKey = k; draw(); }
       return;
     }
@@ -1958,6 +2003,7 @@ export function createSketch(ctx) {
   }, true);
   document.addEventListener('keyup', e => { if (sk.active && (e.key === 'Control' || e.key === 'Meta') && sk.tool === 'select' && sk.hov) { sk.hov = null; sk.hovKey = ''; draw(); } });
   function onKey(e) {
+    if (e.key === 'Escape' && sk.rpopClose && !rpop.hidden) { sk.rpopClose(); return true; }
     if (typing(e)) { if (e.key === 'Escape' || e.key === 'Enter') e.target.blur(); return false; }
     const k = e.key;
     if (k === 'Escape') {
@@ -2154,7 +2200,18 @@ export function createSketch(ctx) {
   }
   /** Parking for 3D: stall lines, accessible stalls, islands (low planters) and drive aisles draped on the ground. */
   function parking3d() {
-    const lines = [], acc = [], islands = [], drives = [], marks = [], extra = [];
+    const lines = [], acc = [], islands = [], drives = [], marks = [], extra = [], lotPave = [];
+    /** A flat outline draped on the ground: triangles split until they follow it (≤ 8 ft sides). */
+    const tess = (P, arr, lift) => {
+      const maxL = 8 * perFt();
+      const sub = (a, b, c, depth) => {
+        const L = Math.max(Math.hypot(a[0] - b[0], a[1] - b[1]), Math.hypot(b[0] - c[0], b[1] - c[1]), Math.hypot(c[0] - a[0], c[1] - a[1]));
+        if (L <= maxL || depth > 7) { for (const q of [a, b, c]) arr.push(q[0], q[1], zGround(q) + 0.15 + lift); return; }
+        const ab = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], bc = [(b[0] + c[0]) / 2, (b[1] + c[1]) / 2], ca = [(c[0] + a[0]) / 2, (c[1] + a[1]) / 2];
+        sub(a, ab, ca, depth + 1); sub(ab, b, bc, depth + 1); sub(ca, bc, c, depth + 1); sub(ab, bc, ca, depth + 1);
+      };
+      if (P.length >= 3) for (const [i, j, k] of ctx.triangulate(P)) sub(P[i], P[j], P[k], 0);
+    };
     /** Painted items (diagram) get their own mesh and colour. */
     const own = (key, def) => { if (!diagramOn() || !sk.model.paint?.[key]) return def; const arr = []; extra.push({ tris: arr, color: resolveC(sk.model.paint[key]) }); return arr; };
     const z = (x, y) => zGround([x, y]) + 0.15;
@@ -2178,7 +2235,8 @@ export function createSketch(ctx) {
     };
     for (const l of sk.model.lots) {
       const Lr = lotLayout(l);
-      const P = l.pts;
+      const P = shapeOf(l);
+      tess(P, own(`l:${l.id}`, lotPave), -0.07);                 // paving, just under the stall lines
       for (let i = 0; i < P.length; i++) { const a = P[i], b = P[(i + 1) % P.length]; lines.push(a[0], a[1], z(...a), b[0], b[1], z(...b)); }
       for (const st of Lr.stalls) {
         const q = st.pts;
@@ -2189,7 +2247,7 @@ export function createSketch(ctx) {
       for (const isl of Lr.islands || []) planter(islandShape(isl, l.islandR));
       if (l.setback > 0 && Lr.inner?.length > 2) for (let i = 0; i < Lr.inner.length; i++) { const a = Lr.inner[i], b = Lr.inner[(i + 1) % Lr.inner.length]; lines.push(a[0], a[1], z(...a), b[0], b[1], z(...b)); }
     }
-    for (const isl of sk.model.islands) planter(islandShape(isl.pts, isl.r), own(`i:${isl.id}`, islands));
+    for (const isl of sk.model.islands) planter(shapeOf(isl, 'island'), own(`i:${isl.id}`, islands));
     for (const d of sk.model.drives) { const out = own(`d:${d.id}`, drives); for (let i = 0; i < d.pts.length - 1; i++) drape(d.pts[i], d.pts[i + 1], (d.w || 24) * perFt(), out); }
     const J = joins();
     for (const W of J.wedges) for (let i = 1; i < W.length - 1; i++) for (const q of [W[0], W[i], W[i + 1]]) drives.push(q[0], q[1], z(...q) + 0.05);
@@ -2200,16 +2258,10 @@ export function createSketch(ctx) {
     }
     for (const pl of sk.model.plants) {
       const arr = []; extra.push({ tris: arr, color: siteColor(`g:${pl.id}`, 'green') });
-      const maxL = 8 * perFt(), P = pl.pts;
-      const sub = (a, b, c, depth) => {
-        const L = Math.max(Math.hypot(a[0] - b[0], a[1] - b[1]), Math.hypot(b[0] - c[0], b[1] - c[1]), Math.hypot(c[0] - a[0], c[1] - a[1]));
-        if (L <= maxL || depth > 7) { for (const q of [a, b, c]) arr.push(q[0], q[1], z(...q) + 0.08); return; }
-        const ab = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], bc = [(b[0] + c[0]) / 2, (b[1] + c[1]) / 2], ca = [(c[0] + a[0]) / 2, (c[1] + a[1]) / 2];
-        sub(a, ab, ca, depth + 1); sub(ab, b, bc, depth + 1); sub(ca, bc, c, depth + 1); sub(ab, bc, ca, depth + 1);
-      };
-      for (const [i, j, k] of ctx.triangulate(P)) sub(P[i], P[j], P[k], 0);
+      tess(shapeOf(pl), arr, 0.08);
     }
     for (const [a, b] of J.cuts) lines.push(a[0], a[1], z(...a) + 0.1, b[0], b[1], z(...b) + 0.1);
+    if (lotPave.length) extra.unshift({ tris: lotPave, color: colorOf(scheme(), 'lot') });
     return { lines, acc, islands, drives, marks, extra, stripe: colorOf(scheme(), 'stripe'), accColor: colorOf(scheme(), 'accessible'), lotColor: colorOf(scheme(), 'lot'), greenColor: colorOf(scheme(), 'green') };
   }
 

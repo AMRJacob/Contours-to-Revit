@@ -58,7 +58,7 @@ export const TIPS = {
   'bool-cut': { t: 'Cut', b: 'Takes the dashed (second) block out of the orange one — notches, courtyards, arcades, a tower carved out of a podium. The cutter is used up; Ctrl+Z brings it back.' },
   'sk-mass': { t: 'Shapes', k: 'M', b: 'Quick blocks: drag a box, round, L, U or courtyard (' + K('1 2 3 4 5') + '), or click an outline and double-click. ' + K('R') + ' changes the roof. They\'re ' + term('solid', 'solids') + ' you can keep shaping.' },
   'sk-point': { t: 'Add point', k: 'A', b: 'Click any edge — a block, lot, island or aisle — to put a new corner there. Keep the button down to drag it into place.' },
-  'sk-radius': { t: 'Radius', k: 'F', b: 'Set the radius in the box, then click corners to round them: blocks, lots, islands, and the curb returns where drive aisles meet the lot or the street. 0 makes an aisle corner sharp.' },
+  'sk-radius': { t: 'Radius', k: 'F', b: 'Click a corner of a lot, island or planting bed, or a curb return where an aisle meets the lot or the street. A sharp corner takes the radius in the box; a box opens at the corner to type a different one (0 = sharp). Click a rounded corner to change it.' },
   'sk-walk': { t: 'Sidewalk', k: 'W', b: 'Drag a straight sidewalk, or click points and double-click. Width in the box (5 ft to start).' },
   'sk-plant': { t: 'Planting', k: 'G', b: 'Drag or click out a planting bed or lawn. Round its corners with the Radius tool.' },
   'sk-tree': { t: 'Tree', k: 'T', b: 'Click to plant a tree with the crown size in the box, or drag out its crown. Shows in plan, 3D and the diagram; set its height in the card.' },

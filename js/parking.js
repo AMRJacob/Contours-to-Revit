@@ -357,6 +357,18 @@ export function driveJoins(drives, paved) {
   });
   return { wedges, cuts, corners };
 }
+/** Outline with corner i rounded to radius rOf(i) (0 = left sharp); each radius is limited to fit its two sides. */
+export function roundEach(P, rOf, segs = 8) {
+  const n = P.length; if (n < 3) return P.slice();
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const r = rOf(i);
+    if (!(r > 0)) { out.push(P[i]); continue; }
+    const tri = [P[(i - 1 + n) % n], P[i], P[(i + 1) % n]], k = segs + 1;
+    out.push(...roundPoly(tri, r, segs).slice(k, 2 * k));
+  }
+  return out;
+}
 /** Round one corner (index i) of an outline with radius r: the corner is replaced by arc points. */
 export function filletAt(P, i, r, segs = 8) {
   const n = P.length, closedRing = n >= 3;

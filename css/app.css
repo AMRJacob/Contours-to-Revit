@@ -937,3 +937,9 @@ body.theme-legend .stats dd.over { color: #f6b38a; }
 /* Toolbar in two columns when the view is short */
 .sketch-bar.two { display: grid; grid-template-columns: 52px 52px; gap: 4px; align-items: start; }
 .sketch-bar.two .sk-grp { grid-column: 1 / -1; }
+
+/* Radius box at a corner */
+.sk-rpop { position: absolute; z-index: 1004; display: flex; align-items: center; gap: 5px; padding: 5px 7px; border-radius: 7px; background: rgba(28,34,38,.96); color: #e7e4dd; font-size: 12px; box-shadow: 0 6px 18px rgba(0,0,0,.4); border-top: 2px solid var(--mode); }
+.sk-rpop input { width: 54px; font: inherit; padding: 2px 4px; }
+.sk-rpop button { border: 1px solid #3c464c; background: #2b3338; color: inherit; border-radius: 4px; cursor: pointer; padding: 1px 7px; font: inherit; }
+body.theme-legend .sk-rpop { border-radius: 2px; border: 1px solid var(--line); border-top: 2px solid var(--mode); background: linear-gradient(180deg, rgba(18,23,30,.97), rgba(9,12,16,.97)); }
