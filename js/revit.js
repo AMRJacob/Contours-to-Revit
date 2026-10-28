@@ -923,9 +923,10 @@ async function getBuilding(site) {
     const k = kOf(site), d = api.datum(site), p = model.pbp;
     const conv = (X, Y, Z) => { const [x, y] = api.inXY(site, (X - p.x) / k, (Y - p.y) / k); return [x, y, (Z - p.z) / k + d]; };
     const [ox, oy, oz] = r.origin, o0 = conv(ox, oy, oz);
+    let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
     const buckets = r.buckets.map(b => {
       const a = b64f32(b.pos);
-      for (let i = 0; i < a.length; i += 3) { const q = conv(ox + a[i], oy + a[i + 1], oz + a[i + 2]); a[i] = q[0] - o0[0]; a[i + 1] = q[1] - o0[1]; a[i + 2] = q[2] - o0[2]; }
+      for (let i = 0; i < a.length; i += 3) { const q = conv(ox + a[i], oy + a[i + 1], oz + a[i + 2]); a[i] = q[0] - o0[0]; a[i + 1] = q[1] - o0[1]; a[i + 2] = q[2] - o0[2]; if (q[0] < bx0) bx0 = q[0]; if (q[0] > bx1) bx1 = q[0]; if (q[1] < by0) by0 = q[1]; if (q[1] > by1) by1 = q[1]; }
       return { mat: b.mat, pos: f32b64(a) };
     });
     const nPerFt = api.nativePerOut(site) / k;           // native units per Revit foot
@@ -935,6 +936,7 @@ async function getBuilding(site) {
     api.setRevitBuilding({ id: `rvb-${Date.now().toString(36)}`, name: r.name, at: new Date().toLocaleDateString(), how: r.how, gfa: r.gfa || 0, floors: r.floors || 0, use: 'office',
       origin: o0, buckets, materials, tris: r.triangles });
     const tex = materials.filter(m => m.tex).length;
-    api.setStatus(`Brought in ${r.elements} element${r.elements === 1 ? '' : 's'} from the ${r.how === 'selection' ? 'selection' : r.how === 'view' ? 'active 3D view' : 'model'} — ${r.triangles.toLocaleString()} triangles, ${materials.length} materials${tex ? ` (${tex} with textures)` : ''}${r.truncated ? '. Trimmed at 250,000 triangles — select fewer elements for the rest.' : '.'}`, !!r.truncated);
+    const bx = site.box, cxB = (bx0 + bx1) / 2, cyB = (by0 + by1) / 2, off = cxB < bx.xmin || cxB > bx.xmax || cyB < bx.ymin || cyB > bx.ymax;
+    api.setStatus(`Brought in ${r.elements} element${r.elements === 1 ? '' : 's'} from the ${r.how === 'selection' ? 'selection' : r.how === 'view' ? 'active 3D view' : 'model'} — ${r.triangles.toLocaleString()} triangles, ${materials.length} materials${tex ? ` (${tex} with textures)` : ''}${r.truncated ? '. Trimmed at 250,000 triangles — select fewer elements for the rest.' : '.'}${off ? ' It landed outside the site — its card in Sketch can move it onto the site.' : ''}`, !!r.truncated || off);
   } finally { busy = false; render(); }
 }

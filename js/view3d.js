@@ -713,6 +713,47 @@ export class SiteView3D {
     };
   }
 
+  /**
+   * Colour every building face (map buildings, Sketch blocks, Revit buildings) by fn(x, y, hAbove, nx, ny, up) →
+   * [r, g, b] (x, y native; hAbove output units above the ground; nx, ny horizontal normal in native axes; up = the
+   * normal's vertical part). Draws coloured copies and hides the originals; fn = null puts the originals back.
+   */
+  paintFaces(fn, groundAt) {
+    if (this.paint) { this.scene.remove(this.paint); this.paint.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); this.paint = null; }
+    for (const m of this._painted || []) m.visible = true;
+    this._painted = [];
+    if (!fn) return;
+    const targets = [];
+    if (this.bldg) targets.push(this.bldg);
+    this.sketch?.traverse(o => { if (o.isMesh && o.name === 'sketchMass') targets.push(o); });
+    this.revit?.traverse(o => { if (o.isMesh) targets.push(o); });
+    const grp = new THREE.Group(), a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
+    for (const m of targets) {
+      m.updateMatrixWorld();
+      const src = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry, P = src.attributes.position, cnt = P.count;
+      const pos = new Float32Array(cnt * 3), col = new Float32Array(cnt * 3);
+      for (let v = 0; v + 2 < cnt; v += 3) {
+        a.fromBufferAttribute(P, v).applyMatrix4(m.matrixWorld); b.fromBufferAttribute(P, v + 1).applyMatrix4(m.matrixWorld); c.fromBufferAttribute(P, v + 2).applyMatrix4(m.matrixWorld);
+        pos.set([a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z], v * 3);
+        n.crossVectors(e1.subVectors(b, a), e2.subVectors(c, a)); const L = n.length() || 1; n.divideScalar(L);
+        const X = (a.x + b.x + c.x) / 3, Y = (a.y + b.y + c.y) / 3, Z = (a.z + b.z + c.z) / 3;
+        const x = X / this.k + this.cx, y = -Z / this.k + this.cy, gz = groundAt ? groundAt(x, y) : NaN;
+        const hAbove = Number.isFinite(gz) ? Y - (gz - this.z0) * this.ex : Y;
+        const rgb = fn(x, y, hAbove, n.x, -n.z, n.y) || [0.7, 0.7, 0.7];
+        for (let k = 0; k < 3; k++) col.set(rgb, (v + k) * 3);
+      }
+      if (src !== m.geometry) src.dispose();
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      geo.computeVertexNormals();
+      grp.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, flatShading: true })));
+      m.visible = false; this._painted.push(m);
+    }
+    grp.name = 'windFaces';
+    this.paint = grp; this.scene.add(grp);
+  }
+
   setExaggeration(ex) { this.ex = ex; }
 
   /** The current view as an image (renders a frame first so the drawing buffer is fresh). */

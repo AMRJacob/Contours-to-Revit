@@ -959,3 +959,19 @@ body.theme-legend .dz-opts-h b { font-family: var(--display); color: var(--brass
 #step-revit .rv-from { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 8px 0 12px; background: color-mix(in srgb, var(--mode) 8%, transparent); }
 #step-revit .rv-from p { margin: 0 0 6px; font-size: 13px; }
 #step-revit .rv-from .hint { margin: 6px 0 0; font-size: 12px; }
+
+/* Wind: flow options and legends */
+.env-checks { flex-wrap: wrap; gap: 4px 12px; }
+.wind-legend { margin: 6px 0 2px; font-size: 11px; color: #cfd6db; line-height: 1.35; }
+.wind-legend .wl-bar { height: 9px; border-radius: 3px; margin: 3px 0 1px; }
+.wind-legend .wl-ticks { display: flex; justify-content: space-between; color: #aab3b9; font-size: 10px; }
+.wind-legend table { border-collapse: collapse; margin: 4px 0; font-size: 10px; color: #cfd6db; }
+.wind-legend td, .wind-legend th { padding: 1px 4px; text-align: right; border-bottom: 1px solid rgba(255,255,255,.08); font-weight: 400; }
+.wind-legend td:first-child, .wind-legend th:first-child { text-align: left; }
+.wind-legend .wl-disc { color: #f5c97a; margin-top: 4px; }
+.wind-legend a { color: #9cc9ff; }
+.wind-legend h5 { margin: 6px 0 0; font-size: 11px; color: #e7e4dd; }
+.wind-map-canvas { position: absolute; inset: 0; pointer-events: none; z-index: 440; }
+
+.skc-warn { color: #f5c97a; font-size: 11px; line-height: 1.35; flex-wrap: wrap; gap: 4px 8px; }
+.skc-warn button { font-size: 11px; padding: 2px 8px; }

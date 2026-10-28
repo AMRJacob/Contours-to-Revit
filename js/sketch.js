@@ -8,13 +8,13 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, roundEach, driveJoins } from './parking.js?v=0.63.0';
-import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.63.0';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.63.0';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.63.0';
-import * as SO from './solid.js?v=0.63.0';
-import { noteGeom, WIDTHS } from './notes.js?v=0.63.0';
-import { booleanSolids } from './bool.js?v=0.63.0';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, roundEach, driveJoins } from './parking.js?v=0.64.0';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.64.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.64.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.64.0';
+import * as SO from './solid.js?v=0.64.0';
+import { noteGeom, WIDTHS } from './notes.js?v=0.64.0';
+import { booleanSolids } from './bool.js?v=0.64.0';
 import { CODES, codeFor, spacesFor } from './parking-codes.js?v=0.51.1';
 
 const TOOLS = [
@@ -386,6 +386,18 @@ export function createSketch(ctx) {
     const I = { buckets, up, bb: [x0, y0, x1, y1], zmin: z0, zmax: z1, roofAt };
     (sk.rvCache ||= new Map()).set(o.id, { o, I });
     return I;
+  }
+  /** Where a Revit building landed relative to the site: off the site or off the ground → a note and a fix button. */
+  function rvWhere(o) {
+    const I = rvInfo(o), [x0, y0, x1, y1] = I.bb, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, box = ctx.siteBox?.(), out = [];
+    if (box && (cx < box.xmin || cx > box.xmax || cy < box.ymin || cy > box.ymax)) {
+      const bx = (box.xmin + box.xmax) / 2, by = (box.ymin + box.ymax) / 2, d = Math.hypot(cx - bx, cy - by) / perFt();
+      const dir = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'][Math.round(((Math.atan2(cx - bx, cy - by) * 180 / Math.PI + 360) % 360) / 45) % 8];
+      out.push(`<div class="skc-row skc-warn">It landed ${Math.round(d).toLocaleString()} ft ${dir} of the site — the building isn't where the site sits in that Revit model (check the Project Base Point / placement there).<button type="button" data-k="rv-fit">Move it onto the site</button></div>`);
+    }
+    const g = Math.min(...[[cx, cy], [x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(p => zGround(p))), dz = (I.zmin - g) / outPerFt();
+    if (Number.isFinite(dz) && Math.abs(dz) > 10) out.push(`<div class="skc-row skc-warn">Its lowest point is ${Math.round(Math.abs(dz)).toLocaleString()} ft ${dz > 0 ? 'above' : 'below'} the ground there${dz < 0 ? ' (hidden underground)' : ''} — the model's levels don't match the site's elevations.<button type="button" data-k="rv-ground">Set it on the ground</button></div>`);
+    return out.join('');
   }
   const rvMatColor = (o, mi) => { const m = o.materials[mi] || {}, c = m.render || m.rgb || [200, 200, 200]; return `rgb(${c[0]},${c[1]},${c[2]})`; };
   function drawRevit(g) {
@@ -797,7 +809,7 @@ export function createSketch(ctx) {
     if (kind === 'revit') return `<div class="skc-row"><b>${escapeHtml(o.name || 'Revit building')}</b><span class="skc-read">from Revit ${escapeHtml(o.at || '')}</span><button type="button" data-k="del" title="Remove it from the site (Del)">🗑</button></div>
         <div class="skc-row"><span>Use</span><select data-k="use">${scheme().uses.map(u => `<option value="${u.key}"${u.key === o.use ? ' selected' : ''}>${escapeHtml(u.label)}</option>`).join('')}</select>
           <span>floor area</span>${num('gfa', o.gfa || 0, 0, 1e7, 100, 80)}<span>sf</span></div>
-        <div class="skc-row skc-note">${o.gfa ? `${o.floors || '?'} floor levels with ${Math.round(o.gfa).toLocaleString()} sf of floors in Revit.` : 'No floors in what was sent — type the floor area for parking.'} Send it again from Revit to update; it's placed by Revit, so it doesn't move here.</div>`;
+        <div class="skc-row skc-note">${o.gfa ? `${o.floors || '?'} floor levels with ${Math.round(o.gfa).toLocaleString()} sf of floors in Revit.` : 'No floors in what was sent — type the floor area for parking.'} Placed where Revit puts it, relative to the site's placement in that model.</div>${rvWhere(o)}`;
     if (kind === 'walk') return `<div class="skc-row"><span>Sidewalk</span>${num('w', o.w || 5, 2, 40, 0.5, 42)}<span>${uLen()} wide</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div><div class="skc-row skc-read" data-o="read"></div>`;
     if (kind === 'plant') return `<div class="skc-row"><span>Planting</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div><div class="skc-row skc-read" data-o="read"></div>`;
     if (kind === 'tree') return `<div class="skc-row"><select data-k="form">${[['broadleaf', 'Broadleaf'], ['pine', 'Pine'], ['cedar', 'Cedar']].map(([k, l]) => `<option value="${k}"${(o.form || 'broadleaf') === k ? ' selected' : ''}>${l}</option>`).join('')}</select><span>crown ⌀</span>${num('d', o.d, 3, 120, 1, 42)}<span>height</span>${num('h', o.h, 5, 150, 1, 42)}<span>${uLen()}</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div>`;
@@ -846,6 +858,20 @@ export function createSketch(ctx) {
     if (k.startsWith('bool-')) { combine(k.slice(5)); return; }
     if (k === 'fl-' || k === 'fl+') { before(); if (floorsBy(o, k === 'fl+' ? 1 : -1)) { remember(o); changed(true); } else sk.undo.pop(); }
     if (k === 'accAuto') { before(); delete o.accAt; changed(true); }
+    if (k === 'rv-fit' || k === 'rv-ground') {
+      const I = rvInfo(o), [x0, y0, x1, y1] = I.bb, box = ctx.siteBox?.();
+      before();
+      o.origin = o.origin.slice();
+      if (k === 'rv-fit' && box) { o.origin[0] += (box.xmin + box.xmax) / 2 - (x0 + x1) / 2; o.origin[1] += (box.ymin + box.ymax) / 2 - (y0 + y1) / 2; }
+      sk.rvCache?.delete(o.id);
+      const I2 = rvInfo(o), [a0, b0, a1, b1] = I2.bb, cx = (a0 + a1) / 2, cy = (b0 + b1) / 2;
+      if (k === 'rv-ground' || Math.abs(I2.zmin - zGround([cx, cy])) > 10 * outPerFt()) {
+        const g = Math.min(...[[cx, cy], [a0, b0], [a1, b0], [a1, b1], [a0, b1]].map(p => zGround(p)));
+        if (Number.isFinite(g)) o.origin[2] += g - I2.zmin;
+        sk.rvCache?.delete(o.id);
+      }
+      cardEl.dataset.sig = ''; changed(true);
+    }
     if (k === 'flip') { before(); o.prm.roof = { ...o.prm.roof, flip: !o.prm.roof?.flip }; regen(o); changed(true); }
     if (k.startsWith('rot') || k.startsWith('sh')) {
       before();

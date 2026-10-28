@@ -1,25 +1,25 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.63.0';
-import { fetchElevation, sample } from './dem.js?v=0.63.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.63.0';
-import { Dxf } from './dxf.js?v=0.63.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.63.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.63.0';
-import { Flow } from './flow.js?v=0.63.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.64.0';
+import { fetchElevation, sample } from './dem.js?v=0.64.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.64.0';
+import { Dxf } from './dxf.js?v=0.64.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.64.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.64.0';
+import { Flow } from './flow.js?v=0.64.0';
 import { placeAt } from './parking-codes.js?v=0.51.1';
-import { createSketch } from './sketch.js?v=0.63.0';
-import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.63.0';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.63.0';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.63.0';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.63.0';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.63.0';
-import { loadLidar, applyLidar } from './lidar.js?v=0.63.0';
-import { findTrees } from './trees.js?v=0.63.0';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.63.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.63.0';
+import { createSketch } from './sketch.js?v=0.64.0';
+import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.64.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.64.0';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT, WindFlow, SHELTER, SHELTER_SRC, SHELTER_URL, wallCp, kzRel } from './wind.js?v=0.64.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.64.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.64.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.64.0';
+import { findTrees } from './trees.js?v=0.64.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.64.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.64.0';
 
-const VERSION = '0.63.0';
+const VERSION = '0.64.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -2530,9 +2530,10 @@ const sketch = createSketch({
   affine: site => dzAffine(site),
   toNative: ll => projector(state.result.zone).fwd([ll.lng, ll.lat]),
   zAt: (x, y) => (state.result ? siteGroundAt(state.result, x, y) : 0),
+  siteBox: () => state.result?.box || null,
   unitsPerFt: site => zoneUnitsPerMeter(site.zone) * 0.3048,
   mode: () => dz.mode,
-  onChange: () => { projTouch(); v3Dirty(); if (sunS?.on) sunLater(); dgMapStyle(); },
+  onChange: () => { projTouch(); v3Dirty(); if (sunS?.on) sunLater(); dgMapStyle(); if (windS?.on) windKick(); },
   // Diagram paint bucket: keys for existing trees and buildings, and what's under a plan point.
   treeKey: t => treeKey(t),
   pickContext: (xy, kind) => pickContext(xy, kind),
@@ -3227,6 +3228,7 @@ function dzAfterChange(save = true) {
   v3Dirty();
   dgMapStyle();
   if (sunS?.on) sunLater();
+  if (windS?.on) windKick();
   if (dz.sel && !dz.design.feature(dz.sel)) dz.sel = null;
   setTimeout(dzPopRefresh, 0);
   dzEarthwork();
@@ -3355,7 +3357,7 @@ function dzTreeSummary() {
   }
   const eb = $('dz-bldg-n'); if (eb && dz.site) { const nb = shownBuildings(dz.site).filter(b => bldgsRemoved().has(bldgKey(b))).length; eb.textContent = `${nb} of ${shownBuildings(dz.site).length} buildings removed (layers shown on the map).`; }
 }
-function dzTreeChanged() { treeRm = null; dgMapStyle(); dzTreeSummary(); v3Dirty(); if (sunS?.on) sunLater(); dzDraw(); dzSave(); }
+function dzTreeChanged() { treeRm = null; dgMapStyle(); dzTreeSummary(); v3Dirty(); if (sunS?.on) sunLater(); if (windS?.on) windKick(); dzDraw(); dzSave(); }
 
 function dzEarthwork() {
   const des = dz.design, site = dz.site;
@@ -5000,6 +5002,7 @@ function v3Build(resetView = false) {
   v3.setNotes(sketch.notes3d());
   v3.setRevit(sketch.revit3d());
   sunApply3d();
+  if (windS.on) { try { windFlowEnsure(site); windFaces(); } catch (e) { console.warn('wind faces', e); } }
 }
 
 /** Ground image for the 3D view: the aerial plus the map layers that are switched on (cached per site + layers). */
@@ -5007,13 +5010,20 @@ let v3Tex = null;
 function v3Texture(site) {
   if (!site.imagery) return null;
   const fade = dz.mode === 'diagram' ? dg.fade : 0;
-  const key = JSON.stringify([vis(), fade]);
+  const wImg = windS.on && $('wind-ground').checked && windS.flow && windS.site === site ? windGroundImage() : null;
+  const key = JSON.stringify([vis(), fade, wImg ? windS.gKey : '']);
   if (v3Tex && v3Tex.site === site && v3Tex.key === key) return v3Tex.canvas;
   const c = document.createElement('canvas');
   c.width = site.imagery.width; c.height = site.imagery.height;
   drawMap(c, { ...site, tinted: false, vis: vis() }, 'texture');
   if (fade) { const g = c.getContext('2d'); g.fillStyle = `rgba(250,250,247,${fade})`; g.fillRect(0, 0, c.width, c.height); }   // diagram: fade toward white
-  v3Tex = { site, key, canvas: c };
+  if (wImg) {                                                   // ground wind map on the 3D ground
+    const g = c.getContext('2d'), F = windS.flow, b = site.box, sx = c.width / (b.xmax - b.xmin), sy = c.height / (b.ymax - b.ymin);
+    g.save(); g.globalAlpha = 0.62; g.imageSmoothingEnabled = true;
+    g.drawImage(wImg, (F.x0 - b.xmin) * sx, (b.ymax - (F.y0 + F.ny * F.c)) * sy, F.nx * F.c * sx, F.ny * F.c * sy);
+    g.restore();
+  }
+  v3Tex = { site, key, canvas: c, wind: !!wImg };
   return c;
 }
 
@@ -5472,8 +5482,9 @@ function windState() {
 }
 function windRefresh() {
   const ws = windState();
-  if (windS.field && ws) windS.field.setFlows(ws.flows);
+  if (windS.field && ws) { windS.field.setFlows(ws.flows); windFlowHook(); }
   windPanel();
+  windOverlays();
 }
 const windMph = site => (site?.outUnit || 'ft') !== 'm';
 const spd = (v, site) => windMph(site) ? `${Math.round(v * 2.23694)} mph` : `${v.toFixed(1)} m/s`;
@@ -5540,6 +5551,7 @@ function windKick() {
   if (on && windS.site !== site && !windS.loading) { windS.rose = null; windS.field = null; windLoad(site); }
   const ready = on && windS.rose && windS.site === site;
   if (ready && !windS.field) { windS.field = new WindField(site.box, site.convergence || 0); windS.field.setFlows(windState().flows); }
+  if (ready) windFlowEnsure(site);
   const map2d = ready && view === 'map';
   windCanvas.hidden = !map2d;
   if (!map2d) { cancelAnimationFrame(windS.raf); windS.raf = 0; windCanvas.getContext('2d').clearRect(0, 0, windCanvas.width, windCanvas.height); }
@@ -5552,6 +5564,7 @@ function windKick() {
     } else if (v3._windField) { v3.setWind(null); v3._windField = null; }
   }
   if (on) windPanel();
+  windOverlays();
 }
 function windFrame() {
   windS.raf = 0;
@@ -5583,7 +5596,130 @@ function windFrame() {
   });
   windS.raf = requestAnimationFrame(windFrame);
 }
-map.on('move zoom resize viewreset', () => { if (windS.on) { windS.M = null; windCanvas.getContext('2d').clearRect(0, 0, windCanvas.width, windCanvas.height); } });
+map.on('move zoom resize viewreset', () => { if (windS.on) { windS.M = null; windCanvas.getContext('2d').clearRect(0, 0, windCanvas.width, windCanvas.height); windMapDraw(); } });
+
+// ----- Wind around buildings and trees (js/wind.js WindFlow): bending streaks, ground wind map, pressure on faces -----
+var windMapCanvas = document.createElement('canvas');
+windMapCanvas.className = 'wind-map-canvas'; windMapCanvas.hidden = true;
+map.getContainer().appendChild(windMapCanvas);
+const windWinter = () => $('wind-season').value === 'winter';
+/** Buildings and trees that block the wind now (the design's removals applied where the design is shown). */
+function windObstacles(site) {
+  const per = 1 / (site.toOut || 1);       // native per output unit
+  const blds = sunBuildings(site).filter(b => !b.tree).map(b => ({ ring: b.ring, base: b.base, top: b.top, roofAt: b.roofAt, hScale: per }));
+  const rm = treesDesignShown() ? treesRemoved() : TREE_EMPTY;
+  const lid = (visibility.trees ? site.context?.trees || [] : []).filter(t => !rm.size || !rm.has(treeKey(t)));
+  const trees = [...lid, ...sketch.trees3d()].map(t => ({ x: t.x, y: t.y, r: t.r, h: t.h * per, ev: t.ev >= 0.6 || t.form === 'pine' || t.form === 'cedar' }));
+  return { blds, trees };
+}
+function windFlowKey(site) { return `${site.generated?.getTime()}|${sketch.version}|${treesRmKey()}|${BUILDING_SOURCES.map(b => (visibility[b.key] ? 1 : 0)).join('')}|${visibility.trees ? 1 : 0}|${windWinter() ? 'w' : ''}|${curView()}|${dz.mode}`; }
+function windFlowEnsure(site) {
+  const key = windFlowKey(site);
+  if (windS.flow && windS.flowKey === key) return windS.flow;
+  const { blds, trees } = windObstacles(site);
+  windS.flow = new WindFlow(site.box, blds, trees, { winter: windWinter() }); windS.flowKey = key; windS.gKey = '';
+  windFlowHook();
+  return windS.flow;
+}
+/** Streaks follow the flow (or straight lines when "Flow around" is off). */
+function windFlowHook() {
+  const f = windS.field, W = windS.flow, site = state.result; if (!f) return;
+  if (!W || !$('wind-around').checked) { f.flowAt = null; return; }
+  const conv = site?.convergence || 0;
+  f.flowAt = (fi, x, y) => { const fl = f.flows[fi]; if (!fl) return null; return W.vel(W.dir(fl.from + conv), x, y); };
+}
+/** Flows of the current season / hour / mode, weighted by share of hours × speed, in grid azimuths. */
+function windWeights() { const ws = windState(), conv = state.result?.convergence || 0; return (ws?.flows || []).map(f => ({ from: f.from + conv, w: f.w * Math.max(0.5, f.v || 1), w2: f.w * Math.max(0.5, f.v || 1) ** 2 })); }
+const WG_STOPS = [[0, [30, 58, 138]], [0.25, [37, 99, 235]], [0.5, [56, 189, 248]], [0.8, [167, 243, 208]], [1, [254, 249, 195]], [1.25, [251, 146, 60]], [1.6, [220, 38, 38]]];
+function windGroundColor(r) {
+  if (!(r >= 0)) return null;
+  for (let i = 1; i < WG_STOPS.length; i++) if (r <= WG_STOPS[i][0]) { const [a, ca] = WG_STOPS[i - 1], [b, cb] = WG_STOPS[i], t = (r - a) / (b - a); return ca.map((v, k) => Math.round(v + (cb[k] - v) * t)); }
+  return WG_STOPS.at(-1)[1];
+}
+/** The ground wind raster as an image (cached per flow + flows). */
+function windGroundImage() {
+  const W = windS.flow; if (!W) return null;
+  const fl = windWeights(), key = `${windS.flowKey}|${JSON.stringify(fl)}`;
+  if (windS.gImg && windS.gKey === key) return windS.gImg;
+  const ratio = W.groundRatio(fl.map(f => ({ from: f.from, w: f.w })));
+  const c = document.createElement('canvas'); c.width = W.nx; c.height = W.ny;
+  const g = c.getContext('2d'), im = g.createImageData(W.nx, W.ny);
+  for (let j = 0; j < W.ny; j++) for (let i = 0; i < W.nx; i++) {
+    const col = windGroundColor(ratio[j * W.nx + i]), o = ((W.ny - 1 - j) * W.nx + i) * 4;       // row 0 = north
+    if (col) { im.data[o] = col[0]; im.data[o + 1] = col[1]; im.data[o + 2] = col[2]; im.data[o + 3] = 255; }
+  }
+  g.putImageData(im, 0, 0);
+  windS.gImg = c; windS.gKey = key;
+  return c;
+}
+function windMapDraw() {
+  const site = state.result, on = windS.on && $('wind-ground').checked && curView() === 'map' && !!windS.flow && windS.site === site;
+  windMapCanvas.hidden = !on;
+  if (!on) return;
+  const cont = map.getContainer(), dpr = window.devicePixelRatio || 1, Wd = Math.round(cont.clientWidth * dpr), Hd = Math.round(cont.clientHeight * dpr);
+  if (windMapCanvas.width !== Wd || windMapCanvas.height !== Hd) { windMapCanvas.width = Wd; windMapCanvas.height = Hd; windMapCanvas.style.width = cont.clientWidth + 'px'; windMapCanvas.style.height = cont.clientHeight + 'px'; }
+  const g = windMapCanvas.getContext('2d'), img = windGroundImage(), F = windS.flow, M = dzAffine(site), b = site.box;
+  g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, Wd, Hd);
+  if (!img) return;
+  g.save();
+  g.beginPath(); const clip = site.mask || [[b.xmin, b.ymin], [b.xmax, b.ymin], [b.xmax, b.ymax], [b.xmin, b.ymax]];
+  clip.forEach(([x, y], i) => { const [sx, sy] = toScreen(M, x, y); g[i ? 'lineTo' : 'moveTo'](sx * dpr, sy * dpr); }); g.closePath(); g.clip();
+  const yTop = F.y0 + F.ny * F.c;
+  g.setTransform(dpr * M.a * F.c, dpr * M.b * F.c, -dpr * M.c * F.c, -dpr * M.d * F.c, dpr * (M.a * F.x0 + M.c * yTop + M.e), dpr * (M.b * F.x0 + M.d * yTop + M.f));
+  g.globalAlpha = 0.62; g.imageSmoothingEnabled = true; g.drawImage(img, 0, 0);
+  g.restore();
+}
+/** Face colour for the pressure map: diverging, −0.8 (suction, blue) … +0.8 (pressure, red). */
+function windFaceColor(v) {
+  const t = Math.max(-1, Math.min(1, v / 0.8));
+  const W = [0.93, 0.93, 0.91], R = [0.86, 0.15, 0.12], B = [0.15, 0.39, 0.92];
+  const e = t >= 0 ? R : B, a = Math.abs(t);
+  return [W[0] + (e[0] - W[0]) * a, W[1] + (e[1] - W[1]) * a, W[2] + (e[2] - W[2]) * a];
+}
+/** 3D: building faces coloured by wind pressure (wall Cp × height factor × shelter², weighted over the flows). */
+function windFaces() {
+  if (!v3) return;
+  const site = state.result, on = windS.on && $('wind-faces').checked && curView() === '3d' && !!windS.flow && windS.site === site;
+  if (!on) { v3.paintFaces?.(null); return; }
+  const F = windS.flow, fl = windWeights(), tot = fl.reduce((a, f) => a + f.w2, 0) || 1, dirs = fl.map(f => ({ d: F.dir(f.from), w: f.w2 / tot, a: f.from * Math.PI / 180 }));
+  const ftPer = site.units === 'm' ? 3.28084 : 1, g2 = site.grid;
+  const groundAt = (x, y) => { const i = Math.round((x - g2.x0) / g2.s), j = Math.round((y - g2.y0) / g2.s); return i < 0 || j < 0 || i >= g2.nx || j >= g2.ny ? NaN : g2.z[j * g2.nx + i]; };
+  v3.paintFaces((x, y, hAbove, nx, ny, up) => {
+    if (Math.abs(up) > 0.7) return [0.62, 0.64, 0.66];           // roofs and floors: not computed
+    const L = Math.hypot(nx, ny) || 1, kz = kzRel(Math.max(0, hAbove) * ftPer), off = F.c * 1.2;
+    let v = 0;
+    for (const { d, w, a } of dirs) {
+      const tx = Math.sin(a), ty = Math.cos(a);                    // toward where the wind comes from
+      const deg = Math.acos(Math.max(-1, Math.min(1, (nx * tx + ny * ty) / L))) * 180 / Math.PI;
+      const S = F.shelterAtPoint(d, x + nx / L * off, y + ny / L * off, true);
+      v += w * wallCp(deg) * kz * S * S;
+    }
+    return windFaceColor(v);
+  }, groundAt);
+}
+function windLegend() {
+  const el = $('wind-legend'); if (!el) return;
+  const g = $('wind-ground').checked, f = $('wind-faces').checked, a = $('wind-around').checked;
+  el.hidden = !(windS.on && (g || f || a));
+  if (el.hidden) return;
+  const pct = v => `${Math.round(v * 100)}%`;
+  const rows = Object.values(SHELTER).map(t => `<tr><td>${escapeHtml(t.label)}</td>${t.s.map(v => `<td>${pct(v)}</td>`).join('')}</tr>`).join('');
+  let h = '';
+  if (g) h += `<h5>Ground wind map — speed vs open wind</h5><div class="wl-bar" style="background:linear-gradient(90deg,${WG_STOPS.map(([v, c]) => `rgb(${c}) ${Math.round(v / 1.6 * 100)}%`).join(',')})"></div><div class="wl-ticks"><span>0</span><span>50%</span><span>100%</span><span>160%+</span></div>`;
+  if (f) h += `<h5>Building faces — wind pressure (3D)</h5><div class="wl-bar" style="background:linear-gradient(90deg,rgb(38,99,235),rgb(237,237,232),rgb(219,38,31))"></div><div class="wl-ticks"><span>−0.8 suction</span><span>0</span><span>+0.8 pressure</span></div>
+    <div>Wall pressure coefficients (ASCE 7): windward <b>+0.8</b> · side walls <b>−0.7</b> · leeward <b>−0.5</b> (L/B ≤ 1), blended between; × height factor K<sub>z</sub> (exposure B, 2.01·(z/1200 ft)<sup>2/7</sup>, z ≥ 15 ft, relative to 33 ft) × shelter². Roofs grey (not computed).</div>`;
+  if (g || a) h += `<h5>Shelter behind obstacles — share of open wind at distance × height H</h5><table><tr><th></th><th>5H</th><th>10H</th><th>15H</th><th>20H</th><th>30H</th></tr>${rows}</table>
+    <div>From <a href="${SHELTER_URL}" target="_blank" rel="noopener">${escapeHtml(SHELTER_SRC)}</a>. Buildings use the solid row, evergreens the conifer row, deciduous trees the deciduous row in winter and the conifer row otherwise.</div>`;
+  h += `<div class="wl-disc">⚠ Preliminary approximation for early design — not a wind study or CFD. Flow turns around buildings as 2D potential flow (no vortices or downdrafts). The windbreak figures are for long windbreaks across the wind; lone trees and short buildings are scaled by how much of the crosswind they block — a rule of thumb, not from the source.${f ? ' The ASCE 7 values above are quoted from memory and have not been checked against the standard.' : ''}</div>`;
+  el.innerHTML = h;
+}
+function windOverlays() {
+  const site = state.result;
+  if (windS.on && site && windS.rose && windS.site === site) windFlowEnsure(site);
+  windMapDraw(); windFaces(); windLegend();
+  if (v3 && curView() === '3d' && $('wind-ground').checked !== !!v3Tex?.wind) v3Dirty();
+}
+for (const id of ['wind-around', 'wind-ground', 'wind-faces']) $(id).addEventListener('change', () => { windFlowHook(); if (windS.field) windS.field.setFlows(windState()?.flows || []); windOverlays(); v3Dirty(); });
 
 // ---------- Revit plugin bridge (js/revit.js): only what it needs from here ----------
 /** A site/design snapshot from a Revit model opened as a local project (one mirror project per model). */

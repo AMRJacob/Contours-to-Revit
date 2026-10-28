@@ -156,8 +156,9 @@ export class WindField {
     this.box = box; this.n = n; this.conv = conv;
     this.px = new Float32Array(n); this.py = new Float32Array(n); this.ox = new Float32Array(n); this.oy = new Float32Array(n);
     this.vx = new Float32Array(n); this.vy = new Float32Array(n); this.age = new Float32Array(n); this.life = new Float32Array(n);
-    this.fi = new Int16Array(n);
+    this.fi = new Int16Array(n); this.u0 = new Float32Array(n);
     this.speed = 1;
+    this.flowAt = null;            // (flow index, x, y) → [u, v] (open wind = 1) or null inside a building
     this.flows = [];
   }
   setFlows(flows) {
@@ -174,6 +175,7 @@ export class WindField {
     const from = (f.from + (Math.random() - 0.5) * 4 + this.conv) * Math.PI / 180;            // grid azimuth the wind comes from
     const u = size / 220 * (0.5 + Math.min(f.v, 12) / 8);                                        // native units per frame
     this.vx[p] = -Math.sin(from) * u; this.vy[p] = -Math.cos(from) * u;                          // blows toward the opposite side
+    this.u0[p] = u;
     const cx = (b.xmin + b.xmax) / 2, cy = (b.ymin + b.ymax) / 2;
     // Start on a line across the flow, upwind of the site (or anywhere on the first fill), so streaks run parallel.
     const ux = this.vx[p] / u, uy = this.vy[p] / u, across = (Math.random() - 0.5) * size * 1.5;
@@ -186,6 +188,11 @@ export class WindField {
     const b = this.box, pad = Math.max(b.xmax - b.xmin, b.ymax - b.ymin) * 0.8;
     for (let p = 0; p < this.n; p++) {
       this.ox[p] = this.px[p]; this.oy[p] = this.py[p];
+      if (this.flowAt && this.fi[p] >= 0) {
+        const q = this.flowAt(this.fi[p], this.px[p], this.py[p]);
+        if (!q) { this.spawn(p, false); continue; }
+        this.vx[p] = q[0] * this.u0[p]; this.vy[p] = q[1] * this.u0[p];
+      }
       this.px[p] += this.vx[p] * this.speed; this.py[p] += this.vy[p] * this.speed;
       this.age[p]++;
       const x = this.px[p], y = this.py[p];
@@ -194,4 +201,180 @@ export class WindField {
   }
   inBox(p) { const b = this.box; return this.px[p] >= b.xmin && this.px[p] <= b.xmax && this.py[p] >= b.ymin && this.py[p] <= b.ymax; }
   color(p) { return this.flows[this.fi[p]]?.color || [1, 1, 1]; }
+}
+
+// =====================================================================================================
+// Wind around buildings and trees on the site — a quick approximation for early design, not a CFD study.
+//   • Direction: 2D potential flow around the buildings (stream function, solid footprints) — streaks bend around
+//     them and speed up past corners. Trees are porous: they don't turn the flow, they slow it.
+//   • Shelter: wind speed behind an obstacle as a share of open wind, from the windbreak measurements in
+//     J. R. Brandle, X. Zhou & L. Hodges, "How Windbreaks Work", University of Nebraska–Lincoln Extension EC1763,
+//     Figure 2 (5H…30H downwind of a windbreak of height H). Those are for long windbreaks across the wind; how much a
+//     lone tree or a short building counts is scaled by how much of a crosswind window ±H wide it blocks — Claude's
+//     rule of thumb, not from the source. Deciduous trees use the 25–35 % curve in winter (leafless) and the
+//     40–60 % curve otherwise; evergreens the 40–60 % curve; buildings the solid-fence curve (assumptions).
+//   • Faces: ASCE 7 external pressure coefficients for walls (windward +0.8, side walls −0.7, leeward −0.5 for
+//     L/B ≤ 1) and the exposure-B velocity-pressure profile Kz = 2.01 (z / 1200 ft)^(2/7), z ≥ 15 ft — values
+//     quoted from memory, not checked against the standard (the app says so in its legend).
+// =====================================================================================================
+export const SHELTER = {
+  deciduous: { label: 'Deciduous, 25–35 % dense', s: [0.50, 0.65, 0.80, 0.85, 1.00] },
+  conifer: { label: 'Conifer, 40–60 % dense', s: [0.30, 0.50, 0.60, 0.75, 0.95] },
+  dense: { label: 'Multi-row, 60–80 % dense', s: [0.25, 0.35, 0.65, 0.85, 0.95] },
+  solid: { label: 'Solid fence, 100 %', s: [0.25, 0.70, 0.90, 0.95, 1.00] },
+};
+export const SHELTER_SRC = 'Brandle, Zhou & Hodges, "How Windbreaks Work", Univ. of Nebraska–Lincoln Extension EC1763, Fig. 2';
+export const SHELTER_URL = 'https://extensionpubs.unl.edu/publication/ec1763/2006/pdf/view/ec1763-2006.pdf';
+const SH_X = [5, 10, 15, 20, 30];
+const TYPES = [null, 'solid', 'conifer', 'deciduous'];
+/** Share of open wind speed at x = distance / H behind a barrier of this type (the 5H value holds closer in). */
+export function shelterAt(type, x) {
+  const s = SHELTER[type].s;
+  if (x <= SH_X[0]) return s[0];
+  for (let i = 1; i < SH_X.length; i++) if (x <= SH_X[i]) { const t = (x - SH_X[i - 1]) / (SH_X[i] - SH_X[i - 1]); return s[i - 1] + (s[i] - s[i - 1]) * t; }
+  return 1;
+}
+/** Wall pressure coefficient for a face whose outward normal is `deg` away from the direction the wind comes from
+ *  (0 = facing the wind). ASCE 7 wall values; the blend between them is linear (Claude's choice). */
+export function wallCp(deg) {
+  const P = [[0, 0.8], [40, 0.8], [70, -0.7], [110, -0.7], [140, -0.5], [180, -0.5]];
+  for (let i = 1; i < P.length; i++) if (deg <= P[i][0]) { const t = (deg - P[i - 1][0]) / (P[i][0] - P[i - 1][0]); return P[i - 1][1] + (P[i][1] - P[i - 1][1]) * t; }
+  return -0.5;
+}
+/** Velocity pressure relative to 33 ft (10 m) above ground, exposure B (z in feet). */
+export function kzRel(zFt) { const kz = z => 2.01 * Math.pow(Math.max(15, z) / 1200, 2 / 7); return kz(zFt) / kz(33); }
+
+/**
+ * The flow around obstacles over the site.
+ * obstacles: [{ cells: (i, j) => height in native units or 0 — via ring/roofAt/tree below }]; built from
+ *   { ring, base, top, roofAt? } buildings and { x, y, r, h, ev } trees (h in native units, like the ring).
+ * opts: { box, winter, maxSide }
+ */
+export class WindFlow {
+  constructor(box, buildings, trees, opts = {}) {
+    const W0 = box.xmax - box.xmin, H0 = box.ymax - box.ymin, m = Math.max(W0, H0) * 0.3;
+    const x0 = box.xmin - m, y0 = box.ymin - m, W = W0 + 2 * m, H = H0 + 2 * m;
+    const N = opts.maxSide || 150, c = Math.max(W, H) / N;
+    const nx = Math.ceil(W / c), ny = Math.ceil(H / c);
+    Object.assign(this, { x0, y0, c, nx, ny, dirs: new Map() });
+    const n = nx * ny, hgt = new Float32Array(n), typ = new Uint8Array(n);
+    const inRing = (r, x, y) => { let k = false; for (let a = 0, b = r.length - 1; a < r.length; b = a++) { const [xa, ya] = r[a], [xb, yb] = r[b]; if ((ya > y) !== (yb > y) && x < (xb - xa) * (y - ya) / (yb - ya) + xa) k = !k; } return k; };
+    for (const b of buildings) {
+      const R = b.ring; if (!R?.length) continue;
+      let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+      for (const [x, y] of R) { bx0 = Math.min(bx0, x); by0 = Math.min(by0, y); bx1 = Math.max(bx1, x); by1 = Math.max(by1, y); }
+      const i0 = Math.max(0, Math.floor((bx0 - x0) / c)), i1 = Math.min(nx - 1, Math.floor((bx1 - x0) / c)), j0 = Math.max(0, Math.floor((by0 - y0) / c)), j1 = Math.min(ny - 1, Math.floor((by1 - y0) / c));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const x = x0 + (i + 0.5) * c, y = y0 + (j + 0.5) * c;
+        if (!inRing(R, x, y)) continue;
+        let top = b.top;
+        if (b.roofAt) { const t = b.roofAt(x, y); if (!Number.isFinite(t)) continue; top = t; }
+        const h = (top - b.base) * (b.hScale || 1), q = j * nx + i;
+        if (h > 1e-3 && h > hgt[q] * (typ[q] === 1 ? 1 : 0)) { hgt[q] = h; typ[q] = 1; }
+      }
+    }
+    for (const t of trees) {
+      const i0 = Math.max(0, Math.floor((t.x - t.r - x0) / c)), i1 = Math.min(nx - 1, Math.floor((t.x + t.r - x0) / c)), j0 = Math.max(0, Math.floor((t.y - t.r - y0) / c)), j1 = Math.min(ny - 1, Math.floor((t.y + t.r - y0) / c));
+      const tp = t.ev ? 2 : opts.winter ? 3 : 2;
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const q = j * nx + i; if (typ[q] === 1) continue;
+        if (Math.hypot(x0 + (i + 0.5) * c - t.x, y0 + (j + 0.5) * c - t.y) > Math.max(t.r, c * 0.6)) continue;
+        if (t.h > hgt[q]) { hgt[q] = t.h; typ[q] = tp; }
+      }
+    }
+    // Solid footprints, grouped (each building keeps one streamline value).
+    const lab = new Int32Array(n).fill(-1); let ncomp = 0; const stack = [];
+    for (let q = 0; q < n; q++) {
+      if (typ[q] !== 1 || lab[q] >= 0) continue;
+      lab[q] = ncomp; stack.push(q);
+      while (stack.length) { const p = stack.pop(), i = p % nx, j = (p / nx) | 0; for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const ii = i + a, jj = j + b; if (ii < 0 || jj < 0 || ii >= nx || jj >= ny) continue; const r = jj * nx + ii; if (typ[r] === 1 && lab[r] < 0) { lab[r] = ncomp; stack.push(r); } } }
+      ncomp++;
+    }
+    Object.assign(this, { hgt, typ, lab, ncomp });
+  }
+  /** Wind toward grid azimuth: blowing FROM `fromDeg` (grid azimuth, degrees). Cached per 1°. */
+  dir(fromDeg) {
+    const key = Math.round(((fromDeg % 360) + 360) % 360);
+    if (this.dirs.has(key)) return this.dirs.get(key);
+    const { nx, ny, c, typ, hgt, lab, ncomp } = this, n = nx * ny, a = key * Math.PI / 180;
+    const wx = -Math.sin(a), wy = -Math.cos(a);                     // the way it blows
+    // Stream function: ψ = wx·y − wy·x in open air (u = ∂ψ/∂y, v = −∂ψ/∂x); constant inside each building.
+    const psi = new Float32Array(n), fixed = new Uint8Array(n);
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const q = j * nx + i; psi[q] = wx * (j - ny / 2) - wy * (i - nx / 2); if (i === 0 || j === 0 || i === nx - 1 || j === ny - 1) fixed[q] = 1; }
+    if (ncomp) {
+      const sum = new Float64Array(ncomp), cnt = new Float64Array(ncomp);
+      for (let q = 0; q < n; q++) if (lab[q] >= 0) { sum[lab[q]] += psi[q]; cnt[lab[q]]++; }
+      for (let q = 0; q < n; q++) if (lab[q] >= 0) { psi[q] = sum[lab[q]] / cnt[lab[q]]; fixed[q] = 1; }
+      const w = 1.9, iters = Math.max(200, Math.round(2.2 * Math.max(nx, ny)));
+      for (let it = 0; it < iters; it++) for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
+        const q = j * nx + i; if (fixed[q]) continue;
+        psi[q] += w * ((psi[q - 1] + psi[q + 1] + psi[q - nx] + psi[q + nx]) / 4 - psi[q]);
+      }
+    }
+    // Shelter: walk upwind from each cell; each obstacle met at distance d (height H) slows it to the windbreak curve,
+    // weighted by how much of a crosswind window ±H wide around that point is blocked.
+    const block = new Float32Array(n);
+    for (let q = 0; q < n; q++) {
+      if (!typ[q]) continue;
+      const i = q % nx, j = (q / nx) | 0, hc = Math.max(1, Math.min(30, Math.round(hgt[q] / c)));
+      let k = 0, tot = 0;
+      for (let s = -hc; s <= hc; s++) { const ii = Math.round(i - wy * s), jj = Math.round(j + wx * s); tot++; if (ii >= 0 && jj >= 0 && ii < nx && jj < ny && typ[jj * nx + ii]) k++; }
+      block[q] = k / tot;
+    }
+    let hmax = 0; for (let q = 0; q < n; q++) if (hgt[q] > hmax) hmax = hgt[q];
+    const maxSteps = Math.min(Math.ceil(30 * hmax / c), nx + ny);
+    const S = new Float32Array(n), u = new Float32Array(n), v = new Float32Array(n);
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const q = j * nx + i;
+      if (typ[q] === 1) { S[q] = 0; continue; }
+      S[q] = this._shelter(i + 0.5, j + 0.5, wx, wy, maxSteps, block, false);
+      const P = (ii, jj) => psi[Math.max(0, Math.min(ny - 1, jj)) * nx + Math.max(0, Math.min(nx - 1, ii))];
+      const solid = (ii, jj) => ii < 0 || jj < 0 || ii >= nx || jj >= ny || typ[jj * nx + ii] === 1;
+      const dy = solid(i, j + 1) ? P(i, j) - P(i, j - 1) : solid(i, j - 1) ? P(i, j + 1) - P(i, j) : (P(i, j + 1) - P(i, j - 1)) / 2;
+      const dx = solid(i + 1, j) ? P(i, j) - P(i - 1, j) : solid(i - 1, j) ? P(i + 1, j) - P(i, j) : (P(i + 1, j) - P(i - 1, j)) / 2;
+      u[q] = dy; v[q] = -dx;
+    }
+    const d = { from: key, wx, wy, S, u, v, block, maxSteps };
+    this.dirs.set(key, d);
+    return d;
+  }
+  /** Share of open wind at cell coords (fi, fj) for wind (wx, wy); skipOwn: ignore the obstacle the point sits against. */
+  _shelter(fi, fj, wx, wy, maxSteps, block, skipOwn) {
+    const { nx, ny, c, typ, hgt } = this;
+    let best = 1, own = skipOwn;
+    for (let s = 1; s <= maxSteps; s++) {
+      const i = Math.floor(fi - wx * s), j = Math.floor(fj - wy * s);
+      if (i < 0 || j < 0 || i >= nx || j >= ny) break;
+      const q = j * nx + i, t = typ[q];
+      if (own) { if (t && s <= 3) continue; if (!t) { if (s > 3) own = false; continue; } own = false; }
+      if (!t) continue;
+      const f = block[q], val = 1 - f * (1 - shelterAt(TYPES[t], s * c / Math.max(c, hgt[q])));
+      if (val < best) best = val;
+    }
+    return best;
+  }
+  /** Shelter at a native point for direction d (for building faces: skips the face's own building). */
+  shelterAtPoint(d, x, y, skipOwn = true) { return this._shelter((x - this.x0) / this.c, (y - this.y0) / this.c, d.wx, d.wy, d.maxSteps, d.block, skipOwn); }
+  /** Flow (open-wind = 1) at a native point: [u, v] or null inside a building. */
+  vel(d, x, y) {
+    const fi = (x - this.x0) / this.c - 0.5, fj = (y - this.y0) / this.c - 0.5;
+    const i = Math.floor(fi), j = Math.floor(fj);
+    if (i < 0 || j < 0 || i >= this.nx - 1 || j >= this.ny - 1) return [d.wx, d.wy];
+    const q = j * this.nx + i, tx = fi - i, ty = fj - j;
+    const ii = Math.round(fi), jj = Math.round(fj); if (this.typ[jj * this.nx + ii] === 1) return null;
+    const L = (A) => (A[q] * (1 - tx) + A[q + 1] * tx) * (1 - ty) + (A[q + this.nx] * (1 - tx) + A[q + this.nx + 1] * tx) * ty;
+    const s = L(d.S);
+    return [L(d.u) * s, L(d.v) * s];
+  }
+  /** Ground speed / open wind per cell, weighted over flows [{ from (grid deg), w }]. */
+  groundRatio(flows) {
+    const n = this.nx * this.ny, out = new Float32Array(n); let W = 0;
+    for (const f of flows) {
+      const d = this.dir(f.from); W += f.w;
+      for (let q = 0; q < n; q++) out[q] += f.w * Math.hypot(d.u[q], d.v[q]) * d.S[q];
+    }
+    if (W) for (let q = 0; q < n; q++) out[q] /= W;
+    for (let q = 0; q < n; q++) if (this.typ[q] === 1) out[q] = NaN;
+    return out;
+  }
 }
