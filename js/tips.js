@@ -180,13 +180,13 @@ export function coach(text, host = document.querySelector('.stage')) {
   coachEl.classList.add('in');
   clearTimeout(coachT); coachT = setTimeout(() => coachEl.classList.remove('in'), 5500);
 }
-/** Show a hint element's text as a coach note whenever it changes (the element itself stays hidden). */
-export function coachFrom(el) {
+/** Show a hint element's text as a coach note whenever it changes, while its tab (mode) is open. */
+export function coachFrom(el, mode) {
   if (!el) return;
   let last = '';
   new MutationObserver(() => {
     const t = el.innerHTML.trim();
-    if (t && t !== last && !el.closest('[hidden]')) coach(t);
+    if (t && t !== last && !el.closest('[hidden]') && (!mode || document.body.dataset.mode === mode)) coach(t);
     last = t;
   }).observe(el, { childList: true, characterData: true, subtree: true });
 }
