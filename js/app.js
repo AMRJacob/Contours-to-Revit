@@ -1,25 +1,25 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.61.1';
-import { fetchElevation, sample } from './dem.js?v=0.61.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.61.1';
-import { Dxf } from './dxf.js?v=0.61.1';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.61.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.61.1';
-import { Flow } from './flow.js?v=0.61.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.61.2';
+import { fetchElevation, sample } from './dem.js?v=0.61.2';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.61.2';
+import { Dxf } from './dxf.js?v=0.61.2';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.61.2';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.61.2';
+import { Flow } from './flow.js?v=0.61.2';
 import { placeAt } from './parking-codes.js?v=0.51.1';
-import { createSketch } from './sketch.js?v=0.61.1';
-import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.61.1';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.61.1';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.61.1';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.61.1';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.61.1';
-import { loadLidar, applyLidar } from './lidar.js?v=0.61.1';
-import { findTrees } from './trees.js?v=0.61.1';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.61.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.61.1';
+import { createSketch } from './sketch.js?v=0.61.2';
+import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.61.2';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.61.2';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.61.2';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.61.2';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.61.2';
+import { loadLidar, applyLidar } from './lidar.js?v=0.61.2';
+import { findTrees } from './trees.js?v=0.61.2';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.61.2';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.61.2';
 
-const VERSION = '0.61.1';
+const VERSION = '0.61.2';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;

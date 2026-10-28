@@ -8,13 +8,13 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, roundEach, driveJoins } from './parking.js?v=0.61.1';
-import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.61.1';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.61.1';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.61.1';
-import * as SO from './solid.js?v=0.61.1';
-import { noteGeom, WIDTHS } from './notes.js?v=0.61.1';
-import { booleanSolids } from './bool.js?v=0.61.1';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, roundEach, driveJoins } from './parking.js?v=0.61.2';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.61.2';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.61.2';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.61.2';
+import * as SO from './solid.js?v=0.61.2';
+import { noteGeom, WIDTHS } from './notes.js?v=0.61.2';
+import { booleanSolids } from './bool.js?v=0.61.2';
 import { CODES, codeFor, spacesFor } from './parking-codes.js?v=0.51.1';
 
 const TOOLS = [

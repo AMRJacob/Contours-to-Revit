@@ -116,7 +116,7 @@ function placementDiffs(p, site) {
 function applyPlacement(p, site) {
   api.setPlacement({ origin: p.origin, rot: p.rot || 0, datum: p.datum ?? null, northRef: p.northRef || 'grid' });
   if (site && (p.zone !== site.zone.code || p.units !== site.units)) {
-    api.setStatus(`This model's site uses State Plane EPSG ${p.zone} in ${p.units}. Change Topography › coordinate system / units to match, then Generate.`, true);
+    api.setStatus(`This model's site uses State Plane EPSG ${p.zone} in ${p.units}. Change the coordinate system / units in Site › Topography to match, then Survey the site again.`, true);
   }
 }
 
@@ -256,7 +256,7 @@ function render() {
   $('rv-sum').textContent = `— ${model.doc.title}`;
   if (!site) {
     body.innerHTML = `${banner}<p class="rv-model"><strong>${esc(model.doc.title)}</strong></p>
-      <p class="hint">${snap ? 'This model already has a site from Contours to Revit. Open it to keep working on it, or draw a new boundary and Generate.' : 'Draw a boundary and click Survey the site, then send it to this model.'}</p>
+      <p class="hint">${snap ? 'This model already has a site from Contours to Revit. Open it to keep working on it, or draw a new boundary and Survey the site.' : 'Draw a boundary and click Survey the site, then send it to this model.'}</p>
       <div class="align-row">${snapBtn}<button type="button" class="btn btn-quiet" data-rv="refresh">Refresh</button></div>${footer()}`;
     return;
   }
