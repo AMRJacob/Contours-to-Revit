@@ -1,25 +1,25 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.65.0';
-import { fetchElevation, sample } from './dem.js?v=0.65.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.65.0';
-import { Dxf } from './dxf.js?v=0.65.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.65.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.65.0';
-import { Flow } from './flow.js?v=0.65.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.65.1';
+import { fetchElevation, sample } from './dem.js?v=0.65.1';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.65.1';
+import { Dxf } from './dxf.js?v=0.65.1';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.65.1';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.65.1';
+import { Flow } from './flow.js?v=0.65.1';
 import { placeAt } from './parking-codes.js?v=0.51.1';
-import { createSketch } from './sketch.js?v=0.65.0';
-import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.65.0';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.65.0';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT, WindFlow, SHELTER, SHELTER_SRC, SHELTER_URL, wallCp, kzRel } from './wind.js?v=0.65.0';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.65.0';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.65.0';
-import { loadLidar, applyLidar } from './lidar.js?v=0.65.0';
-import { findTrees } from './trees.js?v=0.65.0';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.65.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.65.0';
+import { createSketch } from './sketch.js?v=0.65.1';
+import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.65.1';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.65.1';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT, WindFlow, SHELTER, SHELTER_SRC, SHELTER_URL, wallCp, kzRel } from './wind.js?v=0.65.1';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.65.1';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.65.1';
+import { loadLidar, applyLidar } from './lidar.js?v=0.65.1';
+import { findTrees } from './trees.js?v=0.65.1';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.65.1';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.65.1';
 
-const VERSION = '0.65.0';
+const VERSION = '0.65.1';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -2740,7 +2740,7 @@ function dzDraw() {
     ctx.strokeStyle = 'rgba(0,0,0,0.45)'; ctx.lineWidth = 3.5 * px; ctx.stroke();
     ctx.strokeStyle = '#f05252'; ctx.lineWidth = 2 * px; ctx.setLineDash([7 * px, 4 * px]); ctx.stroke(); ctx.setLineDash([]);
   }
-  // Remove-brush: what it would take (red) or bring back (green, Shift), then the brush circle.
+  // Remove tools: the item under the cursor — red = click removes it, green = click brings it back.
   const hov = DEMO.includes(dz.tool) && dz.cursor && !dz.spaceDown && !dz.pan ? dz.demoHover : null;
   if (hov?.keys.size) {
     ctx.beginPath();
@@ -2749,11 +2749,6 @@ function dzDraw() {
     ctx.fillStyle = hov.restore ? 'rgba(74,222,128,0.25)' : 'rgba(239,68,68,0.3)'; ctx.fill();
     ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 4 * px; ctx.stroke();
     ctx.strokeStyle = hov.restore ? '#4ade80' : '#ff6b6b'; ctx.lineWidth = 2 * px; ctx.stroke();
-  }
-  if (hov) {
-    ctx.beginPath(); ctx.arc(dz.cursor[0], dz.cursor[1], dz.params.size / site.toOut, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 3.5 * px; ctx.stroke();
-    ctx.strokeStyle = hov.restore ? '#4ade80' : '#f87171'; ctx.lineWidth = 1.8 * px; ctx.setLineDash([5 * px, 3 * px]); ctx.stroke(); ctx.setLineDash([]);
   }
 
   // Features, then the one being drawn.
@@ -3302,54 +3297,34 @@ function shownBuildings(site) {
   return out;
 }
 function dzBldgAt([x, y]) { for (const b of shownBuildings(dz.site)) if (inRingXY(b.ring, x, y)) return b; return null; }
-/** Trees or buildings (by the tool) under the brush circle at xy → their keys. */
+/** The tree or building (by the tool) under the cursor in plan → [key] or []. */
 function dzDemoKeysAt(xy, kind) {
   if (!xy || !dz.site) return [];
-  const [x, y] = xy, R = dz.params.size / (dz.site.toOut || 1), out = [];
-  if (kind === 'bldgs') {
-    for (const b of shownBuildings(dz.site)) {
-      const r = b.ring;
-      let hit = inRingXY(r, x, y);
-      for (let i = 0; !hit && i < r.length; i++) {
-        const [ax, ay] = r[i], [bx, by] = r[(i + 1) % r.length], dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy || 1;
-        const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / L2));
-        hit = Math.hypot(ax + t * dx - x, ay + t * dy - y) <= R;
-      }
-      if (hit) out.push(bldgKey(b));
-    }
-  } else for (const t of dz.site.context?.trees || []) if (Math.hypot(t.x - x, t.y - y) <= R + t.r * 0.5) out.push(treeKey(t));
-  return out;
+  if (kind === 'bldgs') { const b = dzBldgAt(xy); return b ? [bldgKey(b)] : []; }
+  const t = dzTreeAt(xy); return t ? [treeKey(t)] : [];
 }
 function dzTreeDown(ev) {
   const kind = dz.tool;
   if (kind === 'trees' && !dz.site.context?.trees?.length) { setStatus('No trees on this site yet — turn on Trees (lidar) in Site and survey the site again.', true); return; }
   if (kind === 'bldgs' && !shownBuildings(dz.site).length) { setStatus('No buildings shown — turn on a building layer on the map first.', true); return; }
+  // Click toggles the item under the cursor; dragging carries on the same way over each item it passes (Shift: bring back).
+  const k0 = (dzIn3d() ? dzDemoKeys3d(ev, kind) : dzDemoKeysAt(ev.xy, kind))[0], gone = kind === 'bldgs' ? bldgsRemoved() : treesRemoved();
   dz.design.checkpoint();
-  dz.tstroke = { kind, remove: !ev.shift, n: 0 };
+  dz.tstroke = { kind, remove: ev.shift ? false : k0 ? !gone.has(k0) : true, n: 0 };
   dzTreeMove(ev);
 }
 /** Brush hover: highlight what the brush would remove (or bring back, with Shift); while dragging, do it. */
-/** Brush radius on screen at a ground point (3D). */
-function dzBrushPx(xy) {
-  if (!xy) return 20;
-  const R = dz.params.size / (dz.site.toOut || 1), a = dzScr(xy[0], xy[1]), b = dzScr(xy[0] + R, xy[1]), c = dzScr(xy[0], xy[1] + R);
-  const r = Math.max(Math.hypot(b[0] - a[0], b[1] - a[1]) || 0, Math.hypot(c[0] - a[0], c[1] - a[1]) || 0);
-  return Math.max(6, Math.min(300, r || 20));
-}
-/** 3D: what the brush covers on screen — rays through the brush circle hit the trees / buildings you see. */
+/** 3D: the tree or building you see under the cursor (one ray) → [key] or []. */
 function dzDemoKeys3d(ev, kind) {
-  const c = ev.cp, R = dzBrushPx(ev.xy), keys = new Set(), pts = [[0, 0]];
-  for (const [f, n] of [[0.35, 6], [0.7, 12], [1, 18]]) for (let i = 0; i < n; i++) { const a = i / n * 2 * Math.PI; pts.push([Math.cos(a) * R * f, Math.sin(a) * R * f]); }
-  for (const [dx, dy] of pts) {
-    const h = v3.pickPaint(c.x + dx, c.y + dy, true); if (!h) continue;
-    if (kind === 'trees' && h.kind === 'tree' && !h.tree.sketch) keys.add(treeKey(h.tree));
-    if (kind === 'bldgs' && h.kind === 'bldg') keys.add(h.key);
-  }
-  return [...keys];
+  const h = v3.pickPaint(ev.cp.x, ev.cp.y, true);
+  if (kind === 'trees' && h?.kind === 'tree' && !h.tree.sketch) return [treeKey(h.tree)];
+  if (kind === 'bldgs' && h?.kind === 'bldg') return [h.key];
+  return [];
 }
 function dzTreeMove(ev) {
-  const st = dz.tstroke, kind = st?.kind || dz.tool, in3 = dzIn3d(), keys = in3 ? dzDemoKeys3d(ev, kind) : dzDemoKeysAt(ev.xy, kind), restore = st ? !st.remove : !!ev.shift;
-  dz.cp3 = in3 ? { x: ev.cp.x, y: ev.cp.y, r: dzBrushPx(ev.xy) } : null;
+  const st = dz.tstroke, kind = st?.kind || dz.tool, in3 = dzIn3d(), keys = in3 ? dzDemoKeys3d(ev, kind) : dzDemoKeysAt(ev.xy, kind);
+  const gone = kind === 'bldgs' ? bldgsRemoved() : treesRemoved(), restore = st ? !st.remove : !!ev.shift || (!!keys[0] && gone.has(keys[0]));
+  dz.cp3 = in3 ? { x: ev.cp.x, y: ev.cp.y } : null;
   dz.demoHover = { kind, keys: new Set(keys), restore };
   if (st) {
     for (const k of keys) {
@@ -3564,8 +3539,8 @@ const TOOL_HINTS = {
   wall: 'Drag along the wall line. Ticks show the high side. Click a wall to edit it.',
   pad: 'Draw the pad (rectangle, polygon or circle), then type its elevation. Click a pad to edit it.',
   swale: 'Draw the swale from its high end. The flowline falls at the slope set here; blank start = ground less the depth.',
-  bldgs: 'Brush over buildings to remove them — the ones under the brush light up red. Shift+brush brings them back. [ ] or Ctrl+wheel sizes the brush.',
-  trees: 'Brush over trees to remove them — the ones under the brush light up red. Shift+brush brings them back (or keeps trees removed by grading). Trees over changed grades are removed automatically.',
+  bldgs: 'Click a building to remove it — the one under the cursor lights up red (green = a removed one; click brings it back). Drag across buildings to do several.',
+  trees: 'Click a tree to remove it — the one under the cursor lights up red (green = a removed one; click brings it back, or keeps a tree removed by grading). Drag across trees to do several. Trees over changed grades are removed automatically.',
 };
 
 function dzApplyTool() {
@@ -3576,7 +3551,7 @@ function dzApplyTool() {
   $('f-amount').hidden = !(t === 'raise' || t === 'lower');
   $('f-target').hidden = t !== 'flatten';
   $('f-strength').hidden = t !== 'smooth';
-  $('f-size').hidden = !(brush || DEMO.includes(t));
+  $('f-size').hidden = !brush;
   $('f-soft').hidden = !(brush || t === 'slope');
   $('f-slope').hidden = t !== 'slope';
   $('f-swale').hidden = t !== 'swale';
@@ -3737,8 +3712,7 @@ function dzDraw3d() {
         for (const z of [b.base, top]) { const Q = b.ring.map(([x, y]) => P(x, y, z)); if (Q.some(q => !q)) continue; g.beginPath(); Q.forEach((q, i) => (i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]))); g.closePath(); if (z === top) g.fill(); g.stroke(); }
       }
     }
-    g.beginPath(); g.arc(dz.cp3.x, dz.cp3.y, dz.cp3.r, 0, Math.PI * 2); g.strokeStyle = 'rgba(0,0,0,.5)'; g.lineWidth = 4; g.stroke(); g.strokeStyle = col; g.lineWidth = 2; g.setLineDash([5, 3]); g.stroke(); g.setLineDash([]);
-  } else if (dz.cursor && (BRUSHES.includes(dz.tool) || DEMO.includes(dz.tool)) && !dz.edit) {
+  } else if (dz.cursor && BRUSHES.includes(dz.tool) && !dz.edit) {
     const col = { raise: '#4ade80', lower: '#f87171', flatten: '#facc15', smooth: '#e5e7eb', trees: dz.demoHover?.restore ? '#4ade80' : '#f87171', bldgs: dz.demoHover?.restore ? '#4ade80' : '#f87171' }[dz.tool];
     if (path(circle(dz.cursor, dz.params.size / dz.site.toOut), true)) { g.strokeStyle = 'rgba(0,0,0,.5)'; g.lineWidth = 4; g.stroke(); g.strokeStyle = col; g.lineWidth = 2; g.stroke(); }
   }
@@ -3918,7 +3892,7 @@ map.getContainer().addEventListener('contextmenu', e => {
 
 // Ctrl + wheel: brush size (brush tools) or corridor width (Slope tool), instead of zooming.
 map.getContainer().addEventListener('wheel', e => {
-  if (dz.mode !== 'design' || !e.ctrlKey || !dz.design || !(BRUSHES.includes(dz.tool) || DEMO.includes(dz.tool) || PATHS.includes(dz.tool))) return;
+  if (dz.mode !== 'design' || !e.ctrlKey || !dz.design || !(BRUSHES.includes(dz.tool) || PATHS.includes(dz.tool))) return;
   e.preventDefault(); e.stopPropagation();
   const k = Math.pow(1.1, -Math.sign(e.deltaY) * Math.min(3, Math.max(1, Math.abs(e.deltaY) / 100)));
   if (PATHS.includes(dz.tool)) {
