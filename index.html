@@ -7,13 +7,14 @@
   <meta name="description" content="Download preliminary USGS 3DEP topography as Revit-ready CSV points and 3D DXF contours.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.49.0">
+  <link rel="stylesheet" href="css/app.css?v=0.50.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
+  <script>try { if (localStorage.getItem('c2r-ui') !== 'classic') document.body.classList.add('theme-legend'); } catch { document.body.classList.add('theme-legend'); }</script>
   <div class="app">
     <div class="panel-bg" aria-hidden="true"></div><div class="panel-art" aria-hidden="true"></div>
     <aside class="panel" id="panel">
@@ -23,7 +24,7 @@
         </div>
         <div>
           <h1>Contours to Revit <span class="app-ver" id="app-ver" title="Web app version"></span></h1>
-          <p class="tag">Preliminary USGS 3DEP topography &rarr; Toposolid points &amp; 3D DXF contours</p>
+          <p class="tag" data-tip="tagline">Real ground, buildings and trees for your site — ready for Revit</p>
         </div>
         <button type="button" class="gear" id="settings-open" data-tip="settings" aria-label="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg></button>
       </header>
@@ -51,13 +52,13 @@
       </section>
 
       <nav class="mode-tabs" role="tablist" aria-label="Mode">
-        <button role="tab" class="mode active" data-mode="existing" aria-selected="true" data-tip="mode-existing">Existing site</button>
-        <button role="tab" class="mode" data-mode="design" aria-selected="false" data-tip="mode-design">Site design</button>
-        <button role="tab" class="mode" data-mode="sketch" aria-selected="false" data-tip="mode-sketch">Sketch</button>
-        <button role="tab" class="mode" data-mode="diagram" aria-selected="false" data-tip="mode-diagram">Diagram</button>
+        <button role="tab" class="mode active" data-mode="existing" aria-selected="true" data-tip="mode-existing"><svg class="mode-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 17l5-7 4 5 3-4 6 6z"/><path d="M4 20h16" opacity=".6"/></svg><span>Existing site</span></button>
+        <button role="tab" class="mode" data-mode="design" aria-selected="false" data-tip="mode-design"><svg class="mode-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18h6v-4h6v-4h6"/><path d="M3 21h18" opacity=".6"/></svg><span>Site design</span></button>
+        <button role="tab" class="mode" data-mode="sketch" aria-selected="false" data-tip="mode-sketch"><svg class="mode-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8l8-4 8 4v9l-8 4-8-4z"/><path d="M4 8l8 4 8-4M12 12v9" opacity=".6"/></svg><span>Sketch</span></button>
+        <button role="tab" class="mode" data-mode="diagram" aria-selected="false" data-tip="mode-diagram"><svg class="mode-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18C8 9 13 8 19 8"/><path d="M15 5l4 3-4 4"/></svg><span>Diagram</span></button>
       </nav>
 
-      <details class="step existing-only" id="step-site" open data-tone="site">
+      <details class="step existing-only" id="step-site" data-art="site" open data-tone="site">
         <summary data-tip="site"><span class="num">1</span><span class="st-title">Site</span><span class="st-sum" id="sum-site">Draw a boundary</span></summary>
         <div class="step-body">
           <form id="search-form" class="search" autocomplete="off">
@@ -84,7 +85,7 @@
         </div>
       </details>
 
-      <details class="step existing-only" id="step-options" open data-tone="topo">
+      <details class="step existing-only" id="step-options" data-art="topo" open data-tone="topo">
         <summary data-tip="topo"><span class="num">2</span><span class="st-title">Topography</span><span class="st-sum" id="sum-topo"></span></summary>
         <div class="step-body">
           <div class="field-row">
@@ -104,11 +105,11 @@
               <select id="interval"></select>
             </div>
           </div>
-          <button type="button" class="more-link" data-settings="topo">More topography options — smoothing, buildings, lidar roofs, coordinate system ›</button>
+          <button type="button" class="more-link" data-settings="topo" data-tip="more-topo">More options ›</button>
         </div>
       </details>
 
-      <details class="step existing-only" id="step-place" data-tone="revit">
+      <details class="step existing-only" id="step-place" data-art="revit" data-tone="revit">
         <summary data-tip="place"><span class="num">3</span><span class="st-title">Place in Revit</span><span class="st-sum" id="sum-place"></span></summary>
         <div class="step-body">
           <label class="check check-first">
@@ -163,7 +164,7 @@
         </div>
       </details>
 
-      <details class="step existing-only" id="step-results" open hidden data-tone="export">
+      <details class="step existing-only" id="step-results" data-art="export" open hidden data-tone="export">
         <summary data-tip="export"><span class="num">4</span><span class="st-title">Export</span><span class="st-sum" id="sum-export"></span></summary>
         <div class="step-body">
           <dl class="stats" id="result-stats">
@@ -188,9 +189,9 @@
 
       <section class="diagram-only" id="diagram-panel">
         <div class="dz-empty" id="dg-empty">
-          <p><strong>Generate the existing site first.</strong> Diagrams sit on that site and its sketch.</p>
+          <p><strong>Survey the existing site first.</strong> Diagrams sit on that site and its sketch.</p>
         </div>
-        <details class="step" open data-tone="tools">
+        <details class="step" open data-tone="tools" data-art="diagram">
           <summary data-tip="diagram"><span class="num">1</span><span class="st-title">Diagram</span><span class="st-sum">annotate the site</span></summary>
           <div class="step-body">
             <p class="hint coach-src" id="dg-hint"></p>
@@ -210,10 +211,10 @@
 
       <section class="sketch-only" id="sketch-panel">
         <div class="dz-empty" id="sk-empty">
-          <p><strong>Generate the existing site first.</strong> Sketches sit on that site — switch to <em>Existing site</em>, draw a boundary and click Generate.</p>
+          <p><strong>Survey the existing site first.</strong> Sketches sit on that site — switch to <em>Existing site</em>, draw a boundary and click Survey the site.</p>
         </div>
         <div id="sk-body" hidden>
-          <details class="step" open data-tone="tools">
+          <details class="step" open data-tone="tools" data-art="sketch">
             <summary data-tip="sketch"><span class="num">1</span><span class="st-title">Sketch</span><span class="st-sum">live totals</span></summary>
             <div class="step-body">
               <p class="hint coach-src" id="sk-hint"></p>
@@ -227,10 +228,10 @@
 
       <section class="design-only" id="design-panel">
         <div class="dz-empty" id="dz-empty">
-          <p><strong>Generate the existing site first.</strong> The design starts from that surface — switch to <em>Existing site</em>, draw a boundary and click Generate.</p>
+          <p><strong>Survey the existing site first.</strong> The design starts from that surface — switch to <em>Existing site</em>, draw a boundary and click Survey the site.</p>
         </div>
         <div id="dz-body" hidden>
-          <details class="step" open data-tone="tools">
+          <details class="step" open data-tone="tools" data-art="grading">
             <summary data-tip="grading"><span class="num">1</span><span class="st-title">Grading tools</span><span class="st-sum" id="sum-tool"></span></summary>
             <div class="step-body">
               <div class="tool-grid" role="radiogroup" aria-label="Grading tool">
@@ -353,7 +354,7 @@
               </div>
             </div>
           </details>
-          <details class="step" open data-tone="earth">
+          <details class="step" open data-tone="earth" data-art="earth">
             <summary data-tip="earthwork"><span class="num">2</span><span class="st-title">Earthwork</span><span class="st-sum" id="sum-earth"></span></summary>
             <div class="step-body">
               <dl class="stats stats-earth">
@@ -371,13 +372,13 @@
               <div class="cf-legend" aria-hidden="true"><span>Cut</span><i></i><span>Fill</span><small id="cf-scale">±5 ft</small></div>
             </div>
           </details>
-          <details class="step" open data-tone="features">
+          <details class="step" open data-tone="features" data-art="features">
             <summary data-tip="features"><span class="num">3</span><span class="st-title">Features</span><span class="st-sum" id="sum-feat"></span></summary>
             <div class="step-body">
               <ul class="feat-list" id="feat-list"></ul>
             </div>
           </details>
-          <details class="step" open data-tone="export">
+          <details class="step" open data-tone="export" data-art="save">
             <summary data-tip="dzexport"><span class="num">4</span><span class="st-title">Save &amp; export</span><span class="st-sum"></span></summary>
             <div class="step-body">
               <div class="downloads">
@@ -403,7 +404,7 @@
       <div class="action-bar" id="step-generate">
         <p class="status" id="status" aria-live="polite"></p>
         <p class="dz-readout design-only" id="dz-readout" hidden></p>
-        <button id="generate" class="btn btn-primary btn-block existing-only" type="button" disabled data-tip="generate">Generate topography</button>
+        <button id="generate" class="btn btn-primary btn-block existing-only" type="button" disabled data-tip="generate">Survey the site</button>
       </div>
     </aside>
 
@@ -412,6 +413,8 @@
       <nav class="set-tabs"><button type="button" class="set-tab" data-sec="general">General</button><button type="button" class="set-tab" data-sec="topo">Topography</button><button type="button" class="set-tab" data-sec="export">Export</button><button type="button" class="set-tab" data-sec="imagery">Imagery</button><button type="button" class="set-tab" data-sec="views">3D &amp; water</button><button type="button" class="set-tab" data-sec="design">Site design</button><button type="button" class="set-tab" data-sec="sketch">Sketch &amp; diagram</button><button type="button" class="set-tab" data-sec="data">Map data</button></nav>
       <div class="set-body">
         <section class="set-sec" data-sec="general">
+          <h4 class="set-h">Look</h4>
+          <div class="set-row"><label for="set-ui">Interface style</label><select id="set-ui"><option value="legend">Legend — painted backdrops</option><option value="classic">Classic — plain and compact</option></select></div>
           <h4 class="set-h">Help</h4>
           <label class="check"><input type="checkbox" id="set-tips" checked><span><strong>Hover help</strong> — tooltips on buttons and titles (they lock after a moment so you can hover the highlighted terms)</span></label>
           <div class="set-row"><label for="set-tipdelay">Hover before a tip shows</label><input type="range" id="set-tipdelay" min="0.5" max="6" step="0.5" value="4"><output id="set-tipdelay-v">4 s</output></div>
@@ -669,6 +672,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.49.0"></script>
+  <script type="module" src="js/app.js?v=0.50.0"></script>
 </body>
 </html>

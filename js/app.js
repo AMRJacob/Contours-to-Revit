@@ -1,24 +1,24 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.49.0';
-import { fetchElevation, sample } from './dem.js?v=0.49.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.49.0';
-import { Dxf } from './dxf.js?v=0.49.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.49.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.49.0';
-import { Flow } from './flow.js?v=0.49.0';
-import { createSketch } from './sketch.js?v=0.49.0';
-import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.49.0';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.49.0';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.49.0';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.49.0';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.49.0';
-import { loadLidar, applyLidar } from './lidar.js?v=0.49.0';
-import { findTrees } from './trees.js?v=0.49.0';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.49.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.49.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.50.0';
+import { fetchElevation, sample } from './dem.js?v=0.50.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.50.0';
+import { Dxf } from './dxf.js?v=0.50.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.50.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.50.0';
+import { Flow } from './flow.js?v=0.50.0';
+import { createSketch } from './sketch.js?v=0.50.0';
+import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.50.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.50.0';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.50.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.50.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.50.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.50.0';
+import { findTrees } from './trees.js?v=0.50.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.50.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.50.0';
 
-const VERSION = '0.49.0';
+const VERSION = '0.50.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -96,7 +96,7 @@ const drawControl = new L.Control.Draw({
 // (Site design tab) and brings them back with it.
 function onBoundaryEdited() {
   saveRect(); onSiteChanged(true);
-  if (state.result) setStatus('Boundary changed — click Generate to update the site.');
+  if (state.result) setStatus('Boundary changed — click Survey the site to update it.');
 }
 // (Leaflet.draw fires 'edit' on the shape without bubbling, so listen on the layer itself.)
 drawn.on('layeradd', e => { try { e.layer.on('edit', onBoundaryEdited); e.layer.editing?.enable(); } catch { /* not editable */ } });
@@ -1107,19 +1107,38 @@ const visibility = (() => {
   return v;
 })();
 function vis() { return { ...visibility }; }
+// The Layers panel groups the layers: one switch per group, the individual layers in a dropdown under it.
+const LAYER_GROUPS = [
+  { key: 'ground', label: 'Ground & aerial', icon: '<path d="M2 17l5-7 4 5 3-4 6 6z"/>', keys: ['siteImage', 'contours', 'points', 'imageFrame'] },
+  { key: 'bldg', label: 'Buildings', icon: '<path d="M4 20V9l6-4 6 4v11M16 20V12h4v8M8 20v-5h4v5"/>', keys: BUILDING_SOURCES.map(b => b.key), pick: true },
+  { key: 'roads', label: 'Roads & paving', icon: '<path d="M7 21L10 3M17 21L14 3M12 6v2M12 11v2M12 16v2"/>', keys: ['roads', 'roadWidths', 'roadEdges', 'streetAreas', 'parking', 'sidewalks'] },
+  { key: 'trees', label: 'Trees', icon: '<path d="M12 21v-6"/><circle cx="12" cy="10" r="6"/>', keys: ['trees'] },
+  { key: 'property', label: 'Property & flood', icon: '<path d="M4 6l8-3 8 3v7c0 4-4 7-8 8-4-1-8-4-8-8z"/>', keys: ['parcels', 'flood'] },
+  { key: 'labels', label: 'Labels', icon: '<path d="M5 6h14M12 6v13"/>', keys: ['labels'] },
+];
+const lpOpen = (() => { try { return new Set(JSON.parse(localStorage.getItem('c2r-lp-open') || '[]')); } catch { return new Set(); } })();
+const lpMem = {};                         // layers that were on when a group was switched off
 
 const LayersControl = L.Control.extend({
   options: { position: 'topright' },
   onAdd() {
     const el = L.DomUtil.create('div', 'layers-panel leaflet-bar');
     el.hidden = true; // shown once a site has been generated
-    el.innerHTML = '<div class="lp-title"><span>Layers</span><span>Items found</span></div>' + LAYERS.map(l => `
+    const row = l => `
       <label class="lp-row" data-key="${l.key}">
         <input type="checkbox" ${visibility[l.key] ? 'checked' : ''}>
         <span class="lp-sw" style="background:${l.swatch}"></span>
         <span class="lp-name">${l.label}</span>
         <span class="lp-count">${l.note || ''}</span>
-      </label>`).join('') + '<div class="lp-foot">Shown layers go into the preview, PNG &amp; DXF</div>';
+      </label>`;
+    el.innerHTML = '<div class="lp-title"><span>Layers</span></div>' + LAYER_GROUPS.map(g => {
+      const ls = g.keys.map(k => LAYERS.find(l => l.key === k)).filter(Boolean);
+      const single = ls.length === 1;
+      return `<div class="lp-group${single ? ' lp-single' : ''}${lpOpen.has(g.key) ? ' open' : ''}" data-group="${g.key}">
+        <div class="lp-ghead"><input type="checkbox" class="lp-gchk" aria-label="${g.label}"><svg class="lp-gic" viewBox="0 0 24 24" aria-hidden="true">${g.icon}</svg>
+          <span class="lp-gname">${g.label}</span><span class="lp-gsum"></span>${single ? '' : '<button type="button" class="lp-caret" aria-label="Show the layers in this group">▾</button>'}</div>
+        <div class="lp-items">${ls.map(row).join('')}</div></div>`;
+    }).join('') + '<div class="lp-foot">Shown layers go into the preview, PNG &amp; DXF</div>';
     L.DomEvent.disableClickPropagation(el);
     L.DomEvent.disableScrollPropagation(el);
     el.querySelectorAll('.lp-row').forEach(row => row.querySelector('input').addEventListener('change', e => {
@@ -1129,11 +1148,46 @@ const LayersControl = L.Control.extend({
       applyVisibility();
       siteImgDraw();
       v3Dirty();
+      lpSync();
     }));
+    el.querySelectorAll('.lp-group').forEach(gEl => {
+      const g = LAYER_GROUPS.find(x => x.key === gEl.dataset.group);
+      const toggleOpen = () => { gEl.classList.toggle('open'); if (gEl.classList.contains('open')) lpOpen.add(g.key); else lpOpen.delete(g.key); try { localStorage.setItem('c2r-lp-open', JSON.stringify([...lpOpen])); } catch { /* ignore */ } };
+      gEl.querySelector('.lp-caret')?.addEventListener('click', toggleOpen);
+      gEl.querySelector('.lp-gname').addEventListener('click', () => (gEl.querySelector('.lp-caret') ? toggleOpen() : gEl.querySelector('.lp-gchk').click()));
+      gEl.querySelector('.lp-gchk').addEventListener('change', e => {
+        const avail = g.keys.filter(k => !el.querySelector(`.lp-row[data-key="${k}"]`)?.hidden);
+        if (!e.target.checked) { lpMem[g.key] = avail.filter(k => visibility[k]); for (const k of g.keys) visibility[k] = false; }
+        else {
+          // Back to what was on before; buildings show one source (they overlap), the others everything found.
+          const back = (lpMem[g.key] || []).filter(k => avail.includes(k));
+          const on = back.length ? back : g.pick ? avail.slice(0, 1) : avail;
+          for (const k of on) visibility[k] = true;
+        }
+        el.querySelectorAll('.lp-row').forEach(r => { r.querySelector('input').checked = !!visibility[r.dataset.key]; });
+        try { localStorage.setItem('c2r-layers', JSON.stringify(visibility)); } catch { /* ignore */ }
+        projTouch(); applyVisibility(); siteImgDraw(); v3Dirty(); lpSync();
+      });
+    });
     return el;
   },
 });
 map.addControl(new LayersControl());
+setTimeout(() => lpSync());
+/** Group switches (all / some / none on), short summaries, and groups with nothing on this site hidden. */
+function lpSync() {
+  const el = document.querySelector('.layers-panel'); if (!el) return;
+  el.querySelectorAll('.lp-group').forEach(gEl => {
+    const rows = [...gEl.querySelectorAll('.lp-row')].filter(r => !r.hidden);
+    const on = rows.filter(r => visibility[r.dataset.key]);
+    gEl.hidden = !rows.length;
+    const chk = gEl.querySelector('.lp-gchk');
+    chk.checked = on.length > 0; chk.indeterminate = on.length > 0 && on.length < rows.length && gEl.dataset.group !== 'bldg';
+    // Summary: the count of the main layer that's on (or how many are on).
+    const first = on[0], raw = first?.querySelector('.lp-count').textContent || '', cnt = /\d/.test(raw) && !raw.includes('·') ? raw : 'on';
+    gEl.querySelector('.lp-gsum').textContent = !on.length ? 'off' : gEl.classList.contains('lp-single') || gEl.dataset.group === 'bldg' ? cnt : `${on.length} of ${rows.length}`;
+  });
+}
 
 function updateLayerCounts(site) {
   const c = site?.context;
@@ -1180,6 +1234,7 @@ function updateLayerCounts(site) {
     row.hidden = !!site && ['0', 'none', 'AR only'].includes(counts[k]);
     row.querySelector('input').checked = !!visibility[k];
   });
+  lpSync();
 }
 let layerDefaultsFor = null;
 
@@ -2040,7 +2095,7 @@ $('origin-zero').addEventListener('change', e => {
 $('datum-ground').addEventListener('click', () => {
   const site = state.result;
   const z = site && originGround(site);
-  if (!Number.isFinite(z)) { setStatus('Generate first so the ground elevation at the origin is known.', true); return; }
+  if (!Number.isFinite(z)) { setStatus('Survey the site first so the ground elevation at the origin is known.', true); return; }
   align.datum = Math.round(z * 100) / 100;
   align.zeroAtOrigin = true;
   $('datum').value = align.datum.toFixed(2);
@@ -2146,7 +2201,7 @@ function updateRevitCard() {
   $('revit-copy').hidden = !rv;
   $('revit-sum').textContent = rv ? `— elev. ${fmt(rv.elev, 2)}, ${rv.angText}` : '';
   if (!rv) {
-    body.innerHTML = `<p class="hint">${site ? 'Turn on <strong>Use a local origin</strong> (and pick it on a building corner) to get the values for Revit.' : 'Generate to see the values.'}</p>`;
+    body.innerHTML = `<p class="hint">${site ? 'Turn on <strong>Use a local origin</strong> (and pick it on a building corner) to get the values for Revit.' : 'Survey the site to see the values.'}</p>`;
     return;
   }
   const n = (v, d = 3) => fmt(v, d);
@@ -3763,7 +3818,7 @@ $('dz-file').addEventListener('change', async e => {
     onSiteChanged(true);
   }
   setMode('existing');
-  setStatus(`“${file.name}” is for a different site — its boundary and settings are restored. Click Generate; the design opens in Site design.`);
+  setStatus(`“${file.name}” is for a different site — its boundary and settings are restored. Click Survey the site; the design opens in Site design.`);
 });
 
 // ----- New-construction exports -----
@@ -4012,6 +4067,7 @@ async function projOpen(id) {
       state.keepLayers = true;
       try { localStorage.setItem('c2r-layers', JSON.stringify(visibility)); } catch { /* ignore */ }
       document.querySelectorAll('.layers-panel .lp-row').forEach(row => { row.querySelector('input').checked = !!visibility[row.dataset.key]; });
+      lpSync();
     }
     if (snap.prefix) { folder.prefix = snap.prefix; $('folder-prefix').value = snap.prefix; try { localStorage.setItem('c2r-prefix', snap.prefix); } catch { /* ignore */ } updateFolderUi(); }
     drawn.clearLayers();
@@ -4033,7 +4089,7 @@ async function projOpen(id) {
     if (state.rect) {
       setStatus(`Opening “${meta.name}” — generating the site…`);
       $('generate').disabled = true;
-      try { await generate(); } catch (err) { console.error(err); setStatus(`Opened “${meta.name}”, but generating failed: ${err.message || err}. Click Generate to try again.`, true); }
+      try { await generate(); } catch (err) { console.error(err); setStatus(`Opened “${meta.name}”, but generating failed: ${err.message || err}. Click Survey the site to try again.`, true); }
       finally { $('generate').disabled = !state.rect; }
       if (state.result && snap.mode === 'design') { setMode('design'); await dzEnsure(); }
       if (state.result && (snap.mode === 'sketch' || snap.mode === 'diagram')) setMode(snap.mode);
@@ -4403,7 +4459,7 @@ function imgReadmeLines(site) {
   return lines;
 }
 function imgUsedText(site) {
-  if (!site) return 'Generate a site to see which sources cover it.';
+  if (!site) return 'Survey a site to see which sources cover it.';
   if (!site.imagerySrc) return `No imagery service returned photos for this site — hillshade shown.${site.imageryNotes?.length ? ` (${escapeHtml(site.imageryNotes.join('; '))})` : ''}`;
   const s = site.imagerySrc, r = imgRow(site);
   const asked = imgChoice.id === 'auto' ? '' : imgChoice.id === 'custom' ? (s.id === 'custom' ? '' : ' — the custom service failed, so the next best was used')
@@ -5261,6 +5317,10 @@ for (const [id, m] of [['sk-hint', 'sketch'], ['dg-hint', 'diagram'], ['tool-hin
   $('set-tips').checked = pref('c2r-tips', true); $('set-coach').checked = pref('c2r-coach', true); apply();
   $('set-tips').addEventListener('change', e => { setPref('c2r-tips', e.target.checked); apply(); });
   $('set-coach').addEventListener('change', e => { setPref('c2r-coach', e.target.checked); apply(); });
+  // Interface style: 'legend' (painted backdrops, framed menus) or 'classic'.
+  { let ui = 'legend'; try { ui = localStorage.getItem('c2r-ui') || 'legend'; } catch { /* ignore */ }
+    $('set-ui').value = ui;
+    $('set-ui').addEventListener('change', e => { document.body.classList.toggle('theme-legend', e.target.value === 'legend'); try { localStorage.setItem('c2r-ui', e.target.value); } catch { /* ignore */ } }); }
   const delay = v => { setTipDelay(v * 1000); $('set-tipdelay-v').textContent = `${v} s`; };
   { let v = 4; try { const x = Number(localStorage.getItem('c2r-tipdelay')); if (x >= 0.5 && x <= 6) v = x; } catch { /* ignore */ } $('set-tipdelay').value = String(v); delay(v); }
   $('set-tipdelay').addEventListener('input', e => { const v = Number(e.target.value); delay(v); try { localStorage.setItem('c2r-tipdelay', String(v)); } catch { /* ignore */ } });

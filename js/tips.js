@@ -40,7 +40,7 @@ export const TIPS = {
   interval: { t: 'Contours every', b: 'Contour interval; every fifth line is a major (index) contour on its own DXF layer.' },
   place: { t: '3 · Place in Revit', b: 'Where the site lands in Revit: a ' + term('origin', 'local origin') + ', ' + term('pn', 'project north') + ' and an elevation ' + term('datum', 'datum') + '. The ' + term('revitcoords', 'Revit coordinates') + ' card gives the numbers for shared coordinates.' },
   export: { t: '4 · Export', b: 'DXF (3D contours with true Z, buildings and the layers shown), CSV points for a ' + term('toposolid', 'Toposolid') + ', the aerial with an underlay, a printable PNG, and a README. Remember the ' + term('dxfunits', 'DXF import units') + '. More options in Settings › Export.' },
-  generate: { t: 'Generate', b: 'Downloads the elevation, imagery and site context for the boundary and builds the surface. Larger sites and lidar roofs take longer.' },
+  generate: { t: 'Survey the site', b: 'Downloads the elevation, imagery and site context for the boundary and builds the surface. Larger sites and lidar roofs take longer.' },
   projects: { t: 'Projects', b: 'Saving is manual — Save overwrites the open project, Save as new makes another. A project keeps the site, options, origin and north, layers, the site design and the sketch, in this browser on this computer. Use Save design (Site design tab) for a file you can move.' },
 
   // ---- Site design
@@ -71,6 +71,8 @@ export const TIPS = {
   'dg-line': { t: 'Line', k: 'L', b: 'Drag a straight line, or click points and double-click. Stand it up for a fence or screen.' },
   'dg-region': { t: 'Region', k: 'R', b: 'Drag a rectangle or click an outline. Stand it up for a see-through volume.' },
   'dg-label': { t: 'Label', k: 'T', b: 'Click where it goes, then type in the card.' },
+  'tagline': { t: 'What this makes', b: 'Preliminary topography from USGS 3DEP elevation (NAVD88) → Toposolid points (CSV) and 3D DXF contours, plus buildings, roads, trees and more from public map data. Not survey data.' },
+  'more-topo': { t: 'More options', b: 'Smoothing, existing buildings in the surface, lidar roof heights, trees from lidar, and the coordinate system (State Plane zone).' },
   'dg-paint': { t: 'Paint', k: 'B', b: 'Click a building, tree, block, parking area or annotation to paint it the colour in the flyout. ' + K('Alt') + '+click picks up a colour · ' + K('Shift') + '+click puts it back to the default. Painted colours show in the Diagram tab only.' },
   'dg-colors': { t: 'Diagram colours', b: 'One colour for a whole category — existing buildings, trees, new blocks (or blocks by use). Items you paint with the Paint tool keep their own colour. Saved with the project; the Sketch tab keeps the use colours.' },
   'dg-export': { t: 'Save image', b: 'Saves the current view — plan or 3D — as a PNG. In plan, the basemap tiles are left out (only the site aerial and the app\'s own layers can be copied into an image).' },
