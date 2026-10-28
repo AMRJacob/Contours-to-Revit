@@ -4,7 +4,7 @@
 // single face is a flat "sheet" (a shape drawn on the ground, waiting to be pulled up).
 // Floors aren't stored as geometry: they come from slicing the solid every floor-to-floor height.
 import earcut from '../lib/earcut.js';
-import { massGeom } from './sketchmass.js?v=0.47.1';
+import { massGeom } from './sketchmass.js?v=0.47.2';
 
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
@@ -295,12 +295,27 @@ export function slopeFace(S, fi, dir, slope) {
   return S;
 }
 
-/** Add or take away the top storey: everything in the top floor moves up / down by ftf. */
-export function shiftTop(S, ftf, dir, P = plates(S, ftf)) {
-  if (!P.length) return false;
-  const cut = P[P.length - 1].z - 0.5 * ftf, ids = S.v.map((p, i) => (p[2] > cut ? i : -1)).filter(i => i >= 0);
-  if (dir < 0 && (P.length < 2 || Math.min(...ids.map(i => S.v[i][2])) - ftf < cut - 0.4 * ftf)) return false;
-  for (const i of ids) S.v[i][2] += dir * ftf;
+/**
+ * Add or take away a storey at the top of the walls. The cut is the highest vertex level with straight walls just
+ * below it (the eaves of a pitched roof, the top of a flat one, the top of a tower on a podium); everything at or
+ * above it moves up / down by ftf, so roofs keep their shape. Returns false when a storey can't be removed.
+ */
+export function shiftTop(S, ftf, dir, tris = solidTris(S)) {
+  if (isSheet(S)) return false;
+  const levels = [...new Set(S.v.map(p => Math.round(p[2] * 1e4) / 1e4))].filter(z => z > 1e-6).sort((a, b) => b - a);
+  let cut = null;
+  for (const z of levels) {
+    const a1 = slice(S, z - Math.min(0.01 * ftf, z * 0.01), tris).area, a2 = slice(S, z - Math.min(0.5 * ftf, z * 0.5), tris).area;
+    if (a1 > 1e-6 && Math.abs(a1 - a2) <= 0.02 * Math.max(a1, a2)) { cut = z; break; }
+  }
+  if (cut == null) return false;
+  const eps = 1e-4 * ftf;
+  if (dir < 0) {
+    const below = levels.filter(z => z < cut - eps);
+    const floor = below.length ? below[0] : 0;
+    if (cut - ftf < floor + 0.25 * ftf) return false;          // would sink into the storey below
+  }
+  for (const p of S.v) if (p[2] >= cut - eps) p[2] += dir * ftf;
   return true;
 }
 

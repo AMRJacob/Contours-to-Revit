@@ -8,12 +8,12 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins } from './parking.js?v=0.47.1';
-import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.47.1';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.47.1';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.47.1';
-import * as SO from './solid.js?v=0.47.1';
-import { noteGeom, WIDTHS } from './notes.js?v=0.47.1';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins } from './parking.js?v=0.47.2';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.47.2';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.47.2';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.47.2';
+import * as SO from './solid.js?v=0.47.2';
+import { noteGeom, WIDTHS } from './notes.js?v=0.47.2';
 
 const TOOLS = [
   { id: 'select', key: 'V', label: 'Select', icon: '<path d="M5 3l14 8-6 1.5L10 19z"/>' },
@@ -107,7 +107,9 @@ export function createSketch(ctx) {
     const key = JSON.stringify([m.v, m.f, m.ftf, kz()]);
     const c = sk.infos.get(m.id);
     if (c && c.key === key && !(sk.baseLock?.id === m.id)) return c.I;
-    const tris = SO.solidTris(m), P = SO.plates(m, ftfN(m), tris);
+    const tris = SO.solidTris(m), P0 = SO.plates(m, ftfN(m), tris);
+    // A preset block has the floors it was given; its roof (an attic) isn't counted as more.
+    const P = m.prm ? P0.slice(0, m.prm.floors) : P0;
     const xy = m.v.map(p => [p[0], p[1]]), foot = m.v.filter(p => p[2] < 1e-6).map(p => [p[0], p[1]]);
     const F = foot.length >= 3 ? foot : xy;
     let base;
@@ -634,7 +636,7 @@ export function createSketch(ctx) {
   }
   function floorsBy(o, dir) {
     if (o.prm) { o.prm.floors = Math.max(1, Math.min(120, o.prm.floors + dir)); if (o.prm.step && o.prm.step.at >= o.prm.floors) o.prm.step = null; regen(o); return true; }
-    return SO.shiftTop(o, ftfN(o), dir, info(o).P);
+    return SO.shiftTop(o, ftfN(o), dir, info(o).tris);
   }
   cardEl.addEventListener('click', e => {
     const sw = e.target.closest('button[data-col]'), on = findSel();

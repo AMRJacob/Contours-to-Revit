@@ -1,24 +1,24 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.47.1';
-import { fetchElevation, sample } from './dem.js?v=0.47.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.47.1';
-import { Dxf } from './dxf.js?v=0.47.1';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.47.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.47.1';
-import { Flow } from './flow.js?v=0.47.1';
-import { createSketch } from './sketch.js?v=0.47.1';
-import { initTips, coachFrom } from './tips.js?v=0.47.1';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.47.1';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.47.1';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.47.1';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.47.1';
-import { loadLidar, applyLidar } from './lidar.js?v=0.47.1';
-import { findTrees } from './trees.js?v=0.47.1';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.47.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.47.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.47.2';
+import { fetchElevation, sample } from './dem.js?v=0.47.2';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.47.2';
+import { Dxf } from './dxf.js?v=0.47.2';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.47.2';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.47.2';
+import { Flow } from './flow.js?v=0.47.2';
+import { createSketch } from './sketch.js?v=0.47.2';
+import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.47.2';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.47.2';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.47.2';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.47.2';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.47.2';
+import { loadLidar, applyLidar } from './lidar.js?v=0.47.2';
+import { findTrees } from './trees.js?v=0.47.2';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.47.2';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.47.2';
 
-const VERSION = '0.47.1';
+const VERSION = '0.47.2';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -5211,6 +5211,9 @@ for (const [id, m] of [['sk-hint', 'sketch'], ['dg-hint', 'diagram'], ['tool-hin
   $('set-tips').checked = pref('c2r-tips', true); $('set-coach').checked = pref('c2r-coach', true); apply();
   $('set-tips').addEventListener('change', e => { setPref('c2r-tips', e.target.checked); apply(); });
   $('set-coach').addEventListener('change', e => { setPref('c2r-coach', e.target.checked); apply(); });
+  const delay = v => { setTipDelay(v * 1000); $('set-tipdelay-v').textContent = `${v} s`; };
+  { let v = 4; try { const x = Number(localStorage.getItem('c2r-tipdelay')); if (x >= 0.5 && x <= 6) v = x; } catch { /* ignore */ } $('set-tipdelay').value = String(v); delay(v); }
+  $('set-tipdelay').addEventListener('input', e => { const v = Number(e.target.value); delay(v); try { localStorage.setItem('c2r-tipdelay', String(v)); } catch { /* ignore */ } });
   const drawer = $('settings');
   const showSec = sec => {
     drawer.querySelectorAll('.set-tab').forEach(t => t.classList.toggle('on', t.dataset.sec === sec));

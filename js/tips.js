@@ -82,7 +82,10 @@ export const TIPS = {
 };
 
 // ---------------------------------------------------------------- tooltip engine
-const SHOW_MS = 280, LOCK_MS = 850;
+const LOCK_MS = 850;
+let SHOW_MS = 4000;              // hover this long before a tip appears (Settings › General)
+/** Hover delay before a tip appears, in ms. */
+export function setTipDelay(ms) { SHOW_MS = Math.max(150, ms); }
 let stack = [];               // [{ el (tooltip), anchor, locked, timer }]
 let pending = null;
 
@@ -151,7 +154,7 @@ export function initTips() {
     if (host >= 0) {
       if (!stack[host].locked) return;
       if (stack[host + 1]?.anchor === a) return;
-      pending = setTimeout(() => open(a, host + 1), SHOW_MS * 0.6);
+      pending = setTimeout(() => open(a, host + 1), 350);   // inside a locked tip, terms open quickly
       return;
     }
     if (stack[0]?.anchor === a) return;
