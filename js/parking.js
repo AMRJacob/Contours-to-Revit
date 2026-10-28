@@ -194,12 +194,15 @@ export function layoutLot(poly, opts = {}) {
   for (const run of rowRuns) total += run.n;
   // Accessible spaces: pairs sharing an access aisle (a pair holding a van space gets the 8 ft van aisle), placed
   // at the row ends nearest accNear (the nearest building), spilling to the next-nearest rows when one is full.
-  const near = opts.accNear ? toF(opts.accNear) : null;
+  // accAt: a point the user dragged them to — the group centres on it in the nearest row (the rest spill to row ends).
+  const at = opts.accAt ? toF(opts.accAt) : null;
+  const near = at || (opts.accNear ? toF(opts.accNear) : null);
   const ends = [];
   for (const run of rowRuns) {
     const mid = (run.r.band[0] + run.r.band[1]) / 2, e0 = run.u0, e1 = run.u0 + run.n * pitch;
     const d0 = near ? Math.hypot(near[0] - e0, near[1] - mid) : -run.n, d1 = near ? Math.hypot(near[0] - e1, near[1] - mid) : -run.n;
-    ends.push({ run, fromEnd: d1 < d0, d: Math.min(d0, d1) });
+    const uc = near ? Math.max(e0, Math.min(e1, near[0])) : 0;
+    ends.push({ run, fromEnd: d1 < d0, d: at ? Math.hypot(at[0] - uc, at[1] - mid) : Math.min(d0, d1), at: at ? at[0] : null });
   }
   ends.sort((p, q) => p.d - q.d);
   const pairLen = van => 2 * S.accW * k + (van ? S.vanAisle : S.accAisle) * k;
@@ -218,7 +221,7 @@ export function layoutLot(poly, opts = {}) {
         len += add; inRun += n2; if (isVan) vanIn++;
       }
       if (!inRun) continue;
-      groups.set(e.run, { acc: inRun, van: vanIn, len, removed: Math.ceil(len / pitch - 1e-9), fromEnd: e.fromEnd });
+      groups.set(e.run, { acc: inRun, van: vanIn, len, removed: Math.ceil(len / pitch - 1e-9), fromEnd: e.fromEnd, at: e === ends[0] ? e.at : null });
       left -= inRun; vans -= vanIn;
     }
     let removed = 0, placedAcc = 0, placedVan = 0;
@@ -236,7 +239,8 @@ export function layoutLot(poly, opts = {}) {
     const g = P2.groups.get(run);
     if (g) {
       const gl = g.removed * pitch;
-      const g0 = g.fromEnd ? run.u0 + (n - g.removed) * pitch : run.u0;
+      const startIdx = g.at != null ? Math.max(0, Math.min(n - g.removed, Math.round((g.at - run.u0) / pitch - g.removed / 2))) : g.fromEnd ? n - g.removed : 0;
+      const g0 = run.u0 + startIdx * pitch;
       let x = g0 + (gl - g.len) / 2, vans = g.van;
       for (let i = 0; i < g.acc; i += 2) {
         const isVan = vans > 0, inPair = Math.min(2, g.acc - i), aw = (isVan ? S.vanAisle : S.accAisle) * k, sw = S.accW * k;
@@ -245,8 +249,8 @@ export function layoutLot(poly, opts = {}) {
         if (inPair === 2) { stalls.push({ pts: stallAt(run.r, x, sw), acc: true, van: false }); x += sw; }
         if (isVan) vans--;
       }
-      if (!g.fromEnd) u += g.removed * pitch;
-      n -= g.removed;
+      for (let i = 0; i < n; i++) if (i < startIdx || i >= startIdx + g.removed) stalls.push({ pts: stallAt(run.r, u + i * pitch, pitch) });
+      continue;
     }
     for (let i = 0; i < n; i++) stalls.push({ pts: stallAt(run.r, u + i * pitch, pitch) });
   }

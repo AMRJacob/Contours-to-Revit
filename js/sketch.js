@@ -8,13 +8,13 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins, filletAt } from './parking.js?v=0.55.0';
-import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.55.0';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.55.0';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.55.0';
-import * as SO from './solid.js?v=0.55.0';
-import { noteGeom, WIDTHS } from './notes.js?v=0.55.0';
-import { booleanSolids } from './bool.js?v=0.55.0';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins, filletAt } from './parking.js?v=0.56.0';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.56.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.56.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.56.0';
+import * as SO from './solid.js?v=0.56.0';
+import { noteGeom, WIDTHS } from './notes.js?v=0.56.0';
+import { booleanSolids } from './bool.js?v=0.56.0';
 import { CODES, codeFor, spacesFor } from './parking-codes.js?v=0.51.1';
 
 const TOOLS = [
@@ -70,7 +70,7 @@ const HINTS = {
   pen: 'On the ground: drag a rectangle or click an outline — it becomes a flat shape to pull up. On a face: drag or click from edge to edge to split it (lines stop at the edges; the new faces pull separately), or drag a rectangle inside it.',
   push: 'Drag a face in or out. Tops snap to whole floors (Shift = free). Ctrl = always make new sides. Type an exact distance in the box.',
   slope: 'Drag across a face toward its high side to tilt it at the pitch in the box (walls lean out). The back edge stays put.',
-  lot: 'Drag a rectangle, or click corners and double-click to finish. [ ] turn the rows, ↑ ↓ slide them.',
+  lot: 'Drag a rectangle, or click corners and double-click to finish. [ ] turn the rows, ↑ ↓ slide them. With Select, drag the blue accessible spaces to move them.',
   island: 'Drag or click out a planter island — it snaps to stall lines, aisles and the lot edge; the stalls under it go away.',
   drive: 'Drag a straight drive aisle, or click points and double-click. It snaps to aisle centres and lot edges; stalls it crosses are cleared; an end off the paving gets a curb cut.',
 };
@@ -153,7 +153,7 @@ export function createSketch(ctx) {
       if (!overlap(bbox(d.pts), bb)) continue;
       for (let i = 0; i < d.pts.length - 1; i++) drives.push({ a: d.pts[i], b: d.pts[i + 1], w: d.w });
     }
-    return { stall: l.stall, shift: l.shift, angle: l.angle ?? longestEdgeAngle(l.pts), k: perFt(), accNear: nearestMass(l),
+    return { stall: l.stall, shift: l.shift, angle: l.angle ?? longestEdgeAngle(l.pts), k: perFt(), accNear: nearestMass(l), accAt: l.accAt || null,
       setback: l.setback || 0, endIslands: !!l.endIslands, islandEvery: l.islandEvery || 0, islands, drives };
   }
   function lotLayout(l) {
@@ -659,7 +659,7 @@ export function createSketch(ctx) {
         <div class="skc-row"><span>Rows</span><button type="button" data-k="rot-" title="Turn ([)">⟲</button><button type="button" data-k="rot0" title="Line up with the longest side">auto</button><button type="button" data-k="rot+" title="Turn (])">⟳</button>
           <button type="button" data-k="sh-" title="Slide rows (↑)">▲</button><button type="button" data-k="sh+" title="Slide rows (↓)">▼</button></div>
         <div class="skc-row"><span title="Landscape strip inside the lot edge">Edge buffer</span>${num('setback', o.setback || 0, 0, 100, 1, 42)}<span>${uLen()}</span>
-          <span title="Corner radius of the end / every-N islands">Island corners r</span>${num('islandR', o.islandR ?? 3, 0, 20, 0.5, 40)}<span>${uLen()}</span></div>
+          <span title="Drag the blue accessible spaces to move them">Accessible</span>${o.accAt ? '<span class="skc-read">placed by hand</span><button type="button" data-k="accAuto" title="Back to the row ends nearest the building">auto</button>' : '<span class="skc-read">nearest the building — drag to move</span>'}</div>
         <div class="skc-row"><label class="skc-chk"><input type="checkbox" data-k="endIslands"${o.endIslands ? ' checked' : ''}> End islands</label>
           <span>Island every</span>${num('islandEvery', o.islandEvery || 0, 0, 40, 1, 38)}<span>stalls</span></div>
         <div class="skc-row skc-read" data-o="read"></div>`;
@@ -671,7 +671,7 @@ export function createSketch(ctx) {
         <div class="skc-row skc-read" data-o="read"></div>`;
     }
     return `<div class="skc-row"><span>Planter island</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div>
-      <div class="skc-row"><span>Corner radius</span>${num('r', o.r ?? 3, 0, 30, 0.5, 42)}<span>${uLen()}</span></div><div class="skc-row skc-read" data-o="read"></div>`;
+      <div class="skc-row skc-note">Round its corners with the Radius tool (F).</div><div class="skc-row skc-read" data-o="read"></div>`;
   }
   function card() {
     const o = findSel();
@@ -682,7 +682,7 @@ export function createSketch(ctx) {
     for (const q of pts) { if (!q) continue; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; }
     if (!Number.isFinite(x1)) { cardEl.hidden = true; return; }
     const W = cardEl.parentElement.clientWidth, H = cardEl.parentElement.clientHeight;
-    const sig = `${kind}:${o.id}:${sk.sel2?.id || ''}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use, o.color, o.stand, o.curve, o.size, o.r, o.cut, o.islandR])}`;
+    const sig = `${kind}:${o.id}:${sk.sel2?.id || ''}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use, o.color, o.stand, o.curve, o.size, o.r, o.cut, o.islandR, !!o.accAt])}`;
     if (cardEl.dataset.sig !== sig && !cardEl.contains(document.activeElement)) { cardEl.dataset.sig = sig; cardEl.innerHTML = cardHtml(kind, o); }
     const read = cardEl.querySelector('[data-o="read"]') || {};
     if (kind === 'note') { /* nothing to read out */ } else if (kind === 'mass') {
@@ -713,6 +713,7 @@ export function createSketch(ctx) {
     if (k === 'del') { removeSel(); return; }
     if (k.startsWith('bool-')) { combine(k.slice(5)); return; }
     if (k === 'fl-' || k === 'fl+') { before(); if (floorsBy(o, k === 'fl+' ? 1 : -1)) { remember(o); changed(true); } else sk.undo.pop(); }
+    if (k === 'accAuto') { before(); delete o.accAt; changed(true); }
     if (k === 'flip') { before(); o.prm.roof = { ...o.prm.roof, flip: !o.prm.roof?.flip }; regen(o); changed(true); }
     if (k.startsWith('rot') || k.startsWith('sh')) {
       before();
@@ -1607,6 +1608,12 @@ export function createSketch(ctx) {
       card();
       return true;
     }
+    // Accessible spaces: drag them along the rows (the lot re-lays itself around them).
+    if (!ev.alt && !ev.shift && ev.xy) for (const l of sk.model.lots) {
+      if (!lotLayout(l).stalls.some(st => (st.acc || st.aisle) && inPoly(st.pts, ...ev.xy))) continue;
+      before(); sk.drag = { kind: 'lot', id: l.id, accLot: true, pushed: true, sx: ev.sx, sy: ev.sy };
+      sk.sel = { kind: 'lot', id: l.id }; draw(); panel(); card(); return true;
+    }
     const h = hit(ev);
     if (!h) { sk.clickEmpty = [ev.sx, ev.sy]; return false; }
     // Shift+click a second block: the two can be joined, intersected or cut (see the card).
@@ -1695,6 +1702,7 @@ export function createSketch(ctx) {
     }
     const g = sk.drag, o = list(g.kind).find(q => q.id === g.id);
     if (!o) return;
+    if (g.accLot) { if (ev.xy && Math.hypot(ev.sx - g.sx, ev.sy - g.sy) > 3) { o.accAt = ev.xy.slice(); g.moved = true; sk.layouts.delete?.(o.id); dragged(); } return; }
     const cur = ev.at(g.z); if (!cur) return;
     if (!g.pushed) { before(); g.pushed = true; }
     const dx = cur[0] - g.start[0], dy = cur[1] - g.start[1];
@@ -1782,7 +1790,7 @@ export function createSketch(ctx) {
       if (d.rect) { finishDraw(drawPts()); return; }
       sk.draw = { kind: d.kind, shape: d.shape, pts: [d.a] }; draw(); return;   // a click without dragging starts an outline
     }
-    if (sk.drag) { const moved = sk.drag.moved; sk.drag = null; if (moved) changed(true); else card(); }
+    if (sk.drag) { const { moved, accLot } = sk.drag; sk.drag = null; if (moved) changed(true); else { if (accLot) sk.undo.pop(); card(); } }
   }
   function finishOutline() {
     if (sk.set === 'diagram') { finishNoteOutline(); return; }
