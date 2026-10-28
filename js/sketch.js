@@ -8,13 +8,13 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins, filletAt } from './parking.js?v=0.56.0';
-import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.56.0';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.56.0';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.56.0';
-import * as SO from './solid.js?v=0.56.0';
-import { noteGeom, WIDTHS } from './notes.js?v=0.56.0';
-import { booleanSolids } from './bool.js?v=0.56.0';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins, filletAt } from './parking.js?v=0.57.0';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.57.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.57.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.57.0';
+import * as SO from './solid.js?v=0.57.0';
+import { noteGeom, WIDTHS } from './notes.js?v=0.57.0';
+import { booleanSolids } from './bool.js?v=0.57.0';
 import { CODES, codeFor, spacesFor } from './parking-codes.js?v=0.51.1';
 
 const TOOLS = [
@@ -28,6 +28,9 @@ const TOOLS = [
   { id: 'lot', key: 'P', group: 'Parking', label: 'Lot', icon: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v6M11 4v6M15 4v6M7 20v-6M11 20v-6M15 20v-6" opacity=".7"/>' },
   { id: 'island', key: 'I', label: 'Island', icon: '<rect x="3" y="8" width="18" height="8" rx="4"/><path d="M9 12h6" opacity=".7"/>' },
   { id: 'drive', key: 'D', label: 'Drive aisle', icon: '<path d="M5 21L10 3M19 21L14 3"/><path d="M12 5v3M12 11v3M12 17v3" opacity=".7"/>' },
+  { id: 'walk', key: 'W', group: 'Site', label: 'Sidewalk', icon: '<path d="M4 20C9 16 10 9 20 4" stroke-width="4" opacity=".35"/><path d="M4 20C9 16 10 9 20 4"/>' },
+  { id: 'plant', key: 'G', label: 'Planting', icon: '<path d="M4 15c2-6 6-9 9-8s6 4 7 8c-2 4-5 5-8 5s-7-1-8-5z" fill="currentColor" fill-opacity=".25"/><path d="M8 15c1-2 2-3 3-3M13 15c1-2 2-3 3-3" opacity=".7"/>' },
+  { id: 'tree', key: 'T', label: 'Tree', icon: '<circle cx="12" cy="10" r="7"/><path d="M12 17v4M9 10a3 3 0 0 1 3-3" opacity=".7"/>' },
 ];
 // Diagram tab tools (same model; annotations instead of modelling).
 const DTOOLS = [
@@ -72,6 +75,9 @@ const HINTS = {
   slope: 'Drag across a face toward its high side to tilt it at the pitch in the box (walls lean out). The back edge stays put.',
   lot: 'Drag a rectangle, or click corners and double-click to finish. [ ] turn the rows, ↑ ↓ slide them. With Select, drag the blue accessible spaces to move them.',
   island: 'Drag or click out a planter island — it snaps to stall lines, aisles and the lot edge; the stalls under it go away.',
+  walk: 'Drag a straight sidewalk, or click points and double-click. Set the width in the box. It snaps to lots, blocks and the site lines.',
+  plant: 'Drag a rectangle or click an outline and double-click: a planting bed or lawn.',
+  tree: 'Click to plant a tree (the crown size in the box), or drag out its crown. Alt+drag a tree with Select to copy it.',
   drive: 'Drag a straight drive aisle, or click points and double-click. It snaps to aisle centres and lot edges; stalls it crosses are cleared; an end off the paving gets a curb cut.',
 };
 const DEFAULT_RATIOS = {   // examples only — every jurisdiction sets its own
@@ -79,7 +85,7 @@ const DEFAULT_RATIOS = {   // examples only — every jurisdiction sets its own
   civic: { mode: 'ksf', r: 2.5 }, hospitality: { mode: 'unit', r: 1, unitSf: 450 }, mixed: { mode: 'ksf', r: 3 },
   industrial: { mode: 'ksf', r: 1 }, parking: { mode: 'ksf', r: 0 },
 };
-const LISTS = { mass: 'masses', lot: 'lots', island: 'islands', drive: 'drives', note: 'notes' };
+const LISTS = { mass: 'masses', lot: 'lots', island: 'islands', drive: 'drives', note: 'notes', walk: 'walks', plant: 'plants', tree: 'trees' };
 const svg = i => `<svg viewBox="0 0 24 24">${i}</svg>`;
 const ORANGE = '#e8913f';
 
@@ -88,10 +94,10 @@ export function createSketch(ctx) {
   const sk = {
     model: blank(), tool: 'select', shape: 'box', sel: null, drag: null, draw: null, op: null, hov: null, undo: [], redo: [], ver: 0,
     site: null, key: null, layouts: new Map(), infos: new Map(), ngeo: new Map(), active: false, v3: null, pitch: 6,
-    radius: 10, set: 'sketch', style: { color: 'arrow', size: 1, stand: false, curve: true }, showLabels: false,
+    radius: 10, walkW: 5, treeD: 25, set: 'sketch', style: { color: 'arrow', size: 1, stand: false, curve: true }, showLabels: false,
   };
   function blank() {
-    return { v: 3, masses: [], lots: [], islands: [], drives: [], notes: [], dg: { ...DG0 }, paint: {}, scheme: JSON.parse(JSON.stringify(BUILTIN_SCHEMES[0])), ratios: JSON.parse(JSON.stringify(DEFAULT_RATIOS)) };
+    return { v: 3, masses: [], lots: [], islands: [], drives: [], notes: [], walks: [], plants: [], trees: [], dg: { ...DG0 }, paint: {}, scheme: JSON.parse(JSON.stringify(BUILTIN_SCHEMES[0])), ratios: JSON.parse(JSON.stringify(DEFAULT_RATIOS)) };
   }
   const scheme = () => sk.model.scheme;
   const uid = () => Math.random().toString(36).slice(2, 9);
@@ -109,7 +115,8 @@ export function createSketch(ctx) {
   const list = kind => sk.model[LISTS[kind]];
   const ex3 = () => (sk.v3 ? ctx.ex3d?.() || 1 : 1);
   const zGround = p => { const z = ctx.zAt(p[0], p[1]); return Number.isFinite(z) ? z : 0; };
-  const closed = kind => kind !== 'drive';
+  const isLine = kind => kind === 'drive' || kind === 'walk';
+  const closed = kind => !isLine(kind);
   const massById = id => sk.model.masses.find(m => m.id === id);
 
   // ---------------------------------------------------------------- solids
@@ -196,7 +203,7 @@ export function createSketch(ctx) {
   }
 
   // ---------------------------------------------------------------- undo / change
-  const SAVED = ['masses', 'lots', 'islands', 'drives', 'notes'];
+  const SAVED = ['masses', 'lots', 'islands', 'drives', 'notes', 'walks', 'plants', 'trees'];
   const SAVEDO = ['dg', 'paint'];                    // diagram colours: undoable too
   function snapshot() { return JSON.stringify(Object.fromEntries([...SAVED, ...SAVEDO].map(k => [k, sk.model[k]]))); }
   function before() { sk.undo.push(snapshot()); if (sk.undo.length > 80) sk.undo.shift(); sk.redo.length = 0; }
@@ -338,6 +345,23 @@ export function createSketch(ctx) {
     const M = ctx.affine(sk.site), px = M.scale;                 // screen px per native unit
     const path = (P, close = true) => sPath(g, P, null, close);
     const green = colorOf(scheme(), 'green');
+    // Planting beds and sidewalks sit under everything else.
+    for (const pl of sk.model.plants) {
+      if (!path(pl.pts)) continue;
+      g.fillStyle = siteColor(`g:${pl.id}`, 'green'); g.globalAlpha = 0.85; g.fill(); g.globalAlpha = 1;
+      g.save(); g.clip(); g.strokeStyle = 'rgba(20,83,45,0.35)'; g.lineWidth = 1;          // a light stipple of shrubs
+      const bb = bbox(pl.pts), st = Math.max(6 / px, 6 * perFt());
+      for (let x = bb[0]; x < bb[2]; x += st) for (let y = bb[1] + ((x / st) % 2) * st / 2; y < bb[3]; y += st) { const q = scr([x, y]); if (q) { g.beginPath(); g.arc(q[0], q[1], Math.max(1.2, st * px * 0.18), 0, Math.PI * 2); g.stroke(); } }
+      g.restore();
+      path(pl.pts); g.strokeStyle = sk.sel?.id === pl.id ? ORANGE : 'rgba(20,83,45,0.85)'; g.lineWidth = sk.sel?.id === pl.id ? 2.5 : 1.2; g.stroke();
+    }
+    for (const w of sk.model.walks) {
+      if (!path(w.pts, false)) continue;
+      g.lineJoin = 'round'; g.lineCap = 'butt';
+      g.lineWidth = (w.w || 5) * perFt() * px + 2; g.strokeStyle = sk.sel?.id === w.id ? ORANGE : 'rgba(90,84,74,0.9)'; g.stroke();
+      path(w.pts, false); g.lineWidth = (w.w || 5) * perFt() * px; g.strokeStyle = siteColor(`w:${w.id}`, 'plaza'); g.stroke();
+      g.lineJoin = 'miter';
+    }
     for (const l of sk.model.lots) {
       const L = lotLayout(l), sel = sk.sel?.id === l.id;
       const lc = siteColor(`l:${l.id}`, 'lot');
@@ -389,8 +413,18 @@ export function createSketch(ctx) {
         else if (sel) for (const [a, b] of I.edges) if (m.v[a][2] < 1e-6 && m.v[b][2] < 1e-6) { g.beginPath(); g.moveTo(...scr(m.v[a])); g.lineTo(...scr(m.v[b])); g.lineWidth = 2.5; g.strokeStyle = ORANGE; g.stroke(); }
       }
     }
+    // Trees on top: crown, a few branch strokes, trunk dot.
+    for (const t of sk.model.trees) {
+      const q = scr(t.pts[0]), e = scr([t.pts[0][0] + t.d / 2 * perFt(), t.pts[0][1]]); if (!q || !e) continue;
+      const rr = Math.hypot(e[0] - q[0], e[1] - q[1]), col = diagramOn() ? paintOr(`t:${treeKeyOf(t)}`) : '#3f8a4a', sel = sk.sel?.id === t.id;
+      g.beginPath(); for (let k = 0; k <= 20; k++) { const a = k / 20 * Math.PI * 2, w = rr * (1 + 0.06 * Math.sin(5 * a + t.pts[0][0])); const x = q[0] + w * Math.cos(a), y = q[1] + w * Math.sin(a); k ? g.lineTo(x, y) : g.moveTo(x, y); }
+      g.fillStyle = col; g.globalAlpha = 0.72; g.fill(); g.globalAlpha = 1; g.strokeStyle = sel ? ORANGE : 'rgba(20,60,30,0.9)'; g.lineWidth = sel ? 2.5 : 1; g.stroke();
+      g.beginPath(); for (let k = 0; k < 5; k++) { const a = k / 5 * Math.PI * 2 + 0.4; g.moveTo(q[0], q[1]); g.lineTo(q[0] + rr * 0.6 * Math.cos(a), q[1] + rr * 0.6 * Math.sin(a)); } g.strokeStyle = 'rgba(20,60,30,0.45)'; g.lineWidth = 1; g.stroke();
+      g.beginPath(); g.arc(q[0], q[1], 2, 0, Math.PI * 2); g.fillStyle = '#3b2a1a'; g.fill();
+    }
     if (showTags()) for (const m of ms) label(g, scr(labelPt(m)), massTitle(m), massSub(m));
   }
+  const treeKeyOf = t => `${Math.round(t.pts[0][0])},${Math.round(t.pts[0][1])}`;
   const showTags = () => !diagramOn() || sk.showLabels;
   const useLabel = m => scheme().uses.find(x => x.key === m.use)?.label || m.use;
   const massTitle = m => (info(m).sheet ? `${useLabel(m)} · flat shape` : `${useLabel(m)} · ${info(m).floors} fl`);
@@ -435,6 +469,7 @@ export function createSketch(ctx) {
   // ---------------------------------------------------------------- selection handles
   /** Handles of the selection: corners (v), edge midpoints (m), rotate (r), scale (s). Free solids: rotate and scale. */
   function handles(kind, o) {
+    if (kind === 'tree') return [];
     const zf = handleZ(kind, o), out = [];
     const editable = kind !== 'mass' || o.prm;
     const P = outline(o), n = P.length, cl = closed(kind);
@@ -488,14 +523,20 @@ export function createSketch(ctx) {
   }
   function drawInProgress(g) {
     const d = sk.draw; if (!d) return;
+    if (d.treeDraw) {
+      const q = scr(d.c), e = scr([d.c[0] + d.r, d.c[1]]); if (!q || !e) return;
+      const rr = Math.hypot(e[0] - q[0], e[1] - q[1]);
+      g.beginPath(); g.arc(q[0], q[1], rr, 0, Math.PI * 2); g.fillStyle = 'rgba(74,140,70,0.35)'; g.fill(); g.setLineDash([5, 4]); g.strokeStyle = ORANGE; g.lineWidth = 2; g.stroke(); g.setLineDash([]);
+      tag(g, q, `⌀ ${fmtLen(d.r * 2)}`); return;
+    }
     if (d.face) return drawPenFace(g, d);
     const P = drawPts();
     if (P.length > 1) {
-      const cl = d.kind !== 'drive' && (d.rect || P.length > 2);
+      const cl = !isLine(d.kind) && (d.rect || P.length > 2);
       const zf = sk.v3 ? (p => zGround(p) + 0.3) : null;
       if (sPath(g, P, zf, cl)) {
-        if (cl) { g.fillStyle = d.kind === 'mass' || d.kind === 'sheet' ? colorOf(scheme(), sk.last?.use || scheme().uses[0].key) : d.kind === 'island' ? colorOf(scheme(), 'green') : colorOf(scheme(), 'lot'); g.globalAlpha = 0.45; g.fill(); g.globalAlpha = 1; }
-        g.setLineDash([6, 4]); g.strokeStyle = ORANGE; g.lineWidth = d.kind === 'drive' ? 3 : 2; g.stroke(); g.setLineDash([]);
+        if (cl) { g.fillStyle = d.kind === 'mass' || d.kind === 'sheet' ? colorOf(scheme(), sk.last?.use || scheme().uses[0].key) : d.kind === 'island' || d.kind === 'plant' ? colorOf(scheme(), 'green') : colorOf(scheme(), 'lot'); g.globalAlpha = 0.45; g.fill(); g.globalAlpha = 1; }
+        g.setLineDash([6, 4]); g.strokeStyle = ORANGE; g.lineWidth = isLine(d.kind) ? 3 : 2; g.stroke(); g.setLineDash([]);
       }
       if (cl) {
         const ar = area(P) * sfPerNative2(), c = centroid(P);
@@ -512,7 +553,7 @@ export function createSketch(ctx) {
   function drawPts() {
     const d = sk.draw;
     if (d.rect) {
-      if (d.kind === 'drive') return [d.a, d.b];
+      if (isLine(d.kind)) return [d.a, d.b];
       const F = rectFrame(d.a, d.b, d.frame || 0, d.square && d.shape !== 'circle');
       if (d.kind === 'mass' && d.shape !== 'box' && d.shape !== 'court') {
         // Preset drawn in the frame's own coordinates, then turned to match it.
@@ -545,6 +586,8 @@ export function createSketch(ctx) {
             <label class="skc-chk" title="Curve arrows and lines through their points"><input type="checkbox" data-st="curve"${sk.style.curve ? ' checked' : ''}> Curved</label></div></div>`
         : `<div class="sk-fly" data-for="mass" hidden>${SHAPES.map(sh => `<button type="button" class="sk-tool sk-mini" data-shape="${sh.id}" title="${sh.label} (${sh.key})" aria-label="${sh.label}">${svg(sh.icon)}<kbd>${sh.key}</kbd></button>`).join('')}</div>`
           + '<div class="sk-fly sk-num" data-for="push" hidden><span>Distance</span><input type="number" step="0.5" data-fly="dist" title="Type an exact distance for the last push/pull"><span class="sk-u"></span></div>'
+          + `<div class="sk-fly sk-num" data-for="walk" hidden><span>Width</span><input type="number" step="0.5" min="2" max="40" value="${sk.walkW}" data-fly="walkW" title="Sidewalk width"><span class="sk-u"></span></div>`
+          + `<div class="sk-fly sk-num" data-for="tree" hidden><span>Crown ⌀</span><input type="number" step="1" min="3" max="120" value="${sk.treeD}" data-fly="treeD" title="Crown diameter for a click (drag to size it instead)"><span class="sk-u"></span></div>`
           + `<div class="sk-fly sk-num" data-for="radius" hidden><span>Radius</span><input type="number" step="1" min="0" max="500" value="${sk.radius}" data-fly="radius" title="Radius for the next corner you click"><span class="sk-u"></span></div>`
           + `<div class="sk-fly sk-num" data-for="slope" hidden><span>Pitch</span><input type="number" step="0.5" min="0" max="48" value="${sk.pitch}" data-fly="pitch" title="Rise per 12 of run"><span>: 12</span></div>`);
   }
@@ -561,6 +604,8 @@ export function createSketch(ctx) {
   });
   bar.addEventListener('change', e => {
     const t = e.target, v = Number(t.value);
+    if (t.dataset.fly === 'walkW') sk.walkW = Math.max(2, Number.isFinite(v) ? v : 5);
+    if (t.dataset.fly === 'treeD') sk.treeD = Math.max(3, Number.isFinite(v) ? v : 25);
     if (t.dataset.fly === 'radius') sk.radius = Math.max(0, Number.isFinite(v) ? v : 10);
     if (t.dataset.fly === 'pitch') { sk.pitch = Math.max(0, Math.min(48, Number.isFinite(v) ? v : 6)); redoLast('slope'); }
     if (t.dataset.fly === 'dist' && Number.isFinite(v)) redoLast('push', v * kz());
@@ -581,11 +626,20 @@ export function createSketch(ctx) {
     if ('stand' in ch && o.type !== 'label') o.stand = ch.stand;
     if ('curve' in ch) o.curve = ch.curve;
   }
+  /** Two columns when the toolbar is taller than the view. */
+  function fitBar() {
+    if (bar.hidden) return;
+    bar.classList.remove('two');
+    const H = (bar.parentElement?.clientHeight || 0) - 16;
+    if (H > 0 && bar.offsetHeight > H) bar.classList.add('two');
+  }
+  window.addEventListener('resize', () => requestAnimationFrame(fitBar));
   function setTool(t) {
     if (!tools().some(x => x.id === t)) t = 'select';
     sk.tool = t; sk.draw = null; sk.hov = null;
     card();
     bar.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
+    fitBar();
     bar.querySelectorAll('.sk-fly').forEach(f => {
       f.hidden = f.dataset.for === 'style' ? t === 'select' : f.dataset.for !== t;
       f.querySelector('.dg-row')?.toggleAttribute('hidden', t === 'paint');
@@ -670,6 +724,9 @@ export function createSketch(ctx) {
           <label class="skc-chk" title="Flared apron and depressed curb where an end leaves all paving (at the street)"><input type="checkbox" data-k="cut"${o.cut !== false ? ' checked' : ''}> Curb cut at street end</label></div>
         <div class="skc-row skc-read" data-o="read"></div>`;
     }
+    if (kind === 'walk') return `<div class="skc-row"><span>Sidewalk</span>${num('w', o.w || 5, 2, 40, 0.5, 42)}<span>${uLen()} wide</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div><div class="skc-row skc-read" data-o="read"></div>`;
+    if (kind === 'plant') return `<div class="skc-row"><span>Planting</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div><div class="skc-row skc-read" data-o="read"></div>`;
+    if (kind === 'tree') return `<div class="skc-row"><span>Tree</span><span>crown ⌀</span>${num('d', o.d, 3, 120, 1, 42)}<span>height</span>${num('h', o.h, 5, 150, 1, 42)}<span>${uLen()}</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div>`;
     return `<div class="skc-row"><span>Planter island</span><button type="button" data-k="del" title="Delete (Del)">🗑</button></div>
       <div class="skc-row skc-note">Round its corners with the Radius tool (F).</div><div class="skc-row skc-read" data-o="read"></div>`;
   }
@@ -682,7 +739,7 @@ export function createSketch(ctx) {
     for (const q of pts) { if (!q) continue; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; }
     if (!Number.isFinite(x1)) { cardEl.hidden = true; return; }
     const W = cardEl.parentElement.clientWidth, H = cardEl.parentElement.clientHeight;
-    const sig = `${kind}:${o.id}:${sk.sel2?.id || ''}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use, o.color, o.stand, o.curve, o.size, o.r, o.cut, o.islandR, !!o.accAt])}`;
+    const sig = `${kind}:${o.id}:${sk.sel2?.id || ''}:${sk.cardVer || 0}:${!!o.prm}:${kind === 'mass' && info(o).sheet}:${JSON.stringify([o.prm, o.stall, o.endIslands, o.ftf, o.setback, o.islandEvery, o.w, o.use, o.color, o.stand, o.curve, o.size, o.r, o.cut, o.islandR, !!o.accAt, o.d, o.h])}`;
     if (cardEl.dataset.sig !== sig && !cardEl.contains(document.activeElement)) { cardEl.dataset.sig = sig; cardEl.innerHTML = cardHtml(kind, o); }
     const read = cardEl.querySelector('[data-o="read"]') || {};
     if (kind === 'note') { /* nothing to read out */ } else if (kind === 'mass') {
@@ -692,9 +749,10 @@ export function createSketch(ctx) {
     } else if (kind === 'lot') {
       const Lr = lotLayout(o);
       read.textContent = `${Lr.total} spaces (${Lr.acc} accessible${Lr.van ? `, ${Lr.van} van` : ''}) · ${Math.round(area(o.pts) * sfPerNative2() / Math.max(1, Lr.total))} sf per space`;
-    } else if (kind === 'drive') {
+    } else if (kind === 'tree') { /* nothing to read out */
+    } else if (kind === 'drive' || kind === 'walk') {
       let Ln = 0; for (let i = 1; i < o.pts.length; i++) Ln += Math.hypot(o.pts[i][0] - o.pts[i - 1][0], o.pts[i][1] - o.pts[i - 1][1]);
-      read.textContent = `${fmtLen(Ln)} long · stalls it crosses are cleared`;
+      read.textContent = kind === 'walk' ? `${fmtLen(Ln)} long · ${fmtArea(Ln * (o.w || 5) * perFt() * sfPerNative2())}` : `${fmtLen(Ln)} long · stalls it crosses are cleared`;
     } else read.textContent = fmtArea(area(o.pts) * sfPerNative2());
     cardEl.hidden = false;
     // Pinned at the bottom-left of the view (beside the toolbar), so it never covers the blocks you're clicking.
@@ -754,7 +812,9 @@ export function createSketch(ctx) {
     if (k === 'setback') o.setback = Math.max(0, v || 0);
     if (k === 'endIslands') o.endIslands = t.checked;
     if (k === 'islandEvery') o.islandEvery = Math.max(0, Math.round(v) || 0);
-    if (k === 'w') o.w = Math.max(10, Math.min(60, v || 24));
+    if (k === 'w') o.w = sk.sel.kind === 'walk' ? Math.max(2, Math.min(40, v || 5)) : Math.max(10, Math.min(60, v || 24));
+    if (k === 'd' && sk.sel.kind === 'tree') o.d = Math.max(3, Math.min(120, v || o.d));
+    if (k === 'h' && sk.sel.kind === 'tree') o.h = Math.max(5, Math.min(150, v || o.h));
     if (k === 'r') o.r = Math.max(0, Number.isFinite(v) ? v : 0);
     if (k === 'cut') o.cut = t.checked;
     if (k === 'islandR') o.islandR = Math.max(0, Number.isFinite(v) ? v : 0);
@@ -853,12 +913,12 @@ export function createSketch(ctx) {
     }
     return best;
   }
-  const editable = (kind, o) => kind !== 'mass' || !!o.prm;
+  const editable = (kind, o) => kind !== 'tree' && (kind !== 'mass' || !!o.prm);
   /** The edge the Add point tool would split: any outline object or block edge. → { kind, id, i | a,b, t } */
   function pointTarget(ev) {
     let best = null;
     const consider = (r, d) => { if (r && (!best || d < best.d)) best = { ...r, d }; };
-    for (const kind of ['lot', 'island', 'drive', 'mass']) for (const o of list(kind)) {
+    for (const kind of ['lot', 'island', 'drive', 'walk', 'plant', 'mass']) for (const o of list(kind)) {
       if (kind === 'mass' && !o.prm) {
         for (const [a, b] of info(o).edges) {
           const pa = P3(o, o.v[a]), pb = P3(o, o.v[b]); if (!pa || !pb) continue;
@@ -898,7 +958,7 @@ export function createSketch(ctx) {
     let best = null;
     const near = (q, d0 = 12) => q && Math.hypot(q[0] - ev.sx, q[1] - ev.sy) < d0;
     for (const c of joins().corners) { const q = scr(c.p); if (near(q)) { const d = Math.hypot(q[0] - ev.sx, q[1] - ev.sy); if (!best || d < best.d) best = { type: 'joint', di: c.di, p: c.p, entry: c.entry, d }; } }
-    for (const kind of ['island', 'lot', 'mass']) for (const o of list(kind)) {
+    for (const kind of ['island', 'lot', 'plant', 'mass']) for (const o of list(kind)) {
       if (kind === 'mass' && !o.prm) { for (const p of info(o).foot) { const q = P3(o, [p[0], p[1], 0]); if (near(q, 9) && !best) best = { type: 'free', id: o.id, p, d: 99 }; } continue; }
       const P = outline(o), zf = handleZ(kind, o);
       P.forEach((p, i) => { const q = scr(p, zf(p)); if (!near(q)) return; const d = Math.hypot(q[0] - ev.sx, q[1] - ev.sy); if (!best || d < best.d) best = { type: 'vertex', kind, id: o.id, i, p, d }; });
@@ -951,9 +1011,12 @@ export function createSketch(ctx) {
       for (const m of ms) if (info(m).top(...xy)) return { kind: 'mass', id: m.id, z: 0 };
     }
     const tol = sk.v3 ? 0 : 4 / ctx.affine(sk.site).scale;
+    for (const t of sk.model.trees) if (Math.hypot(xy[0] - t.pts[0][0], xy[1] - t.pts[0][1]) < Math.max(t.d / 2 * perFt(), tol * 2)) return { kind: 'tree', id: t.id, z: zg };
+    for (const w of sk.model.walks) for (let i = 0; i < w.pts.length - 1; i++) if (distSeg(xy, w.pts[i], w.pts[i + 1]) < (w.w || 5) * perFt() / 2 + tol) return { kind: 'walk', id: w.id, z: zg };
     for (const d of sk.model.drives) for (let i = 0; i < d.pts.length - 1; i++) if (distSeg(xy, d.pts[i], d.pts[i + 1]) < (d.w || 24) * perFt() / 2 + tol) return { kind: 'drive', id: d.id, z: zg };
     for (const i of sk.model.islands) if (inPoly(i.pts, ...xy)) return { kind: 'island', id: i.id, z: zg };
     for (const l of sk.model.lots) if (inPoly(l.pts, ...xy)) return { kind: 'lot', id: l.id, z: zg };
+    for (const pl of sk.model.plants) if (inPoly(pl.pts, ...xy)) return { kind: 'plant', id: pl.id, z: zg };
     return null;
   }
 
@@ -993,6 +1056,8 @@ export function createSketch(ctx) {
     }
     for (const i of sk.model.islands) if (i.id !== exclude) ring(i.pts, 'island');
     for (const d of sk.model.drives) if (d.id !== exclude) ring(d.pts, 'drive aisle', false);
+    for (const w of sk.model.walks) if (w.id !== exclude) ring(w.pts, 'sidewalk', false);
+    for (const pl of sk.model.plants) if (pl.id !== exclude) ring(pl.pts, 'planting');
     for (const c of ctx.contextSegs?.() || []) ring(c.pts, c.t, c.closed, c.frame !== false);
     sk.sc = { key, C: { pts, segs }, frames: frameAngles(fsegs) };
     return sk.sc;
@@ -1061,9 +1126,9 @@ export function createSketch(ctx) {
     const d = sk.draw;
     sk.draw = null;
     const kind = d.kind;
-    if (kind === 'drive') {
+    if (isLine(kind)) {
       let Ln = 0; for (let i = 1; i < pts.length; i++) Ln += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
-      if (pts.length < 2 || Ln / perFt() < 10) { draw(); return; }
+      if (pts.length < 2 || Ln / perFt() < (kind === 'walk' ? 3 : 10)) { draw(); return; }
     } else if (pts.length < 3 || area(pts) * sfPerNative2() < 50) { draw(); return; }
     before();
     let o = { id: uid() };
@@ -1081,6 +1146,7 @@ export function createSketch(ctx) {
       o.pts = pts;
       if (kind === 'lot') Object.assign(o, { stall: sk.lastStall || 90, shift: 0, angle: null, setback: 0, endIslands: false, islandEvery: 0 });
       else if (kind === 'drive') o.w = 24;
+      else if (kind === 'walk') o.w = sk.walkW;
       list(kind).push(o);
       sk.sel = { kind, id: o.id };
     }
@@ -1319,7 +1385,7 @@ export function createSketch(ctx) {
     if (k === 'm') { const m = massById(id); return dgs().mass && dgs().mass !== 'use' ? resolveC(dgs().mass) : colorOf(scheme(), m?.use); }
     if (k === 'b') return dgs().bldg;
     if (k === 't') return dgs().tree;
-    return colorOf(scheme(), k === 'i' ? 'green' : 'lot');
+    return colorOf(scheme(), k === 'i' || k === 'g' ? 'green' : k === 'w' ? 'plaza' : 'lot');
   }
   /** Colour for a painted item in the diagram (its paint, else the category default); plain scheme colours elsewhere. */
   const paintOr = key => { const p = sk.model.paint?.[key]; return p ? resolveC(p) : defaultFor(key); };
@@ -1457,10 +1523,13 @@ export function createSketch(ctx) {
     const xy = ev.xy; if (!xy) return null;
     if (!sk.v3) { const ms = sk.model.masses.slice().sort((a, b) => massTop(b) - massTop(a)); for (const m of ms) if (info(m).top(...xy)) return { key: `m:${m.id}` }; }
     const tree = !sk.v3 && ctx.pickContext?.(xy, 'tree'); if (tree) return { key: `t:${tree}` };
+    for (const t of sk.model.trees) if (Math.hypot(xy[0] - t.pts[0][0], xy[1] - t.pts[0][1]) < t.d / 2 * perFt()) return { key: `t:${treeKeyOf(t)}` };
     for (const i of sk.model.islands) if (inPoly(islandShape(i.pts, i.r), ...xy)) return { key: `i:${i.id}` };
+    for (const w of sk.model.walks) for (let i = 0; i < w.pts.length - 1; i++) if (distSeg(xy, w.pts[i], w.pts[i + 1]) < (w.w || 5) * perFt() / 2) return { key: `w:${w.id}` };
     for (const d of sk.model.drives) for (let i = 0; i < d.pts.length - 1; i++) if (distSeg(xy, d.pts[i], d.pts[i + 1]) < (d.w || 24) * perFt() / 2) return { key: `d:${d.id}` };
     for (const l of sk.model.lots) if (inPoly(l.pts, ...xy)) return { key: `l:${l.id}` };
     const b = !sk.v3 && ctx.pickContext?.(xy, 'bldg'); if (b) return { key: `b:${b}` };
+    for (const pl of sk.model.plants) if (inPoly(pl.pts, ...xy)) return { key: `g:${pl.id}` };
     return null;
   }
   function paintAt(ev) {
@@ -1574,6 +1643,7 @@ export function createSketch(ctx) {
     }
     if (t === 'point') { addPoint(ev); return true; }
     if (t === 'radius') { applyRadius(ev); return true; }
+    if (t === 'tree') { const xy = groundSnap(ev, null); if (!xy) return true; sk.draw = { treeDraw: true, c: xy, r: sk.treeD / 2 * perFt(), cp: [ev.sx, ev.sy] }; draw(); return true; }
     if (t === 'pen') {
       if (sk.draw?.face) {                       // clicking out a line on a face
         const s = penFacePoint(ev); if (!s) return true;
@@ -1598,13 +1668,13 @@ export function createSketch(ctx) {
       const kind = t === 'pen' ? 'sheet' : t;
       if (sk.draw?.pts && !sk.draw.face) {      // outline in progress
         const q = scr(sk.draw.pts[0], sk.v3 ? zGround(sk.draw.pts[0]) + 0.3 : undefined);
-        if (sk.draw.kind !== 'drive' && sk.draw.pts.length >= 3 && q && Math.hypot(q[0] - ev.sx, q[1] - ev.sy) < 10) { finishDraw(sk.draw.pts); return true; }
+        if (!isLine(sk.draw.kind) && sk.draw.pts.length >= 3 && q && Math.hypot(q[0] - ev.sx, q[1] - ev.sy) < 10) { finishDraw(sk.draw.pts); return true; }
         const xy = groundSnap(ev, sk.draw.pts.at(-1), { own: sk.draw.pts }); if (!xy) return true;
         sk.draw.pts.push(xy);
         draw(); return true;
       }
       const xy = groundSnap(ev, null); if (!xy) return true;
-      sk.draw = { kind, shape: t === 'mass' ? sk.shape : 'box', a: xy, b: xy, cp: [ev.sx, ev.sy], rect: false, pending: true, frame: kind === 'drive' ? 0 : frameNear(xy) };
+      sk.draw = { kind, shape: t === 'mass' ? sk.shape : 'box', a: xy, b: xy, cp: [ev.sx, ev.sy], rect: false, pending: true, frame: isLine(kind) ? 0 : frameNear(xy) };
       card();
       return true;
     }
@@ -1658,6 +1728,11 @@ export function createSketch(ctx) {
     if (sk.set === 'diagram') { noteMove(ev); return; }
     if (sk.op) { sk.op.moved = sk.op.moved || Math.hypot(ev.sx - sk.op.sx, ev.sy - sk.op.sy) > 3; if (sk.op.moved) moveOp(ev); return; }
     const d = sk.draw;
+    if (d?.treeDraw) {
+      if (!d.sized && Math.hypot(ev.sx - d.cp[0], ev.sy - d.cp[1]) > 6) d.sized = true;
+      if (d.sized && ev.xy) d.r = Math.max(1.5 * perFt(), Math.hypot(ev.xy[0] - d.c[0], ev.xy[1] - d.c[1]));
+      draw(); return;
+    }
     if (d?.face) {
       const s = penFacePoint(ev); if (!s) return;
       if (d.pending && Math.hypot(ev.sx - d.cp[0], ev.sy - d.cp[1]) > 6) { d.pending = false; d.rect = true; }
@@ -1668,9 +1743,9 @@ export function createSketch(ctx) {
       if (d.pending && Math.hypot(ev.sx - d.cp[0], ev.sy - d.cp[1]) > 6) { d.pending = false; d.rect = true; }
       if (d.rect) {
         // A drive aisle is a line (pull / Shift lock from its start); shapes snap their far corner, Shift = square.
-        const b = d.kind === 'drive' ? groundSnap(ev, d.a, { own: [d.a] }) : groundSnap({ ...ev, shift: false }, null);
+        const b = isLine(d.kind) ? groundSnap(ev, d.a, { own: [d.a] }) : groundSnap({ ...ev, shift: false }, null);
         if (!b) return;
-        d.b = b; d.square = ev.shift && d.kind !== 'drive'; draw();
+        d.b = b; d.square = ev.shift && !isLine(d.kind); draw();
       }
       return;
     }
@@ -1694,7 +1769,7 @@ export function createSketch(ctx) {
       if (freeSel && h?.t === 'f') h = null;
       const key = h ? JSON.stringify([h.id, h.t, h.fi, h.i, h.a, h.b]) : '';
       // Before the first click, show what the start point would snap to.
-      const pre = ['mass', 'lot', 'island', 'drive'].includes(sk.tool) || (sk.tool === 'pen' && !h);
+      const pre = ['mass', 'lot', 'island', 'drive', 'walk', 'plant', 'tree'].includes(sk.tool) || (sk.tool === 'pen' && !h);
       const had = !!sk.snap;
       if (pre) groundSnap(ev, null); else sk.snap = null;
       if (key !== (sk.hovKey || '') || pre || had) { sk.hov = h; sk.hovKey = key; draw(); }
@@ -1781,6 +1856,14 @@ export function createSketch(ctx) {
       if (ev && Math.hypot(ev.sx - x, ev.sy - y) < 5) { sk.sel = null; draw(); panel(); card(); }
     }
     const d = sk.draw;
+    if (d?.treeDraw) {
+      sk.draw = null; before();
+      const D = Math.round(d.r * 2 / perFt());
+      const o = { id: uid(), pts: [d.c.slice()], d: D, h: Math.round(Math.max(12, Math.min(80, D * 1.2))) };
+      sk.model.trees.push(o); if (d.sized) sk.treeD = D;
+      const inp = bar.querySelector('[data-fly="treeD"]'); if (inp) inp.value = String(sk.treeD);
+      changed(); return;
+    }
     if (d?.face) {
       if (d.rect) { if (splitDrag(d)) { d.pts = [d.pts[0], d.b]; penFinish('split'); } else penFinish('rect'); return; }
       if (d.pending) { d.pending = false; draw(); }       // a click: carry on clicking points
@@ -1799,7 +1882,7 @@ export function createSketch(ctx) {
     if (!d?.pts) return;
     const P = d.pts.slice();
     if (P.length > 2 && Math.hypot(P.at(-1)[0] - P.at(-2)[0], P.at(-1)[1] - P.at(-2)[1]) < 1e-6) P.pop();
-    if (P.length >= (d.kind === 'drive' ? 2 : 3)) finishDraw(P);
+    if (P.length >= (isLine(d.kind) ? 2 : 3)) finishDraw(P);
   }
 
   // Map events.
@@ -1950,6 +2033,9 @@ export function createSketch(ctx) {
       ...sk.model.lots.map(l => ({ kind: 'lot', o: l, t: `Parking · ${lotLayout(l).total} spaces · ${l.stall}°`, c: colorOf(scheme(), 'lot') })),
       ...sk.model.drives.map(d => ({ kind: 'drive', o: d, t: `Drive aisle · ${d.w || 24} ${uLen()}`, c: colorOf(scheme(), 'lot') })),
       ...sk.model.islands.map(i => ({ kind: 'island', o: i, t: `Island · ${fmtArea(area(i.pts) * sfPerNative2())}`, c: colorOf(scheme(), 'green') })),
+      ...sk.model.walks.map(w => ({ kind: 'walk', o: w, t: `Sidewalk · ${w.w || 5} ${uLen()} wide`, c: colorOf(scheme(), 'plaza') })),
+      ...sk.model.plants.map(pl => ({ kind: 'plant', o: pl, t: `Planting · ${fmtArea(area(pl.pts) * sfPerNative2())}`, c: colorOf(scheme(), 'green') })),
+      ...(sk.model.trees.length ? [{ kind: 'tree', o: sk.model.trees[0], t: `Trees · ${sk.model.trees.length} new`, c: '#3f8a4a' }] : []),
     ];
     el.innerHTML = rows.length ? rows.map(r => `<button type="button" class="sk-item${sk.sel?.id === r.o.id ? ' on' : ''}" data-kind="${r.kind}" data-id="${r.o.id}"><i style="background:${r.c}"></i>${escapeHtml(r.t)}</button>`).join('') : '';
   }
@@ -2080,14 +2166,14 @@ export function createSketch(ctx) {
       for (let i = 0; i < P.length; i++) { const a = P[i], b = P[(i + 1) % P.length], za = zGround(a) - 0.2, zb = zGround(b) - 0.2; out.push(...a, za, ...b, zb, ...b, top, ...a, za, ...b, top, ...a, top); }
     };
     // A strip a→b, w wide, cut into short pieces so it follows the ground.
-    const drape = (a, b, w, outArr) => {
+    const drape = (a, b, w, outArr, mk = true) => {
       const Ln = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.max(1, Math.ceil(Ln / (8 * perFt())));
       const nx = -(b[1] - a[1]) / (Ln || 1) * w / 2, ny = (b[0] - a[0]) / (Ln || 1) * w / 2;
       for (let i = 0; i < n; i++) {
         const p = [a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n], q = [a[0] + (b[0] - a[0]) * (i + 1) / n, a[1] + (b[1] - a[1]) * (i + 1) / n];
         const c = [[p[0] + nx, p[1] + ny], [q[0] + nx, q[1] + ny], [q[0] - nx, q[1] - ny], [p[0] - nx, p[1] - ny]].map(r => [...r, z(...r) + 0.05]);
         outArr.push(...c[0], ...c[1], ...c[2], ...c[0], ...c[2], ...c[3]);
-        if (i % 2 === 0) marks.push(...p, z(...p) + 0.12, ...q, z(...q) + 0.12);
+        if (mk && i % 2 === 0) marks.push(...p, z(...p) + 0.12, ...q, z(...q) + 0.12);
       }
     };
     for (const l of sk.model.lots) {
@@ -2107,11 +2193,32 @@ export function createSketch(ctx) {
     for (const d of sk.model.drives) { const out = own(`d:${d.id}`, drives); for (let i = 0; i < d.pts.length - 1; i++) drape(d.pts[i], d.pts[i + 1], (d.w || 24) * perFt(), out); }
     const J = joins();
     for (const W of J.wedges) for (let i = 1; i < W.length - 1; i++) for (const q of [W[0], W[i], W[i + 1]]) drives.push(q[0], q[1], z(...q) + 0.05);
+    // Sidewalks (draped strips) and planting beds (tessellated so they follow the ground).
+    for (const w of sk.model.walks) {
+      const arr = []; extra.push({ tris: arr, color: siteColor(`w:${w.id}`, 'plaza') });
+      for (let i = 0; i < w.pts.length - 1; i++) drape(w.pts[i], w.pts[i + 1], (w.w || 5) * perFt(), arr, false);
+    }
+    for (const pl of sk.model.plants) {
+      const arr = []; extra.push({ tris: arr, color: siteColor(`g:${pl.id}`, 'green') });
+      const maxL = 8 * perFt(), P = pl.pts;
+      const sub = (a, b, c, depth) => {
+        const L = Math.max(Math.hypot(a[0] - b[0], a[1] - b[1]), Math.hypot(b[0] - c[0], b[1] - c[1]), Math.hypot(c[0] - a[0], c[1] - a[1]));
+        if (L <= maxL || depth > 7) { for (const q of [a, b, c]) arr.push(q[0], q[1], z(...q) + 0.08); return; }
+        const ab = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], bc = [(b[0] + c[0]) / 2, (b[1] + c[1]) / 2], ca = [(c[0] + a[0]) / 2, (c[1] + a[1]) / 2];
+        sub(a, ab, ca, depth + 1); sub(ab, b, bc, depth + 1); sub(ca, bc, c, depth + 1); sub(ab, bc, ca, depth + 1);
+      };
+      for (const [i, j, k] of ctx.triangulate(P)) sub(P[i], P[j], P[k], 0);
+    }
     for (const [a, b] of J.cuts) lines.push(a[0], a[1], z(...a) + 0.1, b[0], b[1], z(...b) + 0.1);
     return { lines, acc, islands, drives, marks, extra, stripe: colorOf(scheme(), 'stripe'), accColor: colorOf(scheme(), 'accessible'), lotColor: colorOf(scheme(), 'lot'), greenColor: colorOf(scheme(), 'green') };
   }
 
+  /** New trees for the 3D view (same form as lidar trees): { x, y, z (ground), h (output units), r (native), sketch }. */
+  function trees3d() {
+    return sk.model.trees.map(t => ({ x: t.pts[0][0], y: t.pts[0][1], z: zGround(t.pts[0]), h: t.h * outPerFt(), r: t.d / 2 * perFt(), sketch: true }));
+  }
   return {
+    trees3d,
     get version() { return sk.ver; },
     get model() { return sk.model; },
     onSite,

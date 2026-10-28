@@ -2,7 +2,7 @@
 // kernel (manifold-3d, Apache-2.0, WebAssembly; loaded the first time it's used). Solids go in as triangle meshes
 // and the result comes back as flat polygon faces (coplanar touching triangles merged, holes kept), so Push/Pull,
 // Draw and Slope keep working on it.
-import { solidTris } from './solid.js?v=0.56.0';
+import { solidTris } from './solid.js?v=0.57.0';
 
 let wasmP = null;
 function kernel() {

@@ -933,3 +933,7 @@ body.theme-legend .stats dd.over { color: #f6b38a; }
 .sk-ratio.need input { border-color: var(--warn); }
 .sk-ratio .qm { margin-left: 4px; }
 .sk-req-src .linkish { color: var(--mode); }
+
+/* Toolbar in two columns when the view is short */
+.sketch-bar.two { display: grid; grid-template-columns: 52px 52px; gap: 4px; align-items: start; }
+.sketch-bar.two .sk-grp { grid-column: 1 / -1; }

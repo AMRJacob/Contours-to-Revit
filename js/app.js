@@ -1,25 +1,25 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.56.0';
-import { fetchElevation, sample } from './dem.js?v=0.56.0';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.56.0';
-import { Dxf } from './dxf.js?v=0.56.0';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.56.0';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.56.0';
-import { Flow } from './flow.js?v=0.56.0';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.57.0';
+import { fetchElevation, sample } from './dem.js?v=0.57.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.57.0';
+import { Dxf } from './dxf.js?v=0.57.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.57.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.57.0';
+import { Flow } from './flow.js?v=0.57.0';
 import { placeAt } from './parking-codes.js?v=0.51.1';
-import { createSketch } from './sketch.js?v=0.56.0';
-import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.56.0';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.56.0';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.56.0';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.56.0';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.56.0';
-import { loadLidar, applyLidar } from './lidar.js?v=0.56.0';
-import { findTrees } from './trees.js?v=0.56.0';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.56.0';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.56.0';
+import { createSketch } from './sketch.js?v=0.57.0';
+import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.57.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.57.0';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.57.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.57.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.57.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.57.0';
+import { findTrees } from './trees.js?v=0.57.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.57.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.57.0';
 
-const VERSION = '0.56.0';
+const VERSION = '0.57.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -4641,7 +4641,8 @@ function v3Build(resetView = false) {
   v3.setSketch(sketch.tris(v3.ex || 1), sketch.parking3d());
   v3.setDiagram(dz.mode === 'diagram');
   const dgC = sketch.dgColors();
-  v3.setTrees(visibility.trees ? site.context?.trees : null, { base: dgC.tree, paint: t => dgC.painted('t', treeKey(t)) });
+  const allTrees = [...(visibility.trees ? site.context?.trees || [] : []), ...sketch.trees3d()];   // lidar trees + trees planted in Sketch
+  v3.setTrees(allTrees.length ? allTrees : null, { base: dgC.tree, paint: t => dgC.painted('t', treeKey(t)) });
   v3.setNotes(sketch.notes3d());
   sunApply3d();
 }
