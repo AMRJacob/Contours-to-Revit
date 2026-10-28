@@ -184,8 +184,10 @@ export class SiteView3D {
     this.scene.add(this.feat);
   }
 
-  /** Building massing: flat array of triangle corners [x, y, z, …] (native XY, output Z). */
-  setBuildings(tri) {
+  /** Building massing: flat array of triangle corners [x, y, z, …] (native XY, output Z).
+   *  opt: { keys: building key per triangle (for picking), colors: hex per triangle for the diagram look }. */
+  setBuildings(tri, opt = {}) {
+    this._bldgOpt = opt;
     if (this.bldg) { this.scene.remove(this.bldg); this.bldg.geometry.dispose(); this.bldg.material.dispose(); this.bldg = null; }
     if (this.bldgEdges) { this.scene.remove(this.bldgEdges); this.bldgEdges.geometry.dispose(); this.bldgEdges.material.dispose(); this.bldgEdges = null; }
     if (!tri?.length) return;
@@ -257,6 +259,7 @@ export class SiteView3D {
     };
     fill(park?.islands, park?.greenColor || '#8cc084');
     fill(park?.drives, park?.lotColor || '#9aa3ad', 0.85);
+    for (const x of park?.extra || []) fill(x.tris, x.color);
     if (park?.marks?.length) {
       const lp = new Float32Array(park.marks.length);
       for (let i = 0; i < park.marks.length; i += 3) lp.set(P(park.marks[i], park.marks[i + 1], park.marks[i + 2]), i);
@@ -287,7 +290,8 @@ export class SiteView3D {
    * spreading canopies, columns and conifers — picked from each tree's proportions and position, turned and
    * tinted a little differently. Diagram look: pale crowns with outlines.
    */
-  setTrees(list) {
+  setTrees(list, opt = {}) {
+    this._treeOpt = opt;
     if (this.trees) { this.scene.remove(this.trees); this.trees.traverse(o => { if (o.geometry && !o.geometry.userData.shared) o.geometry.dispose(); o.material?.dispose(); }); this.trees = null; }
     this._treeList = list;
     if (!list?.length || !this.g) return;
@@ -304,6 +308,7 @@ export class SiteView3D {
     });
     const M = new THREE.Matrix4(), q = new THREE.Quaternion(), c = new THREE.Color(), up = new THREE.Vector3(0, 1, 0);
     const trunks = new THREE.InstancedMesh(F.trunk, new THREE.MeshLambertMaterial({ color: dg ? 0xb9b4aa : 0x5e4633 }), list.length);
+    const base = new THREE.Color(opt.base || '#d7e3d4'), hsl = {}; base.getHSL(hsl);
     let ti = 0;
     for (const [form, L] of byForm) {
       const geo = F[form], crowns = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true }), L.length);
@@ -314,9 +319,12 @@ export class SiteView3D {
         const crownH = conifer ? h * (0.78 + 0.1 * u) : form === 'spread' ? Math.min(h * 0.5, r * 1.1) : Math.min(h * (0.62 + 0.12 * u), r * 2.2);
         const trunkH = h - crownH;
         q.setFromAxisAngle(up, u * Math.PI * 2);
-        M.compose(new THREE.Vector3(X, Y0 + trunkH + crownH / 2, Z), q, new THREE.Vector3(r * (0.92 + 0.16 * u), crownH / 2, r * (1.08 - 0.16 * u)));
+        // Crown width = the lidar crown diameter, top = the lidar tree height (variety comes from form and turn only).
+        M.compose(new THREE.Vector3(X, Y0 + trunkH + crownH / 2, Z), q, new THREE.Vector3(r, crownH / 2, r));
         crowns.setMatrixAt(i, M);
-        if (dg) c.setRGB(0.84 + 0.04 * u, 0.89, 0.83);
+        const painted = dg && opt.paint?.(t);
+        if (painted) c.set(painted);
+        else if (dg) c.setHSL(hsl.h, hsl.s, Math.max(0, Math.min(1, hsl.l + (u - 0.5) * 0.06)));
         else if (conifer) c.setHSL(0.36 + 0.04 * u, 0.38, 0.18 + 0.06 * u);
         else c.setHSL(0.24 + 0.08 * u, 0.40 + 0.12 * u, 0.24 + 0.10 * ((u * 7) % 1));
         crowns.setColorAt(i, c);
@@ -325,12 +333,13 @@ export class SiteView3D {
         trunks.setMatrixAt(ti++, M);
       });
       crowns.castShadow = true;
+      crowns.userData.list = L; crowns.name = 'crowns';
       g.add(crowns);
       if (dg) {                                             // crisp outlines for the diagram look
         const eg = F.edges[form], pos = eg.attributes.position.array, out = new Float32Array(pos.length * L.length), v = new THREE.Vector3();
         L.forEach((t, i) => { crowns.getMatrixAt(i, M); for (let k = 0; k < pos.length; k += 3) { v.set(pos[k], pos[k + 1], pos[k + 2]).applyMatrix4(M); out[i * pos.length + k] = v.x; out[i * pos.length + k + 1] = v.y; out[i * pos.length + k + 2] = v.z; } });
         const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(out, 3));
-        g.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x7c8a7c, transparent: true, opacity: 0.55 })));
+        g.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: base.clone().multiplyScalar(0.55), transparent: true, opacity: 0.6 })));
       }
     }
     trunks.castShadow = true;
@@ -366,11 +375,19 @@ export class SiteView3D {
     this._hemi = this._hemi || this.scene.children.find(o => o.isHemisphereLight);
     if (this._hemi) this._hemi.intensity = on ? 1.15 : 0.85;
     this._bldgStyle();
-    if (this._treeList && this._treeDg !== on) { this._treeDg = on; this.setTrees(this._treeList); }
+    if (this._treeList && this._treeDg !== on) { this._treeDg = on; this.setTrees(this._treeList, this._treeOpt); }
   }
   _bldgStyle() {
     if (!this.bldg) return;
-    this.bldg.material.color.set(this.diagram ? 0xf4f4f1 : 0xe7e2d8);
+    const cols = this.diagram && this._bldgOpt?.colors, geo = this.bldg.geometry;
+    if (cols) {
+      const n = geo.attributes.position.count, a = new Float32Array(n * 3), c = new THREE.Color();
+      for (let v = 0; v < n; v++) { c.set(cols[Math.floor(v / 3)] || '#f4f4f1'); a[v * 3] = c.r; a[v * 3 + 1] = c.g; a[v * 3 + 2] = c.b; }
+      geo.setAttribute('color', new THREE.BufferAttribute(a, 3));
+    }
+    this.bldg.material.vertexColors = !!cols;
+    this.bldg.material.color.set(cols ? 0xffffff : this.diagram ? 0xf4f4f1 : 0xe7e2d8);
+    this.bldg.material.needsUpdate = true;
     if (this.bldgEdges) { this.scene.remove(this.bldgEdges); this.bldgEdges.geometry.dispose(); this.bldgEdges.material.dispose(); this.bldgEdges = null; }
     if (this.diagram) {
       this.bldgEdges = new THREE.LineSegments(new THREE.EdgesGeometry(this.bldg.geometry, 25), new THREE.LineBasicMaterial({ color: 0x6b7280 }));
@@ -645,6 +662,21 @@ export class SiteView3D {
     const hit = this._ray(sx, sy).intersectObject(m, false)[0];
     if (!hit) return null;
     return { id: m.userData.ids[hit.faceIndex], face: m.userData.faces[hit.faceIndex], at: this.native(hit.point) };
+  }
+  /** What the diagram paint bucket hits: the nearest sketch block, existing building or tree under the cursor.
+   *  → { kind: 'mass', id } | { kind: 'bldg', key } | { kind: 'tree', tree } | null */
+  pickPaint(sx, sy) {
+    const objs = [];
+    const sm = this.sketch?.getObjectByName('sketchMass'); if (sm) objs.push(sm);
+    if (this.bldg?.visible) objs.push(this.bldg);
+    this.trees?.children.forEach(o => { if (o.name === 'crowns') objs.push(o); });
+    if (!objs.length) return null;
+    const hit = this._ray(sx, sy).intersectObjects(objs, false)[0];
+    if (!hit) return null;
+    if (hit.object === sm) return { kind: 'mass', id: sm.userData.ids[hit.faceIndex] };
+    if (hit.object === this.bldg) { const key = this._bldgOpt?.keys?.[hit.faceIndex]; return key ? { kind: 'bldg', key } : null; }
+    const t = hit.object.userData.list?.[hit.instanceId];
+    return t ? { kind: 'tree', tree: t } : null;
   }
   /** Mouse buttons: wheel-drag pans and Shift+wheel-drag orbits (Revit-style) everywhere. Otherwise left-drag
    *  orbits and right-drag pans — except while a sketch drawing tool is on, when left is the pen and right orbits. */

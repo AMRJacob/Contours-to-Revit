@@ -1,24 +1,24 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.48.1';
-import { fetchElevation, sample } from './dem.js?v=0.48.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.48.1';
-import { Dxf } from './dxf.js?v=0.48.1';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.48.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.48.1';
-import { Flow } from './flow.js?v=0.48.1';
-import { createSketch } from './sketch.js?v=0.48.1';
-import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.48.1';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.48.1';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.48.1';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.48.1';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.48.1';
-import { loadLidar, applyLidar } from './lidar.js?v=0.48.1';
-import { findTrees } from './trees.js?v=0.48.1';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.48.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.48.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.49.0';
+import { fetchElevation, sample } from './dem.js?v=0.49.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.49.0';
+import { Dxf } from './dxf.js?v=0.49.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.49.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.49.0';
+import { Flow } from './flow.js?v=0.49.0';
+import { createSketch } from './sketch.js?v=0.49.0';
+import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.49.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.49.0';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.49.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.49.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.49.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.49.0';
+import { findTrees } from './trees.js?v=0.49.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.49.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.49.0';
 
-const VERSION = '0.48.1';
+const VERSION = '0.49.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -1191,11 +1191,49 @@ function applyVisibility() {
   if (!$('preview').hidden) renderPreview();
 }
 
+// ----- Diagram colours for existing buildings and trees (category defaults + paint bucket, from the sketch model) -----
+let dgRefs = { trees: [], bldgs: [] };
+const treeKey = t => `${Math.round(t.x)},${Math.round(t.y)}`;
+/** A building's key: its footprint centre (stable when the site is generated again). */
+function bldgKey(b) {
+  const R = b.ring || b.wall?.ring; if (!R?.length) return '';
+  let x = 0, y = 0; for (const p of R) { x += p[0]; y += p[1]; }
+  return `${Math.round(x / R.length)},${Math.round(y / R.length)}`;
+}
+const inRingXY = (r, x, y) => { let c = false; for (let i = 0, j = r.length - 1; i < r.length; j = i++) { const [xi, yi] = r[i], [xj, yj] = r[j]; if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c; } return c; };
+/** Existing tree or building (shown layers only) at a plan point → its key, or null. */
+function pickContext([x, y], kind) {
+  const site = state.result; if (!site?.context) return null;
+  if (kind === 'tree') {
+    if (!visibility.trees) return null;
+    let best = null;
+    for (const t of site.context.trees || []) { const d = Math.hypot(t.x - x, t.y - y); if (d < t.r && (!best || d < best.d)) best = { d, t }; }
+    return best ? treeKey(best.t) : null;
+  }
+  for (const src of BUILDING_SOURCES) {
+    if (!visibility[src.key]) continue;
+    for (const b of site.context[src.key] || []) if (b.ring && inRingXY(b.ring, x, y)) return bldgKey(b);
+  }
+  return null;
+}
+/** Plan: existing buildings and trees take the diagram colours in the Diagram tab, their layer colours elsewhere. */
+function dgMapStyle() {
+  try { if (!sketch) return; } catch { return; }            // (before the sketch module is set up)
+  const on = sketch.diagram, C = sketch.dgColors();
+  for (const r of dgRefs.bldgs) r.poly.setStyle(on ? { color: '#57534e', weight: 1, fillColor: C.fill('b', r.key), fillOpacity: 0.95 } : r.base);
+  for (const r of dgRefs.trees) {
+    const f = on && C.fill('t', r.key);
+    r.poly.setStyle(on ? { color: shadeHex(f, 0.6), weight: 1, opacity: 0.9, fillColor: f, fillOpacity: 0.9 } : r.base);
+  }
+}
+function shadeHex(h, k) { const n = parseInt(h.slice(1), 16); const c = v => Math.round(v * k).toString(16).padStart(2, '0'); return `#${c(n >> 16 & 255)}${c(n >> 8 & 255)}${c(n & 255)}`; }
+
 function drawContoursOnMap(site) {
   for (const g of Object.values(state.mapGroups || {})) map.removeLayer(g);
   const p = projector(site.zone);
   const renderer = L.canvas({ padding: 0.3 });
   const ll = ([x, y]) => { const [lon, lat] = p.inv([x, y]); return [lat, lon]; };
+  dgRefs = { trees: [], bldgs: [] };
   const groups = { contours: L.layerGroup(), roads: L.layerGroup(), roadWidths: L.layerGroup(), roadEdges: L.layerGroup(), streetAreas: L.layerGroup(), parking: L.layerGroup(), sidewalks: L.layerGroup(), parcels: L.layerGroup(), flood: L.layerGroup(), trees: L.layerGroup() };
   for (const src of BUILDING_SOURCES) groups[src.key] = L.layerGroup();
   for (const c of site.contours) {
@@ -1224,7 +1262,8 @@ function drawContoursOnMap(site) {
     // Trees: crown outlines (a slightly wobbly circle reads as a tree) and a trunk dot.
     for (const t of site.context.trees || []) {
       const ring = Array.from({ length: 18 }, (_, k) => { const a = k / 18 * 2 * Math.PI, w = 1 + 0.07 * Math.sin(5 * a + t.x); return [t.x + t.r * w * Math.cos(a), t.y + t.r * w * Math.sin(a)]; });
-      L.polygon(ring.map(ll), { renderer, color: '#4ade80', weight: 1, opacity: 0.9, fillColor: '#16a34a', fillOpacity: 0.28, interactive: false }).addTo(groups.trees);
+      const tSty = { color: '#4ade80', weight: 1, opacity: 0.9, fillColor: '#16a34a', fillOpacity: 0.28 };
+      dgRefs.trees.push({ poly: L.polygon(ring.map(ll), { renderer, ...tSty, interactive: false }).addTo(groups.trees), key: treeKey(t), base: tSty });
       L.circleMarker(ll([t.x, t.y]), { renderer, radius: 1.5, color: '#bbf7d0', weight: 0, fillOpacity: 0.9, interactive: false }).addTo(groups.trees);
     }
     for (const w of site.context.widths || []) {
@@ -1235,11 +1274,13 @@ function drawContoursOnMap(site) {
     }
     for (const src of BUILDING_SOURCES) {
       for (const b of site.context[src.key] || []) {
-        L.polygon(b.ring.map(ll), { renderer, color: src.color, weight: 1.5, fillColor: src.color, fillOpacity: 0.12, interactive: false }).addTo(groups[src.key]);
+        const bSty = { color: src.color, weight: 1.5, fillColor: src.color, fillOpacity: 0.12 };
+        dgRefs.bldgs.push({ poly: L.polygon(b.ring.map(ll), { renderer, ...bSty, interactive: false }).addTo(groups[src.key]), key: bldgKey(b), base: bSty });
       }
     }
   }
   state.mapGroups = groups;
+  dgMapStyle();
   updateLayerCounts(site);
   applyVisibility();
 }
@@ -2400,7 +2441,10 @@ const sketch = createSketch({
   zAt: (x, y) => (state.result ? siteGroundAt(state.result, x, y) : 0),
   unitsPerFt: site => zoneUnitsPerMeter(site.zone) * 0.3048,
   mode: () => dz.mode,
-  onChange: () => { projTouch(); v3Dirty(); if (sunS?.on) sunLater(); },
+  onChange: () => { projTouch(); v3Dirty(); if (sunS?.on) sunLater(); dgMapStyle(); },
+  // Diagram paint bucket: keys for existing trees and buildings, and what's under a plan point.
+  treeKey: t => treeKey(t),
+  pickContext: (xy, kind) => pickContext(xy, kind),
   // While dragging in 3D: just the sketch geometry (the full rebuild waits for the drag to pause).
   onLive: () => { if (v3 && curView() === '3d' && state.result) { v3.setSketch(sketch.tris(v3.ex || 1), sketch.parking3d()); v3.setNotes(sketch.notes3d()); } },
   ex3d: () => v3?.ex || 1,
@@ -3167,6 +3211,7 @@ function setMode(mode) {
   map.getContainer().classList.toggle('design-mode', design);
   if (design || sketchOn) map.doubleClickZoom.disable(); else { map.doubleClickZoom.enable(); dz.poly = null; }
   sketch.setActive(sketchOn, diagramOn ? 'diagram' : 'sketch');
+  dgMapStyle();
   if (design) dzEnsure().then(() => { dzApplyTool(); dzRefresh(true); v3Dirty(); });
   else { map.dragging.enable(); map.getContainer().classList.remove('sculpting'); $('dz-readout').hidden = true; dzPop.hidden = true; dzPopId = null; v3Dirty(); }
   flowKick();
@@ -4525,10 +4570,12 @@ function v3Build(resetView = false) {
   });
   v3.site = site;
   v3.setFeatures(prop ? v3Features(des, site) : []);
-  v3.setBuildings(v3Buildings(site));
+  const vb = v3Buildings(site);
+  v3.setBuildings(vb, { keys: vb.keys, colors: vb.colors });
   v3.setSketch(sketch.tris(v3.ex || 1), sketch.parking3d());
   v3.setDiagram(dz.mode === 'diagram');
-  v3.setTrees(visibility.trees ? site.context?.trees : null);
+  const dgC = sketch.dgColors();
+  v3.setTrees(visibility.trees ? site.context?.trees : null, { base: dgC.tree, paint: t => dgC.painted('t', treeKey(t)) });
   v3.setNotes(sketch.notes3d());
   sunApply3d();
 }
@@ -4552,7 +4599,7 @@ function v3Texture(site) {
  *  true scale on the exaggerated ground, so the vertical exaggeration doesn't stretch the buildings. */
 function v3Buildings(site, exOverride) {
   const ex = exOverride || v3?.ex || 1;
-  const out = [];
+  const out = [], keys = [], cols = [], dgOn = sketch.diagram, C = dgOn && sketch.dgColors();
   for (const src of BUILDING_SOURCES) {
     if (!visibility[src.key]) continue;
     const list = src.key === 'buildings' ? site.context?.buildings : site.context?.[src.key];
@@ -4573,8 +4620,11 @@ function v3Buildings(site, exOverride) {
       }
       // True-scale height above this building's base (the view multiplies every height by the exaggeration).
       if (ex !== 1) for (let i = n0 + 2; i < out.length; i += 3) out[i] = b.base + (out[i] - b.base) / ex;
+      const key = bldgKey(b), fill = dgOn ? C.fill('b', key) : null;
+      for (let i = n0; i < out.length; i += 9) { keys.push(key); if (dgOn) cols.push(fill); }
     }
   }
+  out.keys = keys; out.colors = dgOn ? cols : null;
   return out;
 }
 

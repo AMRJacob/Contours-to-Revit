@@ -71,6 +71,8 @@ export const TIPS = {
   'dg-line': { t: 'Line', k: 'L', b: 'Drag a straight line, or click points and double-click. Stand it up for a fence or screen.' },
   'dg-region': { t: 'Region', k: 'R', b: 'Drag a rectangle or click an outline. Stand it up for a see-through volume.' },
   'dg-label': { t: 'Label', k: 'T', b: 'Click where it goes, then type in the card.' },
+  'dg-paint': { t: 'Paint', k: 'B', b: 'Click a building, tree, block, parking area or annotation to paint it the colour in the flyout. ' + K('Alt') + '+click picks up a colour · ' + K('Shift') + '+click puts it back to the default. Painted colours show in the Diagram tab only.' },
+  'dg-colors': { t: 'Diagram colours', b: 'One colour for a whole category — existing buildings, trees, new blocks (or blocks by use). Items you paint with the Paint tool keep their own colour. Saved with the project; the Sketch tab keeps the use colours.' },
   'dg-export': { t: 'Save image', b: 'Saves the current view — plan or 3D — as a PNG. In plan, the basemap tiles are left out (only the site aerial and the app\'s own layers can be copied into an image).' },
 
   // ---- Settings

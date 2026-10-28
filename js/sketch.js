@@ -8,13 +8,13 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins } from './parking.js?v=0.48.1';
-import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.48.1';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.48.1';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.48.1';
-import * as SO from './solid.js?v=0.48.1';
-import { noteGeom, WIDTHS } from './notes.js?v=0.48.1';
-import { booleanSolids } from './bool.js?v=0.48.1';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins } from './parking.js?v=0.49.0';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.49.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.49.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.49.0';
+import * as SO from './solid.js?v=0.49.0';
+import { noteGeom, WIDTHS } from './notes.js?v=0.49.0';
+import { booleanSolids } from './bool.js?v=0.49.0';
 
 const TOOLS = [
   { id: 'select', key: 'V', label: 'Select', icon: '<path d="M5 3l14 8-6 1.5L10 19z"/>' },
@@ -33,6 +33,7 @@ const DTOOLS = [
   { id: 'line', key: 'L', label: 'Line', icon: '<path d="M4 19L20 5"/>' },
   { id: 'region', key: 'R', label: 'Region', icon: '<path d="M5 7l9-3 6 7-4 9-10-3z" fill="currentColor" fill-opacity=".3"/>' },
   { id: 'label', key: 'T', label: 'Label', icon: '<path d="M5 6h14M12 6v13"/>' },
+  { id: 'paint', key: 'B', label: 'Paint', icon: '<path d="M5 11l6-6 7 7-6 6z"/><path d="M5 11h13" opacity=".6"/><path d="M19.5 15.5c1 1.4 1.5 2.4 1.5 3a1.5 1.5 0 01-3 0c0-.6.5-1.6 1.5-3z" fill="currentColor"/><path d="M9 7L6.5 4.5"/>' },
 ];
 const DHINTS = {
   select: 'Click an annotation to style it · drag to move · drag its points · F stands it up / lays it down.',
@@ -40,7 +41,16 @@ const DHINTS = {
   line: 'Drag a straight line, or click points and double-click — on the ground or a face. Stand it up (F) for a fence or screen.',
   region: 'Drag a rectangle or click an outline — on the ground or a face. Stand it up (F) for a volume.',
   label: 'Click where the label goes, then type its text in the card.',
+  paint: 'Click a building, tree, block, parking area or annotation to paint it the chosen colour · Alt+click picks up a colour · Shift+click puts it back to the default.',
 };
+// Diagram colours for whole categories (quick selectors in the Diagram panel); 'use' = colour blocks by their use.
+const DG0 = { bldg: '#f1f0ec', tree: '#cfe0c8', mass: 'use' };
+const DG_PRESETS = {
+  bldg: ['#ffffff', '#f1f0ec', '#d9d4ca', '#a8a29e', '#57534e', '#1f2937'],
+  tree: ['#e3ece0', '#cfe0c8', '#a9c29a', '#6f9e66', '#3f6e47', '#ffffff'],
+  mass: ['use', '#ffffff', '#f1f0ec', '#e8913f', '#cbd5e1', '#374151'],
+};
+const DG_ROWS = [['bldg', 'Existing buildings'], ['tree', 'Trees'], ['mass', 'New blocks']];
 const SIZES = ['S', 'M', 'L'];
 const SHAPES = [
   { id: 'box', key: '1', label: 'Box or outline', icon: '<rect x="5" y="6" width="14" height="12"/>' },
@@ -76,7 +86,7 @@ export function createSketch(ctx) {
     set: 'sketch', style: { color: 'arrow', size: 1, stand: false, curve: true }, showLabels: false,
   };
   function blank() {
-    return { v: 3, masses: [], lots: [], islands: [], drives: [], notes: [], scheme: JSON.parse(JSON.stringify(BUILTIN_SCHEMES[0])), ratios: JSON.parse(JSON.stringify(DEFAULT_RATIOS)) };
+    return { v: 3, masses: [], lots: [], islands: [], drives: [], notes: [], dg: { ...DG0 }, paint: {}, scheme: JSON.parse(JSON.stringify(BUILTIN_SCHEMES[0])), ratios: JSON.parse(JSON.stringify(DEFAULT_RATIOS)) };
   }
   const scheme = () => sk.model.scheme;
   const uid = () => Math.random().toString(36).slice(2, 9);
@@ -182,9 +192,10 @@ export function createSketch(ctx) {
 
   // ---------------------------------------------------------------- undo / change
   const SAVED = ['masses', 'lots', 'islands', 'drives', 'notes'];
-  function snapshot() { return JSON.stringify(Object.fromEntries(SAVED.map(k => [k, sk.model[k]]))); }
+  const SAVEDO = ['dg', 'paint'];                    // diagram colours: undoable too
+  function snapshot() { return JSON.stringify(Object.fromEntries([...SAVED, ...SAVEDO].map(k => [k, sk.model[k]]))); }
   function before() { sk.undo.push(snapshot()); if (sk.undo.length > 80) sk.undo.shift(); sk.redo.length = 0; }
-  function restore(s) { const o = JSON.parse(s); for (const k of SAVED) sk.model[k] = o[k] || []; if (sk.sel && !findSel()) sk.sel = null; changed(); }
+  function restore(s) { const o = JSON.parse(s); for (const k of SAVED) sk.model[k] = o[k] || []; sk.model.dg = o.dg || { ...DG0 }; sk.model.paint = o.paint || {}; if (sk.sel && !findSel()) sk.sel = null; changed(); }
   function changed(soft = false) {
     sk.ver++;
     draw(); panel(); card(); live();
@@ -220,6 +231,7 @@ export function createSketch(ctx) {
     if (!m || !m.masses) m = blank();
     if (!m.scheme) m.scheme = JSON.parse(JSON.stringify(BUILTIN_SCHEMES[0]));
     if (!m.ratios) m.ratios = JSON.parse(JSON.stringify(DEFAULT_RATIOS));
+    m.dg = { ...DG0, ...m.dg }; if (!m.paint) m.paint = {};
     migrate(m);
     sk.model = m;
     if (pending) save();
@@ -294,9 +306,10 @@ export function createSketch(ctx) {
     const green = colorOf(scheme(), 'green');
     for (const l of sk.model.lots) {
       const L = lotLayout(l), sel = sk.sel?.id === l.id;
-      path(l.pts); g.fillStyle = colorOf(scheme(), 'lot'); g.globalAlpha = 0.75; g.fill(); g.globalAlpha = 1;
-      if (l.setback > 0 && L.inner?.length > 2) { path(l.pts); g.save(); g.clip(); g.fillStyle = green; g.globalAlpha = 0.55; g.fill(); g.restore(); path(L.inner); g.fillStyle = colorOf(scheme(), 'lot'); g.globalAlpha = 0.9; g.fill(); g.globalAlpha = 1; }
-      for (const dp of L.drives || []) { path(dp); g.fillStyle = colorOf(scheme(), 'lot'); g.fill(); }
+      const lc = siteColor(`l:${l.id}`, 'lot');
+      path(l.pts); g.fillStyle = lc; g.globalAlpha = 0.75; g.fill(); g.globalAlpha = 1;
+      if (l.setback > 0 && L.inner?.length > 2) { path(l.pts); g.save(); g.clip(); g.fillStyle = green; g.globalAlpha = 0.55; g.fill(); g.restore(); path(L.inner); g.fillStyle = lc; g.globalAlpha = 0.9; g.fill(); g.globalAlpha = 1; }
+      for (const dp of L.drives || []) { path(dp); g.fillStyle = lc; g.fill(); }
       if (px * 9 * perFt() > 2.2) {   // stalls only when they're big enough to see
         g.lineWidth = 1; g.strokeStyle = colorOf(scheme(), 'stripe');
         for (const st of L.stalls) {
@@ -312,12 +325,12 @@ export function createSketch(ctx) {
     const J = joins();
     for (const d of sk.model.drives) {
       const w = (d.w || 24) * perFt();
-      for (let i = 0; i < d.pts.length - 1; i++) { path(lanePoly(d.pts[i], d.pts[i + 1], w)); g.fillStyle = colorOf(scheme(), 'lot'); g.globalAlpha = 0.9; g.fill(); g.globalAlpha = 1; }
+      for (let i = 0; i < d.pts.length - 1; i++) { path(lanePoly(d.pts[i], d.pts[i + 1], w)); g.fillStyle = siteColor(`d:${d.id}`, 'lot'); g.globalAlpha = 0.9; g.fill(); g.globalAlpha = 1; }
     }
     for (const W of J.wedges) { path(W); g.fillStyle = colorOf(scheme(), 'lot'); g.globalAlpha = 0.9; g.fill(); g.globalAlpha = 1; }
     for (const d of sk.model.drives) { path(d.pts, false); g.setLineDash([8, 6]); g.strokeStyle = '#fde047'; g.lineWidth = 1.5; g.stroke(); g.setLineDash([]); }
     for (const [a, b] of J.cuts) { path([a, b], false); g.strokeStyle = '#ffffff'; g.lineWidth = 3; g.setLineDash([4, 3]); g.stroke(); g.setLineDash([]); }
-    for (const isl of sk.model.islands) { path(islandShape(isl.pts, isl.r)); g.fillStyle = green; g.fill(); g.strokeStyle = sk.sel?.id === isl.id ? ORANGE : 'rgba(20,83,45,0.8)'; g.lineWidth = sk.sel?.id === isl.id ? 2.5 : 1.2; g.stroke(); }
+    for (const isl of sk.model.islands) { path(islandShape(isl.pts, isl.r)); g.fillStyle = siteColor(`i:${isl.id}`, 'green'); g.fill(); g.strokeStyle = sk.sel?.id === isl.id ? ORANGE : 'rgba(20,83,45,0.8)'; g.lineWidth = sk.sel?.id === isl.id ? 2.5 : 1.2; g.stroke(); }
     for (const l of sk.model.lots) {
       if (!showTags()) break;
       const L = lotLayout(l);
@@ -326,7 +339,7 @@ export function createSketch(ctx) {
     // Solids from above: their upward faces, lowest first, shaded a little by slope; roof and step lines show.
     const ms = sk.model.masses.slice().sort((a, b) => massTop(a) - massTop(b));
     for (const m of ms) {
-      const I = info(m), sel = sk.sel?.id === m.id, col = colorOf(scheme(), m.use);
+      const I = info(m), sel = sk.sel?.id === m.id, col = massColor(m);
       const up = m.f.map((_, fi) => ({ fi, n: SO.faceNormal(m, fi), z: SO.faceVerts(m, fi).reduce((a, i) => a + m.v[i][2], 0) / SO.faceVerts(m, fi).length }))
         .filter(o => o.n[2] > 0.05).sort((a, b) => a.z - b.z);
       for (const o of up) {
@@ -540,12 +553,15 @@ export function createSketch(ctx) {
     bar.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
     bar.querySelectorAll('.sk-fly').forEach(f => {
       f.hidden = f.dataset.for === 'style' ? t === 'select' : f.dataset.for !== t;
+      f.querySelector('.dg-row')?.toggleAttribute('hidden', t === 'paint');
       if (!f.hidden) { const b = bar.querySelector(`[data-tool="${f.dataset.for === 'style' ? 'arrow' : t}"]`); f.style.top = `${b.offsetTop}px`; }
     });
     const u = bar.querySelector('.sk-u'); if (u) u.textContent = uLen();
     setShape(sk.shape, true);
     const drawing = t !== 'select';
     map.getContainer().classList.toggle('sk-drawing', drawing);
+    map.getContainer().classList.toggle('sk-paint', t === 'paint');
+    sk.v3?.el.classList.toggle('sk-paint', t === 'paint' && sk.active);
     sk.v3?.el.classList.toggle('sk-drawing', drawing && sk.active);
     sk.v3?.sketchNav(sk.active && drawing);
     const hint = hints()[t] + (drawing ? (sk.v3 ? ' Wheel-drag pans, Shift+wheel-drag or right-drag orbits.' : ' Wheel-drag pans.') : '');
@@ -1124,6 +1140,21 @@ export function createSketch(ctx) {
   // ---------------------------------------------------------------- diagram annotations
   const diagramOn = () => sk.set === 'diagram' && sk.active;
   const noteColor = n => (n.color?.startsWith?.('#') ? n.color : colorOf(scheme(), n.color || 'arrow'));
+  /** Colour of a scheme key or a hex. */
+  const resolveC = c => (c?.startsWith?.('#') ? c : colorOf(scheme(), c));
+  const dgs = () => sk.model.dg || DG0;
+  /** Diagram default for a paint key's category (before any paint). */
+  function defaultFor(key) {
+    const [k, id] = [key.slice(0, 1), key.slice(2)];
+    if (k === 'm') { const m = massById(id); return dgs().mass && dgs().mass !== 'use' ? resolveC(dgs().mass) : colorOf(scheme(), m?.use); }
+    if (k === 'b') return dgs().bldg;
+    if (k === 't') return dgs().tree;
+    return colorOf(scheme(), k === 'i' ? 'green' : 'lot');
+  }
+  /** Colour for a painted item in the diagram (its paint, else the category default); plain scheme colours elsewhere. */
+  const paintOr = key => { const p = sk.model.paint?.[key]; return p ? resolveC(p) : defaultFor(key); };
+  function massColor(m) { return diagramOn() ? paintOr(`m:${m.id}`) : colorOf(scheme(), m.use); }
+  function siteColor(key, kind) { return diagramOn() && sk.model.paint?.[key] ? resolveC(sk.model.paint[key]) : colorOf(scheme(), kind); }
   /** How a note's points map to uniform space and back (see notes.js). */
   function noteEnv(n) {
     const e = ex3(), k = kz();
@@ -1243,8 +1274,41 @@ export function createSketch(ctx) {
     changed();
     if (d.type === 'label') setTimeout(() => { const t = cardEl.querySelector('[data-k="text"]'); if (t) { t.focus(); t.select(); } }, 0);
   }
+  /** What the paint bucket would paint under the cursor. */
+  function paintTarget(ev) {
+    const hn = hitNote(ev);
+    if (hn && hn.vi == null) return { note: sk.model.notes.find(n => n.id === hn.id) };
+    if (sk.v3) {
+      const h = sk.v3.pickPaint(ev.sx, ev.sy);
+      if (h?.kind === 'mass') return { key: `m:${h.id}` };
+      if (h?.kind === 'bldg') return { key: `b:${h.key}` };
+      if (h?.kind === 'tree') return { key: `t:${ctx.treeKey(h.tree)}` };
+    }
+    const xy = ev.xy; if (!xy) return null;
+    if (!sk.v3) { const ms = sk.model.masses.slice().sort((a, b) => massTop(b) - massTop(a)); for (const m of ms) if (info(m).top(...xy)) return { key: `m:${m.id}` }; }
+    const tree = !sk.v3 && ctx.pickContext?.(xy, 'tree'); if (tree) return { key: `t:${tree}` };
+    for (const i of sk.model.islands) if (inPoly(islandShape(i.pts, i.r), ...xy)) return { key: `i:${i.id}` };
+    for (const d of sk.model.drives) for (let i = 0; i < d.pts.length - 1; i++) if (distSeg(xy, d.pts[i], d.pts[i + 1]) < (d.w || 24) * perFt() / 2) return { key: `d:${d.id}` };
+    for (const l of sk.model.lots) if (inPoly(l.pts, ...xy)) return { key: `l:${l.id}` };
+    const b = !sk.v3 && ctx.pickContext?.(xy, 'bldg'); if (b) return { key: `b:${b}` };
+    return null;
+  }
+  function paintAt(ev) {
+    const T = paintTarget(ev);
+    if (!T) { flash('Nothing to paint here — click a building, tree, block, parking area or annotation.'); return; }
+    if (ev.alt) {                                          // eyedropper
+      const c = T.note ? T.note.color : (sk.model.paint[T.key] || defaultFor(T.key));
+      sk.sel = null; setStyle({ color: c }); flash('Picked up that colour.'); return;
+    }
+    before();
+    if (T.note) T.note.color = ev.shift ? ({ region: 'region', label: 'label' }[T.note.type] || 'arrow') : sk.style.color;
+    else if (ev.shift) delete sk.model.paint[T.key];
+    else sk.model.paint[T.key] = sk.style.color;
+    changed();
+  }
   function noteDown(ev) {
     const t = sk.tool;
+    if (t === 'paint') { paintAt(ev); return true; }
     if (t === 'select') {
       const h = hitNote(ev);
       if (!h) { sk.clickEmpty = [ev.sx, ev.sy]; sk.sel = null; draw(); card(); return false; }
@@ -1656,8 +1720,21 @@ export function createSketch(ctx) {
         <div><small>Parking provided</small><b>${st.prov}</b></div><div><small>Required</small><b>${st.req || '—'}</b></div>
         <div><small>${diff >= 0 ? 'Surplus' : 'Short'}</small><b>${st.req ? Math.abs(diff) : '—'}</b></div></div>
       <p class="hint">${st.acc} accessible provided (${st.accReq} required${st.van ? `, ${st.van} van` : ''})${st.short ? ` — <strong>${st.short} short: a row is too short for the accessible group</strong>` : ''}. Accessible counts per lot by the 2010 ADA Standards (Table 208.2, 208.2.4). Floors are counted every floor-to-floor height where at least half the floor has full headroom.</p>`;
-    schemeUi(); ratiosUi(); listUi();
+    schemeUi(); ratiosUi(); listUi(); dgColorsUi();
   }
+  /** Quick colour selectors for whole categories in the Diagram panel. */
+  function dgColorsUi() {
+    const el = $('dg-colors'); if (!el) return;
+    const d = dgs(), np = Object.keys(sk.model.paint || {}).length;
+    const chip = (k, c) => c === 'use'
+      ? `<button type="button" class="dg-sw dg-use${d[k] === 'use' ? ' on' : ''}" data-dgk="${k}" data-dgc="use" title="By use (the scheme's colours)"></button>`
+      : `<button type="button" class="dg-sw${d[k] === c ? ' on' : ''}" data-dgk="${k}" data-dgc="${c}" title="${c}" style="background:${c}"></button>`;
+    const html = DG_ROWS.map(([k, label]) => `<div class="dg-crow"><span>${label}</span><div class="dg-sws">${DG_PRESETS[k].map(c => chip(k, c)).join('')}
+        <label class="dg-sw dg-custom${d[k] !== 'use' && !DG_PRESETS[k].includes(d[k]) ? ' on' : ''}" title="Any colour"><input type="color" data-dgk="${k}" value="${d[k]?.startsWith?.('#') ? d[k] : '#e8913f'}"></label></div></div>`).join('')
+      + `<div class="dg-crow dg-cfoot"><span>${np ? `${np} item${np === 1 ? '' : 's'} painted by hand` : 'Paint single items with the Paint tool (B).'}</span>${np ? '<button type="button" class="linkish" data-dgclear>Clear painted colours</button>' : ''}</div>`;
+    if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
+  }
+  function setDg(k, c) { if (dgs()[k] === c) return; before(); sk.model.dg = { ...dgs(), [k]: c }; changed(); }
   function listUi() {
     const el = $('sk-list'); if (!el) return;
     const rows = [
@@ -1730,6 +1807,12 @@ export function createSketch(ctx) {
       if (r.mode === 'unit' && !r.unitSf) r.unitSf = 900;
       $('sk-ratios').dataset.html = ''; changed(true);
     });
+    $('dg-colors')?.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      if (b.dataset.dgk) setDg(b.dataset.dgk, b.dataset.dgc);
+      if ('dgclear' in b.dataset) { before(); sk.model.paint = {}; changed(); }
+    });
+    $('dg-colors')?.addEventListener('change', e => { if (e.target.type === 'color') setDg(e.target.dataset.dgk, e.target.value); });
     $('sk-list').addEventListener('click', e => {
       const b = e.target.closest('.sk-item'); if (!b) return;
       sk.sel = { kind: b.dataset.kind, id: b.dataset.id }; setTool('select'); draw(); panel(); card();
@@ -1751,7 +1834,7 @@ export function createSketch(ctx) {
   function tris(ex = 1) {
     const out = [], col = [], ids = [], fis = [], lines = [], edges = [];
     for (const m of sk.model.masses) {
-      const I = info(m), c = colorOf(scheme(), m.use), lift = I.sheet ? 0.15 : 0;
+      const I = info(m), c = massColor(m), lift = I.sheet ? 0.15 : 0;
       const Z = p => [p[0], p[1], I.base + p[2] / kz() / ex + lift];
       for (const t of I.tris) { out.push(...Z(m.v[t.a]), ...Z(m.v[t.b]), ...Z(m.v[t.c])); col.push(c); ids.push(m.id); fis.push(t.fi); }
       for (const pl of I.P.slice(1)) for (const [a, b] of pl.segs) lines.push(...Z([...a, pl.z]), ...Z([...b, pl.z]));
@@ -1761,14 +1844,16 @@ export function createSketch(ctx) {
   }
   /** Parking for 3D: stall lines, accessible stalls, islands (low planters) and drive aisles draped on the ground. */
   function parking3d() {
-    const lines = [], acc = [], islands = [], drives = [], marks = [];
+    const lines = [], acc = [], islands = [], drives = [], marks = [], extra = [];
+    /** Painted items (diagram) get their own mesh and colour. */
+    const own = (key, def) => { if (!diagramOn() || !sk.model.paint?.[key]) return def; const arr = []; extra.push({ tris: arr, color: resolveC(sk.model.paint[key]) }); return arr; };
     const z = (x, y) => zGround([x, y]) + 0.15;
     const curb = 0.5 * outPerFt();
-    const planter = P => {
+    const planter = (P, out = islands) => {
       if (P.length < 3) return;
       const top = Math.max(...P.map(p => zGround(p))) + curb;
-      for (const [i, j, k] of ctx.triangulate(P)) islands.push(...P[i], top, ...P[j], top, ...P[k], top);
-      for (let i = 0; i < P.length; i++) { const a = P[i], b = P[(i + 1) % P.length], za = zGround(a) - 0.2, zb = zGround(b) - 0.2; islands.push(...a, za, ...b, zb, ...b, top, ...a, za, ...b, top, ...a, top); }
+      for (const [i, j, k] of ctx.triangulate(P)) out.push(...P[i], top, ...P[j], top, ...P[k], top);
+      for (let i = 0; i < P.length; i++) { const a = P[i], b = P[(i + 1) % P.length], za = zGround(a) - 0.2, zb = zGround(b) - 0.2; out.push(...a, za, ...b, zb, ...b, top, ...a, za, ...b, top, ...a, top); }
     };
     // A strip a→b, w wide, cut into short pieces so it follows the ground.
     const drape = (a, b, w, outArr) => {
@@ -1794,12 +1879,12 @@ export function createSketch(ctx) {
       for (const isl of Lr.islands || []) planter(islandShape(isl, l.islandR));
       if (l.setback > 0 && Lr.inner?.length > 2) for (let i = 0; i < Lr.inner.length; i++) { const a = Lr.inner[i], b = Lr.inner[(i + 1) % Lr.inner.length]; lines.push(a[0], a[1], z(...a), b[0], b[1], z(...b)); }
     }
-    for (const isl of sk.model.islands) planter(islandShape(isl.pts, isl.r));
-    for (const d of sk.model.drives) for (let i = 0; i < d.pts.length - 1; i++) drape(d.pts[i], d.pts[i + 1], (d.w || 24) * perFt(), drives);
+    for (const isl of sk.model.islands) planter(islandShape(isl.pts, isl.r), own(`i:${isl.id}`, islands));
+    for (const d of sk.model.drives) { const out = own(`d:${d.id}`, drives); for (let i = 0; i < d.pts.length - 1; i++) drape(d.pts[i], d.pts[i + 1], (d.w || 24) * perFt(), out); }
     const J = joins();
     for (const W of J.wedges) for (let i = 1; i < W.length - 1; i++) for (const q of [W[0], W[i], W[i + 1]]) drives.push(q[0], q[1], z(...q) + 0.05);
     for (const [a, b] of J.cuts) lines.push(a[0], a[1], z(...a) + 0.1, b[0], b[1], z(...b) + 0.1);
-    return { lines, acc, islands, drives, marks, stripe: colorOf(scheme(), 'stripe'), accColor: colorOf(scheme(), 'accessible'), lotColor: colorOf(scheme(), 'lot'), greenColor: colorOf(scheme(), 'green') };
+    return { lines, acc, islands, drives, marks, extra, stripe: colorOf(scheme(), 'stripe'), accColor: colorOf(scheme(), 'accessible'), lotColor: colorOf(scheme(), 'lot'), greenColor: colorOf(scheme(), 'green') };
   }
 
   return {
@@ -1818,6 +1903,9 @@ export function createSketch(ctx) {
     redraw() { draw(); card(); },
     buildings, tris, parking3d, stats, wirePanel, panel, info, notes3d,
     get diagram() { return diagramOn(); },
+    /** Diagram colours for the rest of the app: fill(kind 'b' | 't', key) → hex (paint, else the category default). */
+    dgColors: () => ({ bldg: dgs().bldg, tree: dgs().tree, fill: (k, key) => paintOr(`${k}:${key}`),
+      painted: (k, key) => { const p = sk.model.paint?.[`${k}:${key}`]; return p ? resolveC(p) : null; } }),
     setShowLabels(on) { sk.showLabels = on; draw(); },
     /** The overlay canvas (labels, plan drawing) for image export. */
     overlay: () => { draw(); return canvas; },
