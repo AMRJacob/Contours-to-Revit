@@ -10,11 +10,12 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.45.1">
+  <link rel="stylesheet" href="css/app.css?v=0.46.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
   <div class="app">
+    <div class="panel-bg" aria-hidden="true"></div><div class="panel-art" aria-hidden="true"></div>
     <aside class="panel" id="panel">
       <header class="brand">
         <div class="brand-mark" aria-hidden="true">
@@ -24,6 +25,7 @@
           <h1>Contours to Revit <span class="app-ver" id="app-ver" title="Web app version"></span></h1>
           <p class="tag">Preliminary USGS 3DEP topography &rarr; Toposolid points &amp; 3D DXF contours</p>
         </div>
+        <button type="button" class="gear" id="settings-open" data-tip="settings" aria-label="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg></button>
       </header>
 
       <section class="proj-bar" id="proj-bar">
@@ -40,24 +42,23 @@
             <input type="text" id="proj-new-name" placeholder="Project name (e.g. Mena clinic)" spellcheck="false">
             <button type="button" class="btn" id="proj-save-as">Save as new</button>
           </div>
-          <div class="proj-title">Projects</div>
+          <div class="proj-title" data-tip="projects">Projects <span class="qm">?</span></div>
           <ul class="proj-list" id="proj-list"></ul>
           <button type="button" class="btn btn-quiet btn-block" id="proj-new">Start a new blank project</button>
           <button type="button" class="btn btn-quiet btn-block" id="proj-recover" title="Find site designs the app autosaved that aren't in any saved project">Recover autosaved designs…</button>
           <ul class="proj-list" id="proj-recover-list" hidden></ul>
-          <p class="hint">Click a project to open it and zoom to it (hover to see where it is). Saving is manual — <strong>Save</strong> overwrites the open project, <strong>Save as new</strong> makes another. A project keeps the site, options, origin and north, layers and the whole site design, in this browser on this computer; use <em>Save design</em> for a file you can move.</p>
         </div>
       </section>
 
       <nav class="mode-tabs" role="tablist" aria-label="Mode">
-        <button role="tab" class="mode active" data-mode="existing" aria-selected="true">Existing site</button>
-        <button role="tab" class="mode" data-mode="design" aria-selected="false" title="Sculpt the proposed grades and export new-construction contours">Site design</button>
-        <button role="tab" class="mode" data-mode="sketch" aria-selected="false" title="Brainstorm massing and parking on the site — live floor area and parking counts">Sketch</button>
-        <button role="tab" class="mode" data-mode="diagram" aria-selected="false" title="Site analysis and concept diagrams — arrows, lines, regions and labels over a faded site">Diagram</button>
+        <button role="tab" class="mode active" data-mode="existing" aria-selected="true" data-tip="mode-existing">Existing site</button>
+        <button role="tab" class="mode" data-mode="design" aria-selected="false" data-tip="mode-design">Site design</button>
+        <button role="tab" class="mode" data-mode="sketch" aria-selected="false" data-tip="mode-sketch">Sketch</button>
+        <button role="tab" class="mode" data-mode="diagram" aria-selected="false" data-tip="mode-diagram">Diagram</button>
       </nav>
 
       <details class="step existing-only" id="step-site" open data-tone="site">
-        <summary><span class="num">1</span><span class="st-title">Site</span><span class="st-sum" id="sum-site">Draw a boundary</span></summary>
+        <summary data-tip="site"><span class="num">1</span><span class="st-title">Site</span><span class="st-sum" id="sum-site">Draw a boundary</span></summary>
         <div class="step-body">
           <form id="search-form" class="search" autocomplete="off">
             <input id="search" type="search" placeholder="Search an address or place" aria-label="Search an address or place">
@@ -65,16 +66,15 @@
           </form>
           <ul id="search-results" class="results" hidden></ul>
           <div class="draw-row">
-            <button id="draw-btn" class="btn" type="button" title="Drag a rectangle over the site">
+            <button id="draw-btn" class="btn" type="button" data-tip="rect">
               <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="5" width="14" height="10" rx="1" /></svg>
               Rectangle
             </button>
-            <button id="draw-poly-btn" class="btn" type="button" title="Click the corners of the site boundary">
+            <button id="draw-poly-btn" class="btn" type="button" data-tip="poly">
               <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 15 5 4l7 3 5-2-1 10z" /></svg>
               Polygon
             </button>
           </div>
-          <p class="hint" id="draw-hint">Draw the site boundary: drag a <strong>rectangle</strong>, or click the corners of a <strong>polygon</strong> (click the first point to close) to leave out areas you don't need. Edit it with the pencil tool on the map.</p>
           <dl class="stats" id="site-stats" hidden>
             <div><dt>Size</dt><dd id="st-size">—</dd></div>
             <div><dt>Area</dt><dd id="st-area">—</dd></div>
@@ -85,7 +85,7 @@
       </details>
 
       <details class="step existing-only" id="step-options" open data-tone="topo">
-        <summary><span class="num">2</span><span class="st-title">Topography</span><span class="st-sum" id="sum-topo"></span></summary>
+        <summary data-tip="topo"><span class="num">2</span><span class="st-title">Topography</span><span class="st-sum" id="sum-topo"></span></summary>
         <div class="step-body">
           <div class="field-row">
             <div class="field field-units">
@@ -96,72 +96,24 @@
               </div>
             </div>
             <div class="field">
-              <label for="spacing">Points every</label>
+              <label for="spacing" data-tip="spacing">Points every</label>
               <select id="spacing"></select>
             </div>
             <div class="field">
-              <label for="interval">Contours every</label>
+              <label for="interval" data-tip="interval">Contours every</label>
               <select id="interval"></select>
             </div>
           </div>
-          <label class="check">
-            <input type="checkbox" id="smooth" checked>
-            <span><strong>Smooth contours</strong> — removes lidar noise from the lines; points stay raw.</span>
-          </label>
-          <div class="field bldg-surf">
-            <label for="bldg-mode">Existing buildings in the surface</label>
-            <select id="bldg-mode">
-              <option value="off">Off — bare earth (ground runs under buildings)</option>
-              <option value="pad">Flat pads at an assumed floor elevation</option>
-              <option value="block">Raised to the roof (massing)</option>
-            </select>
-            <div class="bldg-opt" id="bldg-pad-row" hidden>
-              <label for="bldg-ffe">Floor = highest ground at the footprint +</label>
-              <input type="number" id="bldg-ffe" value="0.5" step="0.1" inputmode="decimal"><span>ft</span>
-            </div>
-            <div class="bldg-opt" id="bldg-h-row" hidden>
-              <label for="bldg-h">Height where the data has none</label>
-              <input type="number" id="bldg-h" value="15" step="1" min="1" inputmode="decimal"><span>ft</span>
-            </div>
-            <p class="hint" id="bldg-hint"></p>
-            <label class="check">
-              <input type="checkbox" id="bldg-lidar">
-              <span><strong>Building heights &amp; roofs from lidar</strong> — measures each footprint in the USGS lidar point cloud (flat or sloped roofs). Larger download; footprints the lidar can't read keep their data height.</span>
-            </label>
-            <div class="bldg-opt">
-              <label for="bldg-style">Massing</label>
-              <select id="bldg-style">
-                <option value="clean">Clean — square footprints, simple roofs</option>
-                <option value="planes">Detailed — lidar roof planes</option>
-              </select>
-            </div>
-            <div class="bldg-opt" id="bldg-lidar-row">
-              <label for="bldg-lidar-res">Roof grid</label>
-              <select id="bldg-lidar-res">
-                <option value="1">1 ft</option>
-                <option value="2">2 ft</option>
-                <option value="5">5 ft (lightest)</option>
-              </select>
-            </div>
-          </div>
-          <details class="sub-details">
-            <summary>Coordinate system</summary>
-            <div class="field">
-              <label for="zone" class="sr-only">Coordinate system</label>
-              <select id="zone"></select>
-              <p class="hint" id="zone-hint">Draw a site to detect the zone.</p>
-            </div>
-          </details>
-          <p class="hint">Buildings, roads, parcels (Arkansas) and FEMA flood zones come along automatically — choose what's included in the map's <strong>Layers</strong> panel.</p>
+          <button type="button" class="more-link" data-settings="topo">More topography options — smoothing, buildings, lidar roofs, coordinate system ›</button>
         </div>
       </details>
 
       <details class="step existing-only" id="step-place" data-tone="revit">
-        <summary><span class="num">3</span><span class="st-title">Place in Revit</span><span class="st-sum" id="sum-place"></span></summary>
+        <summary data-tip="place"><span class="num">3</span><span class="st-title">Place in Revit</span><span class="st-sum" id="sum-place"></span></summary>
         <div class="step-body">
           <label class="check check-first">
             <input type="checkbox" id="local-origin">
-            <span><strong>Local origin</strong> — (0,0) at a point you choose, so Revit isn't millions of feet from its origin.</span>
+            <span data-tip="origin"><strong>Local origin</strong> — (0,0) at a point you choose <span class="qm">?</span></span>
           </label>
           <div class="origin-row">
             <button id="pick-origin" class="btn" type="button">
@@ -178,7 +130,7 @@
           <div class="menu-stack">
           <div class="align-box" id="align-box">
             <details class="sub-details menu-line" id="pn-box">
-              <summary>Specify project north <span class="sub" id="pn-sum"></span></summary>
+              <summary data-tip="pn">Specify project north <span class="sub" id="pn-sum"></span></summary>
               <div class="field">
                 <label for="rot-deg" class="sr-only">Project north, degrees clockwise from grid north</label>
                 <div class="align-row">
@@ -191,7 +143,7 @@
               </div>
             </details>
             <details class="sub-details menu-line" id="datum-box">
-              <summary>Elevation datum <span class="sub" id="datum-sum"></span></summary>
+              <summary data-tip="datum">Elevation datum <span class="sub" id="datum-sum"></span></summary>
               <div class="field">
                 <label for="datum" class="sr-only">Elevation datum</label>
                 <div class="align-row">
@@ -203,7 +155,7 @@
             </details>
           </div>
           <details class="sub-details menu-line revit-card" id="revit-card">
-            <summary>Revit coordinates <span class="sub" id="revit-sum"></span></summary>
+            <summary data-tip="revitcoords">Revit coordinates <span class="sub" id="revit-sum"></span></summary>
             <div class="rc-head"><span>For Manage › Coordinates › Specify Coordinates at Point</span><button type="button" class="btn btn-quiet btn-xs" id="revit-copy">Copy</button></div>
             <div id="revit-card-body"></div>
           </details>
@@ -212,7 +164,7 @@
       </details>
 
       <details class="step existing-only" id="step-results" open hidden data-tone="export">
-        <summary><span class="num">4</span><span class="st-title">Export</span><span class="st-sum" id="sum-export"></span></summary>
+        <summary data-tip="export"><span class="num">4</span><span class="st-title">Export</span><span class="st-sum" id="sum-export"></span></summary>
         <div class="step-body">
           <dl class="stats" id="result-stats">
             <div><dt>Min elev.</dt><dd id="rs-min">—</dd></div>
@@ -221,45 +173,14 @@
           </dl>
           <div class="downloads">
             <div class="dl-grid">
-              <button class="dl" data-out="dxf"><span class="dl-name">DXF</span><span class="dl-desc">Shown layers, one CAD file</span></button>
+              <button class="dl" data-out="dxf" data-tip="dxfunits"><span class="dl-name">DXF</span><span class="dl-desc">Shown layers, one CAD file</span></button>
               <button class="dl" data-out="csv"><span class="dl-name">CSV points</span><span class="dl-desc">Toposolid from points file</span></button>
               <button class="dl" data-out="jpg"><span class="dl-name">Aerial</span><span class="dl-desc">JPG + underlay, world files</span></button>
               <button class="dl" data-out="png"><span class="dl-name">PNG map</span><span class="dl-desc">Printable, north &amp; scale</span></button>
             </div>
             <button class="dl dl-all" data-out="zip"><span class="dl-name">Download all</span><span class="dl-desc">Every file above, plus the Revit coordinates</span></button>
             <p class="hint dl-note" id="dxf-units-note">In Revit, set <strong>Import units: Feet</strong> when linking the DXF (don't use Auto-Detect).</p>
-            <details class="sub-details menu-line">
-            <summary>Data sources</summary>
-            <div class="source" id="source"></div>
-          </details>
-            <details class="sub-details menu-line">
-              <summary>Aerial options</summary>
-              <div class="field aerial-res">
-                <label for="aerial-res">Resolution</label>
-                <select id="aerial-res"></select>
-              </div>
-              <div class="underlay">
-                <canvas id="underlay-thumb" width="120" height="90" aria-label="Underlay preview"></canvas>
-                <div class="underlay-ctl">
-                  <div class="ul-title">Underlay image</div>
-                  <label>Color <input type="range" id="ul-sat" min="0" max="150" value="110"><output id="ul-sat-v">110%</output></label>
-                  <label>Washout <input type="range" id="ul-wash" min="0" max="80" value="40"><output id="ul-wash-v">40%</output></label>
-                  <button type="button" class="ul-reset" id="ul-reset">Reset</button>
-                </div>
-              </div>
-            </details>
-          <details class="sub-details menu-line folder-box" id="folder-box">
-            <summary>Save to a project folder <span class="sub" id="folder-sum"></span></summary>
-            <div class="align-row">
-              <button type="button" class="btn" id="folder-pick">Choose folder…</button>
-              <button type="button" class="btn btn-quiet" id="folder-off" hidden>Use Downloads</button>
-            </div>
-            <div class="field folder-prefix" id="folder-prefix-row" hidden>
-              <label for="folder-prefix">File name prefix</label>
-              <input type="text" id="folder-prefix" value="site" spellcheck="false">
-            </div>
-            <p class="hint" id="folder-hint"></p>
-          </details>
+            <button type="button" class="more-link" data-settings="export">Export options — aerial resolution, underlay, project folder, data sources ›</button>
             <button class="dl-link" data-out="readme">README only</button>
           </div>
         </div>
@@ -270,17 +191,15 @@
           <p><strong>Generate the existing site first.</strong> Diagrams sit on that site and its sketch.</p>
         </div>
         <details class="step" open data-tone="tools">
-          <summary><span class="num">1</span><span class="st-title">Diagram</span><span class="st-sum">annotate the site</span></summary>
+          <summary data-tip="diagram"><span class="num">1</span><span class="st-title">Diagram</span><span class="st-sum">annotate the site</span></summary>
           <div class="step-body">
-            <p class="hint" id="dg-hint"></p>
+            <p class="hint coach-src" id="dg-hint"></p>
             <div class="field">
               <label for="dg-fade">Fade the aerial <span class="sub">toward white</span></label>
               <div class="align-row"><input type="range" id="dg-fade" min="0" max="100" step="5" value="75"><output id="dg-fade-v">75%</output></div>
             </div>
             <label class="check"><input type="checkbox" id="dg-labels"> Show block and parking labels</label>
-            <p class="hint">Keys: <kbd>V</kbd> select · <kbd>A</kbd> arrow · <kbd>L</kbd> line · <kbd>R</kbd> region · <kbd>T</kbd> label · <kbd>F</kbd> stand up / lay flat · <kbd>Alt</kbd>+drag duplicate · <kbd>Del</kbd> · <kbd>Ctrl</kbd>+<kbd>Z</kbd>. Draw on the ground or on any face of a sketch block; works on the map and in the 3D view. Colours come from the project's colour scheme (Sketch tab).</p>
-            <button type="button" class="btn" id="dg-export">Save image (PNG)</button>
-            <p class="hint">Saves the current view — plan or 3D. In plan, the basemap tiles are left out (only the site aerial and the app's own layers can be copied into an image).</p>
+            <button type="button" class="btn" id="dg-export" data-tip="dg-export">Save image (PNG)</button>
           </div>
         </details>
       </section>
@@ -291,33 +210,12 @@
         </div>
         <div id="sk-body" hidden>
           <details class="step" open data-tone="tools">
-            <summary><span class="num">1</span><span class="st-title">Sketch</span><span class="st-sum">live totals</span></summary>
+            <summary data-tip="sketch"><span class="num">1</span><span class="st-title">Sketch</span><span class="st-sum">live totals</span></summary>
             <div class="step-body">
-              <p class="hint" id="sk-hint"></p>
+              <p class="hint coach-src" id="sk-hint"></p>
               <div id="sk-stats"></div>
               <div class="sk-list" id="sk-list"></div>
-              <p class="hint">Keys: <kbd>V</kbd> select · <kbd>M</kbd> shapes (<kbd>1</kbd>–<kbd>5</kbd>) · <kbd>L</kbd> draw · <kbd>U</kbd> push/pull · <kbd>S</kbd> slope · <kbd>P</kbd> parking · <kbd>I</kbd> island · <kbd>D</kbd> drive aisle · <kbd>Ctrl</kbd>+drag move a point / edge / face (<kbd>Shift</kbd> up-down) · <kbd>↑</kbd><kbd>↓</kbd> floors / slide rows · <kbd>R</kbd> roof · <kbd>[</kbd><kbd>]</kbd> turn rows · <kbd>Alt</kbd>+drag duplicate · <kbd>Del</kbd> · <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd> undo / redo. Drawing snaps to corners, midpoints, edges, parcel lines and buildings, and lines pull square to what's already drawn — <kbd>Shift</kbd> locks square, hold <kbd>Alt</kbd> to draw without snapping. Sketches save with the site and with projects.</p>
-            </div>
-          </details>
-          <details class="step" data-tone="settings">
-            <summary><span class="num">2</span><span class="st-title">Colour scheme</span><span class="st-sum">per project</span></summary>
-            <div class="step-body">
-              <div class="field sk-scheme-row">
-                <label for="sk-scheme" class="sr-only">Colour scheme</label>
-                <select id="sk-scheme"></select>
-                <button type="button" class="btn-small" id="sk-scheme-dup" title="Save a copy under a new name">Copy</button>
-                <button type="button" class="btn-small" id="sk-scheme-ren">Rename</button>
-                <button type="button" class="btn-small" id="sk-scheme-del">Delete</button>
-              </div>
-              <div class="sk-swatches" id="sk-swatches"></div>
-              <p class="hint">Click a swatch to change it. Changing a built-in scheme saves your own copy. Each project keeps the scheme it was saved with.</p>
-            </div>
-          </details>
-          <details class="step" data-tone="revit">
-            <summary><span class="num">3</span><span class="st-title">Parking ratios</span><span class="st-sum">required spaces</span></summary>
-            <div class="step-body">
-              <div class="sk-ratios" id="sk-ratios"></div>
-              <p class="hint">Starting values are examples only — set them to the local code. Required = floor area of each use ÷ 1,000 × ratio, or units (floor area ÷ average unit size) × ratio. Stalls 9×18 ft; aisles 24 ft (90°), 18 ft one-way (60°), 13 ft one-way (45°); island corner radius 3 ft; drive turn radius 15 ft — typical starting sizes, not a code.</p>
+              <div class="more-row"><button type="button" class="more-link" data-settings="sketch">Colour scheme ›</button><button type="button" class="more-link" data-settings="sketch" data-focus="sk-ratios">Parking ratios ›</button></div>
             </div>
           </details>
         </div>
@@ -329,7 +227,7 @@
         </div>
         <div id="dz-body" hidden>
           <details class="step" open data-tone="tools">
-            <summary><span class="num">1</span><span class="st-title">Grading tools</span><span class="st-sum" id="sum-tool"></span></summary>
+            <summary data-tip="grading"><span class="num">1</span><span class="st-title">Grading tools</span><span class="st-sum" id="sum-tool"></span></summary>
             <div class="step-body">
               <div class="tool-grid" role="radiogroup" aria-label="Grading tool">
                 <button type="button" class="tool" data-tool="raise" title="Raise ground (fill) — brush"><svg viewBox="0 0 24 24"><path d="M3 19c4 0 5-8 9-8s5 8 9 8"/><path d="M12 8V2M9 5l3-3 3 3"/></svg><span>Raise</span></button>
@@ -341,7 +239,7 @@
                 <button type="button" class="tool" data-tool="pad" title="Building pad — drag a rectangle, then type its elevation"><svg viewBox="0 0 24 24"><path d="M6 9h12v6H6z"/><path d="M2 19l4-4M22 19l-4-4M2 5l4 4M22 5l-4 4" opacity=".6"/></svg><span>Pad</span></button>
                 <button type="button" class="tool" data-tool="swale" title="Swale — a shallow channel that carries water along a set flowline slope"><svg viewBox="0 0 24 24"><path d="M2 8c4 0 5 8 10 8s6-8 10-8"/><path d="M7 12l5 2 5-2" opacity=".6"/></svg><span>Swale</span></button>
               </div>
-              <p class="hint tool-hint" id="tool-hint"></p>
+              <p class="hint tool-hint coach-src" id="tool-hint"></p>
               <div class="field" id="f-amount">
                 <label for="dz-amount">Height change <span class="sub">per stroke</span></label>
                 <div class="align-row">
@@ -397,7 +295,7 @@
               </div>
               <div id="f-wall" hidden>
                 <div class="field">
-                  <label>Wall elevations</label>
+                  <label data-tip="wall-elev">Wall elevations <span class="qm">?</span></label>
                   <div class="seg seg-sm" role="radiogroup"><label><input type="radio" name="welev" value="ground" checked><span>From ground (height)</span></label><label><input type="radio" name="welev" value="set"><span>Set TW / BW</span></label></div>
                 </div>
                 <div id="f-wall-ground">
@@ -414,7 +312,6 @@
                     <span class="eg-l">Top (TW)</span><input type="number" id="dz-tw0" step="0.01" placeholder="ground+H" inputmode="decimal"><input type="number" id="dz-tw1" step="0.01" placeholder="= start" inputmode="decimal">
                     <span class="eg-l">Bottom (BW)</span><input type="number" id="dz-bw0" step="0.01" placeholder="ground" inputmode="decimal"><input type="number" id="dz-bw1" step="0.01" placeholder="= start" inputmode="decimal">
                   </div>
-                  <p class="hint">Start is where you began dragging. Leave End blank for a level top or bottom; different values make it slope. The high side is graded to TW, the low side to BW.</p>
                 </div>
                 <div class="field-row">
                   <div class="field"><label for="dz-wthick">Thickness</label><input type="number" id="dz-wthick" step="0.25" min="0.25" value="1" inputmode="decimal"></div>
@@ -450,11 +347,10 @@
                 <label for="dz-soft">Edge softness <output id="dz-soft-v">60%</output></label>
                 <input type="range" id="dz-soft" min="0" max="100" value="60">
               </div>
-              <p class="hint">Wheel-click and drag to pan (or hold <kbd>Space</kbd>) · <kbd>Ctrl</kbd>+wheel brush size · right-click a feature to edit it · <kbd>Shift</kbd> locks lines orthogonal · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo · <kbd>Esc</kbd> stops editing.</p>
             </div>
           </details>
           <details class="step" open data-tone="earth">
-            <summary><span class="num">2</span><span class="st-title">Earthwork</span><span class="st-sum" id="sum-earth"></span></summary>
+            <summary data-tip="earthwork"><span class="num">2</span><span class="st-title">Earthwork</span><span class="st-sum" id="sum-earth"></span></summary>
             <div class="step-body">
               <dl class="stats stats-earth">
                 <div><dt>Cut</dt><dd id="ew-cut">0</dd></div>
@@ -467,22 +363,18 @@
                 <button type="button" class="btn" id="dz-redo" title="Redo (Ctrl+Y)">Redo</button>
                 <button type="button" class="btn btn-quiet" id="dz-reset">Reset design</button>
               </div>
-              <label class="check"><input type="checkbox" id="dz-show-exist" checked><span>Show existing contours (grey)</span></label>
-              <label class="check"><input type="checkbox" id="dz-show-labels" checked><span>Contour labels</span></label>
-              <label class="check"><input type="checkbox" id="dz-show-cursor" checked><span>Elevation at the cursor</span></label>
-              <label class="check"><input type="checkbox" id="dz-show-cf" checked><span>Show cut / fill colors</span></label>
+              <button type="button" class="more-link" data-settings="design">Display options ›</button>
               <div class="cf-legend" aria-hidden="true"><span>Cut</span><i></i><span>Fill</span><small id="cf-scale">±5 ft</small></div>
             </div>
           </details>
           <details class="step" open data-tone="features">
-            <summary><span class="num">3</span><span class="st-title">Features</span><span class="st-sum" id="sum-feat"></span></summary>
+            <summary data-tip="features"><span class="num">3</span><span class="st-title">Features</span><span class="st-sum" id="sum-feat"></span></summary>
             <div class="step-body">
               <ul class="feat-list" id="feat-list"></ul>
-              <p class="hint" id="feat-hint">Pads, walls and slope runs stay editable: click one on the map (with a Slope, Wall or Pad tool) or in this list, change its numbers, or drag its handles. <kbd>Del</kbd> removes it.</p>
             </div>
           </details>
           <details class="step" open data-tone="export">
-            <summary><span class="num">4</span><span class="st-title">Save &amp; export</span><span class="st-sum"></span></summary>
+            <summary data-tip="dzexport"><span class="num">4</span><span class="st-title">Save &amp; export</span><span class="st-sum"></span></summary>
             <div class="step-body">
               <div class="downloads">
                 <div class="dl-grid">
@@ -494,19 +386,118 @@
                   <button type="button" class="btn" id="dz-open">Open design…</button>
                   <input type="file" id="dz-file" accept=".json,application/json" hidden>
                 </div>
-                <p class="hint" id="dz-save-hint">Your design also saves automatically in this browser for this site.</p>
-                <label class="check"><input type="checkbox" id="dz-dxf-exist" checked><span>Include existing contours in the new DXF (grey layers)</span></label>
-                <p class="hint">Same origin, project north, datum and project folder as the Existing site tab. In Revit, link the new DXF next to the existing one, or build a second Toposolid from the CSV and set its phase to New Construction.</p>
               </div>
             </div>
           </details>
         </div>
       </section>
 
-      <details class="step" id="step-settings" data-tone="settings">
-        <summary><span class="num">⚙</span><span class="st-title">Settings</span><span class="st-sum" id="sum-settings"></span></summary>
-        <div class="step-body">
-          <h4 class="set-h">Aerial imagery</h4>
+      <footer class="foot">
+        <p><strong>Preliminary only — not survey data.</strong> Bare-earth elevations are interpolated under buildings and trees. Elevations: USGS 3DEP, NAVD88.</p>
+        <p class="credits">Map imagery &copy; Esri, Maxar, Earthstar Geographics; export imagery USGS The National Map. Streets &amp; roads &copy; OpenStreetMap contributors. Buildings: FEMA/ORNL USA Structures. <a href="https://github.com/AMRJacob/Contours-to-Revit" target="_blank" rel="noopener">Source</a> · <span id="foot-ver"></span></p>
+      </footer>
+      <div class="action-bar" id="step-generate">
+        <p class="status" id="status" aria-live="polite"></p>
+        <p class="dz-readout design-only" id="dz-readout" hidden></p>
+        <button id="generate" class="btn btn-primary btn-block existing-only" type="button" disabled data-tip="generate">Generate topography</button>
+      </div>
+    </aside>
+
+    <div class="settings-drawer" id="settings" hidden role="dialog" aria-label="Settings">
+      <header class="set-head"><b>Settings</b><span>detailed options, by task</span><button type="button" class="set-close" id="settings-close" aria-label="Close settings">✕</button></header>
+      <nav class="set-tabs"><button type="button" class="set-tab" data-sec="general">General</button><button type="button" class="set-tab" data-sec="topo">Topography</button><button type="button" class="set-tab" data-sec="export">Export</button><button type="button" class="set-tab" data-sec="imagery">Imagery</button><button type="button" class="set-tab" data-sec="views">3D &amp; water</button><button type="button" class="set-tab" data-sec="design">Site design</button><button type="button" class="set-tab" data-sec="sketch">Sketch &amp; diagram</button><button type="button" class="set-tab" data-sec="data">Map data</button></nav>
+      <div class="set-body">
+        <section class="set-sec" data-sec="general">
+          <h4 class="set-h">Help</h4>
+          <label class="check"><input type="checkbox" id="set-tips" checked><span><strong>Hover help</strong> — tooltips on buttons and titles (they lock after a moment so you can hover the highlighted terms)</span></label>
+          <label class="check"><input type="checkbox" id="set-coach" checked><span><strong>Tool notes</strong> — a short note at the bottom of the map when you pick a tool</span></label>
+        </section>
+        <section class="set-sec" data-sec="topo">
+          <label class="check">
+            <input type="checkbox" id="smooth" checked>
+            <span data-tip="smoothing"><strong>Smooth contours</strong> <span class="qm">?</span></span>
+          </label>
+          <div class="field bldg-surf">
+            <label for="bldg-mode">Existing buildings in the surface</label>
+            <select id="bldg-mode">
+              <option value="off">Off — bare earth (ground runs under buildings)</option>
+              <option value="pad">Flat pads at an assumed floor elevation</option>
+              <option value="block">Raised to the roof (massing)</option>
+            </select>
+            <div class="bldg-opt" id="bldg-pad-row" hidden>
+              <label for="bldg-ffe">Floor = highest ground at the footprint +</label>
+              <input type="number" id="bldg-ffe" value="0.5" step="0.1" inputmode="decimal"><span>ft</span>
+            </div>
+            <div class="bldg-opt" id="bldg-h-row" hidden>
+              <label for="bldg-h">Height where the data has none</label>
+              <input type="number" id="bldg-h" value="15" step="1" min="1" inputmode="decimal"><span>ft</span>
+            </div>
+            <p class="hint" id="bldg-hint"></p>
+            <label class="check">
+              <input type="checkbox" id="bldg-lidar">
+              <span data-tip="bldg-lidar"><strong>Building heights &amp; roofs from lidar</strong> <span class="qm">?</span></span>
+            </label>
+            <div class="bldg-opt">
+              <label for="bldg-style">Massing</label>
+              <select id="bldg-style">
+                <option value="clean">Clean — square footprints, simple roofs</option>
+                <option value="planes">Detailed — lidar roof planes</option>
+              </select>
+            </div>
+            <div class="bldg-opt" id="bldg-lidar-row">
+              <label for="bldg-lidar-res">Roof grid</label>
+              <select id="bldg-lidar-res">
+                <option value="1">1 ft</option>
+                <option value="2">2 ft</option>
+                <option value="5">5 ft (lightest)</option>
+              </select>
+            </div>
+          </div>
+          <details class="sub-details" open>
+            <summary data-tip="stateplane">Coordinate system</summary>
+            <div class="field">
+              <label for="zone" class="sr-only">Coordinate system</label>
+              <select id="zone"></select>
+              <p class="hint" id="zone-hint">Draw a site to detect the zone.</p>
+            </div>
+          </details>
+        </section>
+        <section class="set-sec" data-sec="export">
+            <details class="sub-details menu-line">
+            <summary>Data sources</summary>
+            <div class="source" id="source"></div>
+          </details>
+            <details class="sub-details menu-line">
+              <summary>Aerial options</summary>
+              <div class="field aerial-res">
+                <label for="aerial-res">Resolution</label>
+                <select id="aerial-res"></select>
+              </div>
+              <div class="underlay">
+                <canvas id="underlay-thumb" width="120" height="90" aria-label="Underlay preview"></canvas>
+                <div class="underlay-ctl">
+                  <div class="ul-title">Underlay image</div>
+                  <label>Color <input type="range" id="ul-sat" min="0" max="150" value="110"><output id="ul-sat-v">110%</output></label>
+                  <label>Washout <input type="range" id="ul-wash" min="0" max="80" value="40"><output id="ul-wash-v">40%</output></label>
+                  <button type="button" class="ul-reset" id="ul-reset">Reset</button>
+                </div>
+              </div>
+            </details>
+          <details class="sub-details menu-line folder-box" id="folder-box">
+            <summary>Save to a project folder <span class="sub" id="folder-sum"></span></summary>
+            <div class="align-row">
+              <button type="button" class="btn" id="folder-pick">Choose folder…</button>
+              <button type="button" class="btn btn-quiet" id="folder-off" hidden>Use Downloads</button>
+            </div>
+            <div class="field folder-prefix" id="folder-prefix-row" hidden>
+              <label for="folder-prefix">File name prefix</label>
+              <input type="text" id="folder-prefix" value="site" spellcheck="false">
+            </div>
+            <p class="hint" id="folder-hint"></p>
+          </details>
+        </section>
+        <section class="set-sec" data-sec="imagery">
+          <h4 class="set-h" data-tip="imagery">Aerial imagery <span class="qm">?</span></h4>
           <div class="field">
             <label for="img-src" class="sr-only">Imagery source</label>
             <select id="img-src"></select>
@@ -528,18 +519,44 @@
             <div id="img-states" class="img-states"></div>
             <p class="hint">City, county and state photo services checked in addition to Esri and USGS. More states can be added to the catalog later.</p>
           </details>
-          <p class="hint">Automatic checks every service that might cover the site: blank or patchy ones are skipped, the real detail in each is measured from sample pixels, and the sharpest is used (sources within 10 % of each other count as equal and the newer one wins). Used for the map preview, 3D view, PNG and the Aerial download.</p>
+        </section>
+        <section class="set-sec" data-sec="views">
           <h4 class="set-h">3D view</h4>
           <div class="set-row"><label for="v3-ex">Vertical exaggeration</label><input type="range" id="v3-ex" min="1" max="5" step="0.5" value="2"><output id="v3-ex-v">2×</output></div>
           <div class="set-row"><label for="v3-speed">Orbit / pan / zoom speed</label><input type="range" id="v3-speed" min="0.2" max="2" step="0.1" value="1"><output id="v3-speed-v">1×</output></div>
-          <h4 class="set-h">Water flow</h4>
+          <h4 class="set-h" data-tip="flow">Water flow <span class="qm">?</span></h4>
           <label class="check"><input type="checkbox" id="set-flow"><span>Show water flow on the map and in 3D</span></label>
           <div class="set-row"><label for="flow-speed">Flow speed</label><input type="range" id="flow-speed" min="0.25" max="3" step="0.25" value="1"><output id="flow-speed-v">1×</output></div>
-          <p class="hint">Same as the <strong>Water flow</strong> button above the map. Streaks run downhill; circles mark low spots that would pond. Uses the proposed grade in Site design.</p>
-          <details class="sub-details existing-only" id="step-data">
-          <summary>Hosted map data</summary>
+        </section>
+        <section class="set-sec" data-sec="design">
+          <h4 class="set-h">Display</h4>
+              <label class="check"><input type="checkbox" id="dz-show-exist" checked><span>Show existing contours (grey)</span></label>
+              <label class="check"><input type="checkbox" id="dz-show-labels" checked><span>Contour labels</span></label>
+              <label class="check"><input type="checkbox" id="dz-show-cursor" checked><span>Elevation at the cursor</span></label>
+              <label class="check"><input type="checkbox" id="dz-show-cf" checked><span>Show cut / fill colors</span></label>
+          <h4 class="set-h">New DXF</h4>
+                <label class="check"><input type="checkbox" id="dz-dxf-exist" checked><span>Include existing contours in the new DXF (grey layers)</span></label>
+        </section>
+        <section class="set-sec" data-sec="sketch">
+          <h4 class="set-h" data-tip="scheme">Colour scheme <span class="qm">?</span></h4>
+          <div class="field sk-scheme-row">
+                <label for="sk-scheme" class="sr-only">Colour scheme</label>
+                <select id="sk-scheme"></select>
+                <button type="button" class="btn-small" id="sk-scheme-dup" title="Save a copy under a new name">Copy</button>
+                <button type="button" class="btn-small" id="sk-scheme-ren">Rename</button>
+                <button type="button" class="btn-small" id="sk-scheme-del">Delete</button>
+              </div>
+              <div class="sk-swatches" id="sk-swatches"></div>
+          <p class="hint">Click a swatch to change it. Changing a built-in scheme saves your own copy.</p>
+          <h4 class="set-h" data-tip="ratios" id="sk-ratios-h">Parking ratios <span class="qm">?</span></h4>
+          <div class="sk-ratios" id="sk-ratios"></div>
+          <p class="hint">Starting values are examples only — set them to the local code.</p>
+          <p class="hint" data-tip="curb-defaults">Stall, aisle, island and radius sizes are typical starting values, not a code. <span class="qm">?</span></p>
+        </section>
+        <section class="set-sec" data-sec="data">
+          <h4 class="set-h" data-tip="hosted">Hosted map data <span class="qm">?</span></h4>
+          <div id="step-data">
           <div>
-          <p class="hint">Parking lots, sidewalks and street surfaces come from OpenStreetMap data this site hosts for the states below (refreshed weekly). Elsewhere the app asks the public OpenStreetMap servers, which can be busy.</p>
           <ul id="hosted-states" class="hosted"><li>Loading…</li></ul>
           <div class="admin-only" hidden>
           <div class="data-status" id="data-status">Checking data status…</div>
@@ -556,20 +573,10 @@
             <p class="hint">Add a state's name (e.g. <code>oklahoma</code>, <code>new-mexico</code>) on its own line, or delete a line to free the space. Saving rebuilds the data in a few minutes.</p>
           </div>
           </div>
-          </details>
-        </div>
-      </details>
-
-      <footer class="foot">
-        <p><strong>Preliminary only — not survey data.</strong> Bare-earth elevations are interpolated under buildings and trees. Elevations: USGS 3DEP, NAVD88.</p>
-        <p class="credits">Map imagery &copy; Esri, Maxar, Earthstar Geographics; export imagery USGS The National Map. Streets &amp; roads &copy; OpenStreetMap contributors. Buildings: FEMA/ORNL USA Structures. <a href="https://github.com/AMRJacob/Contours-to-Revit" target="_blank" rel="noopener">Source</a> · <span id="foot-ver"></span></p>
-      </footer>
-      <div class="action-bar" id="step-generate">
-        <p class="status" id="status" aria-live="polite"></p>
-        <p class="dz-readout design-only" id="dz-readout" hidden></p>
-        <button id="generate" class="btn btn-primary btn-block existing-only" type="button" disabled>Generate topography</button>
+          </div>
+        </section>
       </div>
-    </aside>
+    </div>
 
     <main class="stage">
       <div class="view-tabs" role="tablist">
@@ -656,6 +663,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.45.1"></script>
+  <script type="module" src="js/app.js?v=0.46.0"></script>
 </body>
 </html>

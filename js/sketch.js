@@ -8,12 +8,12 @@
 // rows · R roof form (shape presets) · [ ] turn parking rows · Enter / double-click finish · Alt+drag duplicate ·
 // Alt+click a corner removes it · Ctrl+drag (Select tool) moves a point, edge or face; add Shift to move it up/down ·
 // Shift: square corners, snap rotation, free (unsnapped) push/pull.
-import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins } from './parking.js?v=0.45.1';
-import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.45.1';
-import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.45.1';
-import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.45.1';
-import * as SO from './solid.js?v=0.45.1';
-import { noteGeom, WIDTHS } from './notes.js?v=0.45.1';
+import { layoutLot, longestEdgeAngle, lanePoly, roundPoly, driveJoins } from './parking.js?v=0.46.0';
+import { snap as snapTo, snapMove, frameAngles } from './snap.js?v=0.46.0';
+import { BUILTIN_SCHEMES, allSchemes, schemeById, saveScheme, deleteScheme, duplicateScheme, colorOf } from './schemes.js?v=0.46.0';
+import { presetShape, area, inPoly, ROOFS } from './sketchmass.js?v=0.46.0';
+import * as SO from './solid.js?v=0.46.0';
+import { noteGeom, WIDTHS } from './notes.js?v=0.46.0';
 
 const TOOLS = [
   { id: 'select', key: 'V', label: 'Select', icon: '<path d="M5 3l14 8-6 1.5L10 19z"/>' },
@@ -209,7 +209,7 @@ export function createSketch(ctx) {
     m.v = 3;
   }
   async function onSite(site, pending) {
-    sk.site = site; sk.sel = null; sk.draw = null; sk.op = null; sk.layouts.clear(); sk.infos.clear(); sk.undo = []; sk.redo = [];
+    sk.site = site; sk.sel = null; sk.draw = null; sk.op = null; bar.hidden = !sk.active || !site; sk.layouts.clear(); sk.infos.clear(); sk.undo = []; sk.redo = [];
     if (!site) { sk.key = null; sk.model = blank(); draw(); panel(); return; }
     const b = site.box;
     sk.key = `sketch:${site.zone.code}:${[b.xmin, b.ymin, b.xmax, b.ymax].map(v => Math.round(v / 10)).join(',')}`;
@@ -482,7 +482,7 @@ export function createSketch(ctx) {
     const T = tools();
     bar.dataset.set = sk.set;
     // Tools in groups (Building / Parking), each with its hotkey. Undo / redo are Ctrl+Z / Ctrl+Y.
-    bar.innerHTML = T.map(t => `${t.group ? `<div class="sk-grp">${t.group}</div>` : ''}<button type="button" class="sk-tool" data-tool="${t.id}" title="${t.label} (${t.key})" aria-label="${t.label}">${svg(t.icon)}<kbd>${t.key}</kbd><span>${t.label}</span></button>`).join('')
+    bar.innerHTML = T.map(t => `${t.group ? `<div class="sk-grp">${t.group}</div>` : ''}<button type="button" class="sk-tool" data-tool="${t.id}" data-tip="${sk.set === 'diagram' ? 'dg' : 'sk'}-${t.id}" aria-label="${t.label} (${t.key})">${svg(t.icon)}<kbd>${t.key}</kbd><span>${t.label}</span></button>`).join('')
       + (sk.set === 'diagram'
         ? `<div class="sk-fly dg-style" data-for="style" hidden><div class="dg-sws">${swatchHtml(sk.style.color)}</div>
             <div class="dg-row"><span class="seg seg-dark">${SIZES.map((z, i) => `<label><input type="radio" name="dg-size" value="${i}"${sk.style.size === i ? ' checked' : ''}><span>${z}</span></label>`).join('')}</span>
@@ -1489,9 +1489,9 @@ export function createSketch(ctx) {
     const xy = ctx.toNative(e.latlng), oe = e.originalEvent;
     return { sx: e.containerPoint.x, sy: e.containerPoint.y, xy, at: () => xy, ray: () => [[xy[0], xy[1], 1e5], [xy[0], xy[1], 0]], shift: oe.shiftKey, alt: oe.altKey, ctrl: oe.ctrlKey || oe.metaKey };
   };
-  map.on('mousedown', e => { if (sk.v3 || e.originalEvent.button !== 0) return; if (down(mapEv(e))) map.dragging.disable(); });
-  map.on('mousemove', e => { if (!sk.v3) move(mapEv(e)); });
-  map.on('mouseup', e => { if (!sk.v3 && sk.active) { map.dragging.enable(); up(mapEv(e)); } });
+  map.on('mousedown', e => { if (sk.v3 || !sk.site || !sk.active || e.originalEvent.button !== 0) return; if (down(mapEv(e))) map.dragging.disable(); });
+  map.on('mousemove', e => { if (!sk.v3 && sk.site && sk.active) move(mapEv(e)); });
+  map.on('mouseup', e => { if (!sk.v3 && sk.active && sk.site) { map.dragging.enable(); up(mapEv(e)); } });
   document.addEventListener('mouseup', e => {
     if (sk.v3 || !(sk.drag || sk.op || (sk.draw && !sk.draw.pts))) return;
     map.dragging.enable();
@@ -1762,7 +1762,7 @@ export function createSketch(ctx) {
     /** on: the Sketch or Diagram tab is showing; set: which toolset ('sketch' | 'diagram'). */
     setActive(on, set = 'sketch') {
       if (on && set !== sk.set) { sk.set = set; sk.sel = null; sk.tool = 'select'; buildBar(); }
-      sk.active = on; canvas.hidden = !visible(); bar.hidden = !on;
+      sk.active = on; canvas.hidden = !visible(); bar.hidden = !on || !sk.site;
       if (!on) { sk.draw = null; sk.op = null; sk.hov = null; cardEl.hidden = true; map.getContainer().classList.remove('sk-drawing'); sk.v3?.el.classList.remove('sk-drawing'); sk.v3?.sketchNav(false); }
       else setTool(sk.tool);
       draw(); card(); panel();

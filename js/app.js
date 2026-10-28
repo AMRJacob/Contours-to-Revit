@@ -1,22 +1,23 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.45.1';
-import { fetchElevation, sample } from './dem.js?v=0.45.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.45.1';
-import { Dxf } from './dxf.js?v=0.45.1';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.45.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.45.1';
-import { Flow } from './flow.js?v=0.45.1';
-import { createSketch } from './sketch.js?v=0.45.1';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.45.1';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.45.1';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.45.1';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.45.1';
-import { loadLidar, applyLidar } from './lidar.js?v=0.45.1';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.45.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.45.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.46.0';
+import { fetchElevation, sample } from './dem.js?v=0.46.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.46.0';
+import { Dxf } from './dxf.js?v=0.46.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.46.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.46.0';
+import { Flow } from './flow.js?v=0.46.0';
+import { createSketch } from './sketch.js?v=0.46.0';
+import { initTips, coachFrom } from './tips.js?v=0.46.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.46.0';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT } from './wind.js?v=0.46.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.46.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.46.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.46.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.46.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.46.0';
 
-const VERSION = '0.45.1';
+const VERSION = '0.46.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -3103,6 +3104,7 @@ function setMode(mode) {
   $('panel').classList.toggle('mode-design', mode === 'design');
   $('panel').classList.toggle('mode-sketch', mode === 'sketch');
   $('panel').classList.toggle('mode-diagram', mode === 'diagram');
+  document.body.dataset.mode = mode;
   const diagramOn = mode === 'diagram';
   const sketchOn = mode === 'sketch' || diagramOn;
   map.getContainer().classList.toggle('diagram-view', diagramOn);
@@ -5142,3 +5144,35 @@ initRevit({
 }).catch(err => console.error('Revit bridge:', err));
 
 window.c2r = { state, map, makers: MAKERS, dz, get v3() { return v3; }, flow }; // for debugging in the console
+
+
+// ---------- Interface: task colours, hover help, tool notes, settings drawer ----------
+document.body.dataset.mode = dz.mode || 'existing';
+initTips();
+for (const id of ['sk-hint', 'dg-hint', 'tool-hint']) coachFrom($(id));
+{
+  const pref = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v === '1'; } catch { return d; } };
+  const setPref = (k, v) => { try { localStorage.setItem(k, v ? '1' : '0'); } catch { /* ignore */ } };
+  const apply = () => { document.body.classList.toggle('no-tips', !$('set-tips').checked); document.body.classList.toggle('no-coach', !$('set-coach').checked); };
+  $('set-tips').checked = pref('c2r-tips', true); $('set-coach').checked = pref('c2r-coach', true); apply();
+  $('set-tips').addEventListener('change', e => { setPref('c2r-tips', e.target.checked); apply(); });
+  $('set-coach').addEventListener('change', e => { setPref('c2r-coach', e.target.checked); apply(); });
+  const drawer = $('settings');
+  const showSec = sec => {
+    drawer.querySelectorAll('.set-tab').forEach(t => t.classList.toggle('on', t.dataset.sec === sec));
+    drawer.querySelectorAll('.set-sec').forEach(x => { x.hidden = x.dataset.sec !== sec; });
+    try { localStorage.setItem('c2r-setsec', sec); } catch { /* ignore */ }
+  };
+  const modeSec = { existing: 'topo', design: 'design', sketch: 'sketch', diagram: 'sketch' };
+  const openSettings = (sec, focus) => {
+    drawer.hidden = false;
+    let last = null; try { last = localStorage.getItem('c2r-setsec'); } catch { /* ignore */ }
+    showSec(sec || last || modeSec[dz.mode] || 'general');
+    if (focus) $(focus)?.scrollIntoView({ block: 'center' });
+  };
+  $('settings-open').addEventListener('click', () => (drawer.hidden ? openSettings() : (drawer.hidden = true)));
+  $('settings-close').addEventListener('click', () => { drawer.hidden = true; });
+  drawer.querySelector('.set-tabs').addEventListener('click', e => { const t = e.target.closest('.set-tab'); if (t) showSec(t.dataset.sec); });
+  document.addEventListener('click', e => { const b = e.target.closest('[data-settings]'); if (b) openSettings(b.dataset.settings, b.dataset.focus); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !drawer.hidden && !e.defaultPrevented) drawer.hidden = true; });
+}
