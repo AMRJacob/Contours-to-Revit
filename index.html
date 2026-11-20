@@ -26,6 +26,8 @@
           <h1>Contours to Revit <span class="app-ver" id="app-ver" title="Web app version"></span></h1>
           <p class="tag" data-tip="tagline">Real ground, buildings and trees for your site — ready for Revit</p>
         </div>
+        <button type="button" class="gear fb-open" id="fb-open" data-tip="feedback" aria-label="Suggest or report" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M4 5.5h16v10.5h-8.5L7 20v-4H4z"/><path d="M8.5 9.5h7M8.5 12.5h4.5"/></svg></button>
+        <div class="fb-pop" id="fb-pop" role="dialog" aria-label="Suggest or report" hidden></div>
         <button type="button" class="gear" id="settings-open" data-tip="settings" aria-label="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg></button>
       </header>
 
@@ -427,7 +429,7 @@
 
     <div class="settings-drawer" id="settings" hidden role="dialog" aria-label="Settings">
       <header class="set-head"><b>Settings</b><span>detailed options, by task</span><button type="button" class="set-close" id="settings-close" aria-label="Close settings">✕</button></header>
-      <nav class="set-tabs"><button type="button" class="set-tab" data-sec="general">General</button><button type="button" class="set-tab" data-sec="topo">Topography</button><button type="button" class="set-tab" data-sec="export">Export</button><button type="button" class="set-tab" data-sec="imagery">Imagery</button><button type="button" class="set-tab" data-sec="views">3D &amp; water</button><button type="button" class="set-tab" data-sec="design">Site design</button><button type="button" class="set-tab" data-sec="sketch">Sketch &amp; diagram</button><button type="button" class="set-tab" data-sec="data">Map data</button></nav>
+      <nav class="set-tabs"><button type="button" class="set-tab" data-sec="general">General</button><button type="button" class="set-tab" data-sec="topo">Topography</button><button type="button" class="set-tab" data-sec="export">Export</button><button type="button" class="set-tab" data-sec="imagery">Imagery</button><button type="button" class="set-tab" data-sec="views">3D &amp; water</button><button type="button" class="set-tab" data-sec="design">Site design</button><button type="button" class="set-tab" data-sec="sketch">Sketch &amp; diagram</button><button type="button" class="set-tab" data-sec="data">Map data</button><button type="button" class="set-tab" data-sec="requests">Requests</button></nav>
       <div class="set-body">
         <section class="set-sec" data-sec="general">
           <h4 class="set-h">Look</h4>
@@ -580,6 +582,12 @@
           <div class="sk-ratios" id="sk-ratios"></div>
           <p class="hint">Starting values are examples only — set them to the local code.</p>
           <p class="hint" data-tip="curb-defaults">Stall, aisle, island and radius sizes are typical starting values, not a code. <span class="qm">?</span></p>
+        </section>
+        <section class="set-sec" data-sec="requests">
+          <h4 class="set-h">Requests &amp; issues</h4>
+          <p class="fb-intro">Ideas for the app and things that aren’t working. Anyone can add one; it shows here for everyone once it has been looked at, with its status and a reply. Claude works through this list too.</p>
+          <button type="button" class="btn" id="fb-new">New request or issue</button>
+          <div id="fb-list" class="fb-list"></div>
         </section>
         <section class="set-sec" data-sec="data">
           <h4 class="set-h" data-tip="hosted">Hosted map data <span class="qm">?</span></h4>

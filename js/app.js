@@ -7,6 +7,7 @@ import { Dxf } from './dxf.js?v=0.67.0';
 import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.67.0';
 import { drawMap, hillshade, formatElev } from './render.js?v=0.67.0';
 import { Flow } from './flow.js?v=0.67.0';
+import { initFeedback } from './feedback.js?v=0.67.0';
 import { placeAt } from './parking-codes.js?v=0.51.1';
 import { createSketch } from './sketch.js?v=0.67.0';
 import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.67.0';
@@ -5944,6 +5945,7 @@ initRevit({
   revealPlace: () => { const d = $('step-place'); d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); },
 }).catch(err => console.error('Revit bridge:', err));
 
+initFeedback({ version: VERSION, where: () => `${{ existing: 'Existing site', design: 'Site design', sketch: 'Sketch', diagram: 'Diagram' }[dz.mode] || 'Existing site'} · ${curView() === '3d' ? '3D' : 'Plan'}` });
 window.c2r = { state, map, makers: MAKERS, dz, get v3() { return v3; }, flow }; // for debugging in the console
 
 

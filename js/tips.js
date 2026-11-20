@@ -83,6 +83,7 @@ export const TIPS = {
   'dg-export': { t: 'Save image', b: 'Saves the current view — plan or 3D — as a PNG. In plan, the basemap tiles are left out (only the site aerial and the app\'s own layers can be copied into an image).' },
 
   // ---- Settings
+  feedback: { t: 'Suggest or report', b: 'Send an idea or tell us something is wrong. It records which tab you were on. The list, with status and replies, is in Settings › Requests.' },
   settings: { t: 'Settings', b: 'All the detailed options, grouped by task. Your choices are remembered in this browser.' },
   imagery: { t: 'Aerial imagery', b: 'Automatic checks every service that might cover the site: blank or patchy ones are skipped, the real detail in each is measured from sample pixels, and the sharpest is used (sources within 10 % count as equal and the newer one wins).' },
   flow: { t: 'Water flow', b: 'Streaks run downhill. Blue lines are where runoff collects into a stream; blue areas fill with water before they spill. Follows the proposed grade wherever your design is shown (Site design, Sketch, Diagram, 3D Proposed). A picture of where water goes — no rainfall amounts, soils or pipes.' },
