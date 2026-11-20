@@ -1,25 +1,25 @@
 // Contours to Revit — UI and pipeline.
 /* global L, JSZip */
-import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.66.1';
-import { fetchElevation, sample } from './dem.js?v=0.66.1';
-import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.66.1';
-import { Dxf } from './dxf.js?v=0.66.1';
-import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.66.1';
-import { drawMap, hillshade, formatElev } from './render.js?v=0.66.1';
-import { Flow } from './flow.js?v=0.66.1';
+import { ZONES, zoneByCode, zoneUnitsPerMeter, zoneUnitLabel, projector, detectZone, reverseGeocode, geocode, convergence } from './geo.js?v=0.67.0';
+import { fetchElevation, sample } from './dem.js?v=0.67.0';
+import { buildGrid, gridStats, smooth, contourLines, contourLevels, isMajor, labelPositions } from './contours.js?v=0.67.0';
+import { Dxf } from './dxf.js?v=0.67.0';
+import { Design, FEATURE_NAMES, contourSegments, designKey, parseDesignKey, f32ToB64, b64ToF32, smoothClosed, smoothOpen } from './design.js?v=0.67.0';
+import { drawMap, hillshade, formatElev } from './render.js?v=0.67.0';
+import { Flow } from './flow.js?v=0.67.0';
 import { placeAt } from './parking-codes.js?v=0.51.1';
-import { createSketch } from './sketch.js?v=0.66.1';
-import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.66.1';
-import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.66.1';
-import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT, WindFlow, SHELTER, SHELTER_SRC, SHELTER_URL, wallCp, kzRel } from './wind.js?v=0.66.1';
-import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.66.1';
-import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.66.1';
-import { loadLidar, applyLidar } from './lidar.js?v=0.66.1';
-import { findTrees } from './trees.js?v=0.66.1';
-import { initRevit, revitSiteChanged } from './revit.js?v=0.66.1';
-import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.66.1';
+import { createSketch } from './sketch.js?v=0.67.0';
+import { initTips, coachFrom, setTipDelay } from './tips.js?v=0.67.0';
+import { sunPosition, sunTimes, heightRaster, sunVector, shadeRaster, strideFor, surfaceSamples, sunHours, hoursColor, compass } from './sun.js?v=0.67.0';
+import { windRose, roseSummary, sectorName, WindField, WIND_CREDIT, WindFlow, SHELTER, SHELTER_SRC, SHELTER_URL, wallCp, kzRel } from './wind.js?v=0.67.0';
+import { IMAGERY_SOURCES, STATE_LIST, sourceById, registerSource, customSource, candidates as imgCandidates, probe as imgProbe, rank as imgRank, fetchBox, emptyFraction, fmtIn } from './imagery.js?v=0.67.0';
+import { combineBuildings, orthogonalize, prismMass } from './massing.js?v=0.67.0';
+import { loadLidar, applyLidar } from './lidar.js?v=0.67.0';
+import { findTrees } from './trees.js?v=0.67.0';
+import { initRevit, revitSiteChanged } from './revit.js?v=0.67.0';
+import { fetchBuildings, fetchBuildingsMs, fetchBuildingsOsm, BUILDING_SOURCES, fetchArdotWidths, prepareWidths, fetchOsmAreas, prepareOsmAreas, hostedContextIndex, ctxIndexReset, fetchRoadsAny, prepareContext, triangulate, fetchParcels, fetchFlood, prepareOverlays, hatchPolygon, densify } from './context.js?v=0.67.0';
 
-const VERSION = '0.66.1';
+const VERSION = '0.67.0';
 document.getElementById('app-ver').textContent = `v${VERSION}`;
 document.getElementById('foot-ver').textContent = `Web app v${VERSION}`;
 const MAX_POINTS_WARN = 50000;
@@ -637,7 +637,7 @@ async function generate() {
       await tick();
       const rings = ['bldgBest', 'buildings', 'bldgMs', 'bldgOsm'].flatMap(k => ((k === 'buildings' ? context.buildings : context[k]) || []).map(b => b.ring)).filter(r => r?.length > 2);
       const T = findTrees(lidT, box, nativePerM, rings);
-      context.trees = T.trees.map(t => ({ x: t.x, y: t.y, z: zAt(t.x, t.y), h: t.h * zPerM, hM: t.h, r: t.r * nativePerM, rM: t.r, ev: t.ev })).filter(t => Number.isFinite(t.z));
+      context.trees = T.trees.map(t => ({ x: t.x, y: t.y, z: zAt(t.x, t.y), h: t.h * zPerM, hM: t.h, r: t.r * nativePerM, rM: t.r, ev: t.ev, e: t.e, ang: t.ang, ox: (t.ox || 0) * nativePerM, oy: (t.oy || 0) * nativePerM })).filter(t => Number.isFinite(t.z));
       context.treeInfo = { name: lidT.name, year: lidT.year, canopy: T.canopy, hasGround: T.hasGround, mb: lidT.mb };
     } catch (err) {
       console.error(err);
@@ -5200,17 +5200,22 @@ $('v3-speed').addEventListener('input', e => {
 });
 
 // ---------- Water flow ----------
-// Particles follow the steepest-descent direction of the surface (proposed grade in Site design, otherwise existing),
-// leaving short fading streaks; low spots that would hold water are circled.
+// Particles follow the steepest-descent direction of the surface (the proposed grade wherever the design is shown —
+// Site design, Sketch, Diagram, 3D Proposed — otherwise existing), leaving short fading streaks. Underneath: where
+// runoff collects into streams, and the areas that fill with water before they spill (js/flow.js routing).
 var flow = { on: false, f: null, site: null, z: null, ver: -1, t: 0, raf: 0, M: null };
 var flowCanvas = document.createElement('canvas');
 flowCanvas.className = 'flow-canvas';
 flowCanvas.hidden = true;
 map.getContainer().appendChild(flowCanvas);
+var flowUnder = document.createElement('canvas');   // streams and ponding, redrawn only when the view or the surface changes
+flowUnder.className = 'flow-canvas flow-under';
+flowUnder.hidden = true;
+map.getContainer().insertBefore(flowUnder, flowCanvas);
 
 function flowSurface() {
   const site = state.result, des = site && dz.site === site ? dz.design : null;
-  const useProp = curView() === '3d' ? v3Surf() === 'prop' : dz.mode === 'design' && des;
+  const useProp = curView() === '3d' ? v3Surf() === 'prop' : dz.mode !== 'existing' && des?.changed;
   return useProp && des ? { z: des.z, ver: des.version, prop: true } : { z: site.grid.z, ver: -1, prop: false };
 }
 
@@ -5223,19 +5228,68 @@ function flowSync() {
     flow.f = new Flow(site.grid, s.z, site.toOut);
     flow.f.speed = flowSpeed();
     flow.f.seed(Math.round(Math.max(600, Math.min(5000, site.grid.nx * site.grid.ny / 18))));
-    flow.site = site; flow.z = s.z; flow.ver = s.ver; flow.t = now; flow.prop = s.prop;
+    flow.site = site; flow.z = s.z; flow.ver = s.ver; flow.t = now; flow.prop = s.prop; flow.over = true;
     flowNote();
   } else if (flow.z !== s.z || (flow.ver !== s.ver && now - flow.t > 250)) {
     flow.f.setSurface(s.z);
-    flow.z = s.z; flow.ver = s.ver; flow.t = now; flow.prop = s.prop;
+    flow.z = s.z; flow.ver = s.ver; flow.t = now; flow.prop = s.prop; flow.over = true;
     flowNote();
+    if (v3 && curView() === '3d') v3.setFlowWater(flowWater());
   }
   return flow.f;
 }
-const flowSinks = () => flow.f?.sinks(flow.site?.units === 'm' ? 0.05 : 0.15) || [];
+const flowPondMin = () => (flow.site?.units === 'm' ? 0.05 : 0.15);
+const flowPonds = () => flow.f?.ponds(flowPondMin()) || { list: [], mask: null };
+/** What the 3D view draws besides the particles. */
+const flowWater = () => (flow.f ? { ponds: flowPonds(), streams: flow.f.streams() } : null);
 function flowNote() {
-  const n = flowSinks().length;
-  $('flow-note').textContent = `${flow.prop ? 'Proposed' : 'Existing'} grade · ${n ? `${n} low spot${n === 1 ? '' : 's'}` : 'no low spots'}`;
+  const n = flowPonds().list.length;
+  $('flow-note').textContent = `${flow.prop ? 'Proposed' : 'Existing'} grade · ${n ? `${n} ponding area${n === 1 ? '' : 's'}` : 'no ponding'}`;
+}
+/** Streams and ponding under the particles (plan). */
+function flowUnderDraw(M) {
+  const site = state.result, f = flow.f, cont = map.getContainer(), dpr = window.devicePixelRatio || 1;
+  const W = Math.round(cont.clientWidth * dpr), H = Math.round(cont.clientHeight * dpr);
+  if (flowUnder.width !== W || flowUnder.height !== H) { flowUnder.width = W; flowUnder.height = H; flowUnder.style.width = cont.clientWidth + 'px'; flowUnder.style.height = cont.clientHeight + 'px'; }
+  const g = flowUnder.getContext('2d');
+  g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, W, H);
+  if (!f || !site) return;
+  const G = site.grid, b = site.box, P = flowPonds();
+  g.save();
+  g.beginPath(); const clip = site.mask || [[b.xmin, b.ymin], [b.xmax, b.ymin], [b.xmax, b.ymax], [b.xmin, b.ymax]];
+  clip.forEach(([x, y], i) => { const [sx, sy] = toScreen(M, x, y); g[i ? 'lineTo' : 'moveTo'](sx * dpr, sy * dpr); }); g.closePath(); g.clip();
+  // Ponding: one pixel per grid node, deeper = stronger blue.
+  if (P.list.length) {
+    if (flow.pondImg?.f !== f || flow.pondImg.ver !== flow.ver || flow.pondImg.z !== flow.z) {
+      const c = document.createElement('canvas'); c.width = G.nx; c.height = G.ny;
+      const cg = c.getContext('2d'), im = cg.createImageData(G.nx, G.ny), full = 6 * flowPondMin();
+      for (let j = 0; j < G.ny; j++) for (let i = 0; i < G.nx; i++) {
+        const q = j * G.nx + i; if (!P.mask[q]) continue;
+        const o = ((G.ny - 1 - j) * G.nx + i) * 4, t = Math.min(1, f.dp[q] / full);
+        im.data[o] = 37; im.data[o + 1] = 99 + 40 * (1 - t); im.data[o + 2] = 235; im.data[o + 3] = 110 + 110 * t;
+      }
+      cg.putImageData(im, 0, 0);
+      flow.pondImg = { c, f, ver: flow.ver, z: flow.z };
+    }
+    g.save();
+    const x0 = G.x0 - G.s / 2, yTop = G.y0 + (G.ny - 0.5) * G.s;
+    g.setTransform(dpr * M.a * G.s, dpr * M.b * G.s, -dpr * M.c * G.s, -dpr * M.d * G.s, dpr * (M.a * x0 + M.c * yTop + M.e), dpr * (M.b * x0 + M.d * yTop + M.f));
+    g.imageSmoothingEnabled = true; g.drawImage(flow.pondImg.c, 0, 0);
+    g.restore();
+  }
+  // Streams: wider and brighter the more ground drains through.
+  const S = f.streams();
+  g.lineCap = 'round';
+  for (let band = 0; band < 4; band++) {
+    g.beginPath();
+    for (let k = 0; k < S.n; k++) {
+      if (Math.min(3, Math.floor(S.w[k] * 4)) !== band) continue;
+      const [ax, ay] = toScreen(M, S.seg[k * 4], S.seg[k * 4 + 1]), [bx, by] = toScreen(M, S.seg[k * 4 + 2], S.seg[k * 4 + 3]);
+      g.moveTo(ax * dpr, ay * dpr); g.lineTo(bx * dpr, by * dpr);
+    }
+    g.strokeStyle = `rgba(56,150,255,${0.45 + band * 0.15})`; g.lineWidth = (1.2 + band * 1.3) * dpr; g.stroke();
+  }
+  g.restore();
 }
 
 function flowSet(on) {
@@ -5252,12 +5306,12 @@ $('flow-toggle').addEventListener('click', () => { if (state.result) flowSet(!fl
 function flowKick() {
   const view = curView();
   const map2d = flow.on && !!state.result && view === 'map';
-  flowCanvas.hidden = !map2d;
+  flowCanvas.hidden = flowUnder.hidden = !map2d;
   if (!map2d) { cancelAnimationFrame(flow.raf); flow.raf = 0; flowClear(); }
   else if (!flow.raf) { flow.M = null; flow.raf = requestAnimationFrame(flowFrame); }
   if (v3) {
     const f = flow.on && view === '3d' && state.result ? flowSync() : null;
-    v3.setFlow(f, f ? flowSinks() : null);
+    v3.setFlow(f, f ? flowWater() : null);
   }
   sunKick();
   windKick();
@@ -5275,8 +5329,9 @@ function flowFrame() {
     flowCanvas.width = W; flowCanvas.height = H;
     flowCanvas.style.width = cont.clientWidth + 'px'; flowCanvas.style.height = cont.clientHeight + 'px';
   }
-  if (!flow.M) flow.M = dzAffine(site);
+  if (!flow.M) { flow.M = dzAffine(site); flow.over = true; }
   const M = flow.M, ctx = flowCanvas.getContext('2d');
+  if (flow.over) { flow.over = false; flowUnderDraw(M); }
   // Fade the previous frame so each particle leaves a short tapering streak.
   ctx.globalCompositeOperation = 'destination-out';
   ctx.fillStyle = 'rgba(0,0,0,0.045)'; // slow fade = long trails
@@ -5293,18 +5348,9 @@ function flowFrame() {
     ctx.moveTo(ax * dpr, ay * dpr); ctx.lineTo(bx * dpr, by * dpr);
   }
   ctx.stroke();
-  // Ponding spots (redrawn every frame so they stay solid through the fade).
-  const px = M.scale * dpr;
-  for (const s of flowSinks()) {
-    const [x, y] = toScreen(M, s.x, s.y);
-    const r = Math.max(5 * dpr, Math.min(40 * dpr, (1.5 + Math.min(4, s.depth) * 2) * site.grid.s * px));
-    ctx.beginPath(); ctx.arc(x * dpr, y * dpr, r, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(37,99,235,0.08)'; ctx.fill();
-    ctx.strokeStyle = 'rgba(147,197,253,0.9)'; ctx.lineWidth = 1.5 * dpr; ctx.stroke();
-  }
   flow.raf = requestAnimationFrame(flowFrame);
 }
-map.on('move zoom resize viewreset', () => { if (flow.on) { flow.M = null; flowClear(); } });
+map.on('move zoom resize viewreset', () => { if (flow.on) { flow.M = null; flowClear(); flowUnder.getContext('2d').clearRect(0, 0, flowUnder.width, flowUnder.height); } });
 try { if (localStorage.getItem('c2r-flow')) flow.on = true; } catch { /* ignore */ }
 if (flow.on) { $('flow-toggle').setAttribute('aria-pressed', 'true'); $('flow-legend').hidden = false; $('set-flow').checked = true; }
 $('set-flow').addEventListener('change', e => flowSet(e.target.checked));

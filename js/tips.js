@@ -85,7 +85,7 @@ export const TIPS = {
   // ---- Settings
   settings: { t: 'Settings', b: 'All the detailed options, grouped by task. Your choices are remembered in this browser.' },
   imagery: { t: 'Aerial imagery', b: 'Automatic checks every service that might cover the site: blank or patchy ones are skipped, the real detail in each is measured from sample pixels, and the sharpest is used (sources within 10 % count as equal and the newer one wins).' },
-  flow: { t: 'Water flow', b: 'Streaks run downhill; circles mark low spots that would pond. Uses the proposed grade in Site design.' },
+  flow: { t: 'Water flow', b: 'Streaks run downhill. Blue lines are where runoff collects into a stream; blue areas fill with water before they spill. Follows the proposed grade wherever your design is shown (Site design, Sketch, Diagram, 3D Proposed). A picture of where water goes — no rainfall amounts, soils or pipes.' },
   hosted: { t: 'Hosted map data', b: 'Parking lots, sidewalks and street surfaces come from OpenStreetMap data this site hosts for the listed states (refreshed weekly). Elsewhere the app asks the public OpenStreetMap servers, which can be busy.' },
   smoothing: { t: 'Smooth contours', b: 'Removes lidar noise from the contour lines; the points stay raw.' },
   'bldg-lidar': { t: 'Building heights & roofs from lidar', b: 'Measures each footprint in the USGS ' + term('lidar', 'lidar') + ' point cloud (flat or sloped roofs). Larger download; footprints the lidar can\'t read keep their data height.' },

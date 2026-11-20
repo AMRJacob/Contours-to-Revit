@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="lib/leaflet/leaflet.css">
   <link rel="stylesheet" href="lib/leaflet-draw/leaflet.draw.css">
-  <link rel="stylesheet" href="css/app.css?v=0.66.1">
+  <link rel="stylesheet" href="css/app.css?v=0.67.0">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c2226'/%3E%3Cpath d='M5 22c5-6 9 2 14-4s8-2 8-2M5 15c5-5 9 2 14-3s8-3 8-3' stroke='%23e08a2e' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -612,7 +612,7 @@
         <button role="tab" class="tab" data-view="preview" aria-selected="false" disabled>Preview</button>
         <button role="tab" class="tab" data-view="3d" aria-selected="false" disabled title="Orbit the site in 3D">3D</button>
         <span class="tab-sep" aria-hidden="true"></span>
-        <button type="button" class="tab tab-toggle" id="flow-toggle" aria-pressed="false" disabled title="Animate where rain would run off, and mark low spots where it would pond">Water flow</button>
+        <button type="button" class="tab tab-toggle" id="flow-toggle" aria-pressed="false" disabled title="Animate where rain would run off, where it collects into streams and where it would pond">Water flow</button>
         <button type="button" class="tab tab-toggle tab-sun" id="sun-toggle" aria-pressed="false" disabled title="Sun position, cast shadows and hours of direct sun on the ground and buildings">Sun</button>
         <button type="button" class="tab tab-toggle tab-wind" id="wind-toggle" aria-pressed="false" disabled title="Prevailing wind from the nearest NOAA weather station">Wind</button>
       </div>
@@ -666,7 +666,7 @@
           <p class="env-note" id="wind-src"></p>
         </section>
       </div>
-      <div class="flow-legend" id="flow-legend" hidden><i></i>Runoff direction <b></b>Ponding <small id="flow-note"></small></div>
+      <div class="flow-legend" id="flow-legend" hidden><i></i>Runoff <u></u>Streams <b></b>Ponding <small id="flow-note"></small></div>
       <div id="map"></div>
       <div id="preview" class="preview" hidden>
         <div class="preview-bar">
@@ -698,6 +698,6 @@
   <script src="lib/proj4.js"></script>
   <script src="lib/geotiff.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script type="module" src="js/app.js?v=0.66.1"></script>
+  <script type="module" src="js/app.js?v=0.67.0"></script>
 </body>
 </html>

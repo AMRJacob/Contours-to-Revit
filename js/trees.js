@@ -9,7 +9,8 @@ const GROUND = 2, BUILDING = 6, WATER = 9, BRIDGE = 17, NOISE = new Set([7, 18])
  * lid: { n, x, y (native), z (m), c (class), r (returns per pulse) }; box: { xmin, ymin, xmax, ymax } native;
  * nativePerM; buildings: [[x, y]…] rings to leave out.
  * opts: { minH (m, default 4), cell (m, default 1) }.
- * Returns { trees: [{ x, y, h (m), r (m) }], canopy (share of the site under crowns), hasGround, cell }.
+ * Returns { trees: [{ x, y, h (m), r (m), ev, e (long / short crown axis, 1–2), ang (long axis, radians from +x
+ *   toward +y), ox, oy (crown centre off the top, m) }], canopy (share of the site under crowns), hasGround, cell }.
  */
 export function findTrees(lid, box, nativePerM, buildings = [], opts = {}) {
   const cellM = opts.cell || 1, cs = cellM * nativePerM, minH = opts.minH || 4;
@@ -106,14 +107,20 @@ export function findTrees(lid, box, nativePerM, buildings = [], opts = {}) {
     all[t]++; if (lid.z[k] - G[q] > 0.5 * topH[t]) up[t]++;
   }
   const area = new Float64Array(tops.length);
+  // Crown shape: centre and second moments of each crown's cells give its long direction, how stretched it is and
+  // which way it sits off its top (one-sided crowns at edges and openings).
+  const mx = new Float64Array(tops.length), my = new Float64Array(tops.length), mxx = new Float64Array(tops.length), myy = new Float64Array(tops.length), mxy = new Float64Array(tops.length);
   let canopy = 0;
-  for (let q = 0; q < N; q++) if (lab[q] >= 0) { area[lab[q]]++; canopy++; }
+  for (let q = 0; q < N; q++) if (lab[q] >= 0) {
+    const t = lab[q], dx = (q % nx) - ti[t], dy = ((q / nx) | 0) - tj[t];
+    area[t]++; canopy++; mx[t] += dx; my[t] += dy; mxx[t] += dx * dx; myy[t] += dy * dy; mxy[t] += dx * dy;
+  }
   const trees = [];
   tops.forEach((q, t) => {
     const a = area[t] * cellM * cellM; if (a < 3) return;
     const i = q % nx, j = (q / nx) | 0;
     trees.push({ x: box.xmin + (i + 0.5) * cs, y: box.ymin + (j + 0.5) * cs, h: Math.round(H[q] * 10) / 10 || Math.round(topH[t] * 10) / 10, r: Math.round(Math.sqrt(a / Math.PI) * 10) / 10,
-      ev: all[t] >= 8 ? Math.round(up[t] / all[t] * 100) / 100 : null });
+      ev: all[t] >= 8 ? Math.round(up[t] / all[t] * 100) / 100 : null, ...crownShape(area[t], mx[t], my[t], mxx[t], myy[t], mxy[t], cellM) });
   });
   trees.sort((a, b) => b.h - a.h);
   return { trees: trees.slice(0, 40000), canopy: canopy / N, hasGround, cell: cellM };
@@ -166,4 +173,13 @@ function distRing(R, x, y) {
     d = Math.min(d, Math.hypot(x - ax - dx * t, y - ay - dy * t));
   }
   return d;
+}
+
+/** Ellipse of a crown from its cells' moments (cell units, relative to the top): { e, ang, ox, oy }. */
+function crownShape(n, sx, sy, sxx, syy, sxy, cellM) {
+  if (n < 6) return { e: 1, ang: null, ox: 0, oy: 0 };
+  const cx = sx / n, cy = sy / n, a = sxx / n - cx * cx + 1 / 12, b = syy / n - cy * cy + 1 / 12, c = sxy / n - cx * cy;
+  const d = Math.sqrt(((a - b) / 2) ** 2 + c * c), l1 = (a + b) / 2 + d, l2 = Math.max(1e-6, (a + b) / 2 - d);
+  const e = Math.min(2, Math.sqrt(l1 / l2));
+  return { e: Math.round(e * 100) / 100, ang: e > 1.08 ? Math.round(0.5 * Math.atan2(2 * c, a - b) * 100) / 100 : null, ox: Math.round(cx * cellM * 10) / 10, oy: Math.round(cy * cellM * 10) / 10 };
 }

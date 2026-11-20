@@ -58,6 +58,7 @@ export class SiteView3D {
     if (!this.visible) return;
     this.controls.update();
     for (const f of Object.values(this.frames)) f();
+    const now = performance.now(); this._treeLod(now - (this._tPrev || now)); this._tPrev = now;
     this.renderer.render(this.scene, this.camera);
     this._raf = requestAnimationFrame(this._loop);
   }
@@ -347,7 +348,7 @@ export class SiteView3D {
   setTrees(list, opt = {}) {
     this._treeOpt = opt;
     if (this.trees) { this.scene.remove(this.trees); this.trees.traverse(o => { if (o.geometry && !o.geometry.userData.shared) o.geometry.dispose(); o.material?.dispose(); }); this.trees = null; }
-    this._treeList = list;
+    this._treeList = list; this._treeTiles = null;
     if (!list?.length || !this.g) return;
     // Trees the design removes (t.ghost): see-through red, no shadow — the demolition look.
     const ghosts = list.filter(t => t.ghost);
@@ -355,62 +356,104 @@ export class SiteView3D {
     const F = (this._treeForms ||= treeForms());
     const g = new THREE.Group(), dg = !!this.diagram;
     const hash = t => { const v = Math.sin(t.x * 12.9898 + t.y * 78.233) * 43758.5453; return v - Math.floor(v); };
-    // Pick a form per tree.
-    const byForm = new Map();
+    const hash2 = t => { const v = Math.sin(t.x * 39.3468 + t.y * 11.1353) * 24634.6345; return v - Math.floor(v); };
     // Forms for Arkansas: mostly broadleaf crowns; pines (shortleaf / loblolly: tall bare trunk, open crown on top) and
     // eastern red cedar (dense narrow teardrop) where the lidar says evergreen (t.ev ≥ 0.6, leaf-off density), or —
-    // without that — only for very slender trees.
-    list.forEach(t => {
+    // without that — only for very slender trees. Each form comes in a few differently grown variants.
+    const formOf = t => {
       const u = hash(t), ratio = t.h / Math.max(0.1, 2 * t.r * this.k), ev = t.ev == null ? null : t.ev >= 0.6;
-      const form = t.form === 'pine' || t.form === 'cedar' ? t.form : t.form === 'broadleaf' ? (ratio < 0.95 ? 'spread' : ['round', 'oval', 'cluster', 'lumpy'][Math.floor(u * 4)])
+      return t.form === 'pine' || t.form === 'cedar' ? t.form : t.form === 'broadleaf' ? (ratio < 0.95 ? 'spread' : ['round', 'oval', 'cluster', 'lumpy'][Math.floor(u * 4)])
         : ev === true ? (ratio > 2.2 && u < 0.5 ? 'cedar' : 'pine')
         : ev == null && ratio > 2.6 ? (u < 0.5 ? 'cedar' : 'pine')
         : ratio < 0.95 ? (u < 0.6 ? 'spread' : 'round') : ['round', 'oval', 'cluster', 'lumpy'][Math.floor(u * 4)];
-      if (!byForm.has(form)) byForm.set(form, []);
-      byForm.get(form).push(t);
-    });
-    const M = new THREE.Matrix4(), q = new THREE.Quaternion(), c = new THREE.Color(), up = new THREE.Vector3(0, 1, 0);
-    const trunks = new THREE.InstancedMesh(F.trunk, new THREE.MeshLambertMaterial({ color: dg ? 0xb9b4aa : 0x5e4633 }), list.length);
+    };
+    // Tiles: the site is cut into a grid; each tile holds its trees three times over — full detail, simplified and
+    // far (one faceted blob each) — and shows whichever suits its distance from the camera (see _treeLod).
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const t of list) { x0 = Math.min(x0, t.x); x1 = Math.max(x1, t.x); y0 = Math.min(y0, t.y); y1 = Math.max(y1, t.y); }
+    const TN = Math.max(1, Math.min(7, Math.round(Math.sqrt(list.length / 120)))), tw = (x1 - x0) / TN || 1, th = (y1 - y0) / TN || 1;
+    const tiles = new Map();
+    for (const t of list) {
+      const key = Math.min(TN - 1, Math.floor((t.y - y0) / th)) * TN + Math.min(TN - 1, Math.floor((t.x - x0) / tw));
+      if (!tiles.has(key)) tiles.set(key, []);
+      tiles.get(key).push(t);
+    }
+    const M = new THREE.Matrix4(), q = new THREE.Quaternion(), c = new THREE.Color(), up = new THREE.Vector3(0, 1, 0), P = new THREE.Vector3(), S = new THREE.Vector3();
     const base = new THREE.Color(opt.base || '#d7e3d4'), hsl = {}; base.getHSL(hsl);
-    let ti = 0;
-    for (const [form, L] of byForm) {
-      const geo = F[form], crowns = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true }), L.length);
-      const conifer = form === 'cedar' || form === 'pine';
+    const edgeCol = base.clone().multiplyScalar(0.55);
+    const outline = (mesh, eg, n) => {                       // crisp outlines for the diagram look
+      const pos = eg.attributes.position.array, out = new Float32Array(pos.length * n), v = new THREE.Vector3();
+      for (let i = 0; i < n; i++) { mesh.getMatrixAt(i, M); for (let k = 0; k < pos.length; k += 3) { v.set(pos[k], pos[k + 1], pos[k + 2]).applyMatrix4(M); out[i * pos.length + k] = v.x; out[i * pos.length + k + 1] = v.y; out[i * pos.length + k + 2] = v.z; } }
+      const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(out, 3));
+      return new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: edgeCol, transparent: true, opacity: 0.6 }));
+    };
+    const crownMat = () => new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
+    const trunkMat = () => new THREE.MeshLambertMaterial({ color: dg ? 0xb9b4aa : 0x5e4633 });
+    this._treeTiles = [];
+    for (const L of tiles.values()) {
+      const n = L.length, cm = new Float32Array(n * 16), tm = new Float32Array(n * 16), col = new Float32Array(n * 3);
+      const groups = new Map(), far = { broad: [], conifer: [] };
+      let sx = 0, sy = 0, sz = 0, sr = 0;
       L.forEach((t, i) => {
-        const u = hash(t), X = (t.x - this.cx) * this.k, Z = -(t.y - this.cy) * this.k, Y0 = (t.z - this.z0) * this.ex;
-        const r = Math.max(0.6, t.r * this.k), h = Math.max(1.5, t.h);
+        const form = formOf(t), u = hash(t), X = (t.x - this.cx) * this.k, Z = -(t.y - this.cy) * this.k, Y0 = (t.z - this.z0) * this.ex;
+        const r = Math.max(0.6, t.r * this.k), h = Math.max(1.5, t.h), conifer = form === 'cedar' || form === 'pine';
         const crownH = form === 'cedar' ? h * (0.82 + 0.1 * u) : form === 'pine' ? h * (0.42 + 0.14 * u) : form === 'spread' ? Math.min(h * 0.5, r * 1.1) : Math.min(h * (0.62 + 0.12 * u), r * 2.2);
         const trunkH = h - crownH;
-        q.setFromAxisAngle(up, u * Math.PI * 2);
-        // Crown width = the lidar crown diameter, top = the lidar tree height (variety comes from form and turn only).
-        M.compose(new THREE.Vector3(X, Y0 + trunkH + crownH / 2, Z), q, new THREE.Vector3(r, crownH / 2, r));
-        crowns.setMatrixAt(i, M);
+        // From the lidar where it has them: the crown's long direction and how stretched it is (same area as the
+        // measured crown), and which way the crown sits off its top. Otherwise a random turn.
+        const e = Math.sqrt(Math.max(1, Math.min(2, t.e || 1)));
+        q.setFromAxisAngle(up, t.ang != null ? t.ang : u * Math.PI * 2);
+        let ox = (t.ox || 0) * this.k * 0.6, oz = -(t.oy || 0) * this.k * 0.6; const ol = Math.hypot(ox, oz), om = 0.4 * r;
+        if (ol > om) { ox *= om / ol; oz *= om / ol; }
+        // Crown width = the lidar crown diameter (as an ellipse of the same area), top = the lidar tree height.
+        M.compose(P.set(X + ox, Y0 + trunkH + crownH / 2, Z + oz), q, S.set(r * e, crownH / 2, r / e)); M.toArray(cm, i * 16);
         const painted = dg && opt.paint?.(t);
         if (painted) c.set(painted);
         else if (dg) c.setHSL(hsl.h, hsl.s, Math.max(0, Math.min(1, hsl.l + (u - 0.5) * 0.06)));
         else if (form === 'cedar') c.setHSL(0.33 + 0.04 * u, 0.32, 0.17 + 0.05 * u);
         else if (form === 'pine') c.setHSL(0.27 + 0.05 * u, 0.36, 0.22 + 0.06 * u);
         else c.setHSL(0.24 + 0.08 * u, 0.40 + 0.12 * u, 0.24 + 0.10 * ((u * 7) % 1));
-        crowns.setColorAt(i, c);
+        c.toArray(col, i * 3);
         const tr = Math.max(0.2, r * (form === 'pine' ? 0.1 : conifer ? 0.06 : 0.08));
-        M.compose(new THREE.Vector3(X, Y0 + (trunkH + crownH * 0.3) / 2, Z), q, new THREE.Vector3(tr, trunkH + crownH * 0.3, tr));
-        trunks.setMatrixAt(ti++, M);
+        // The trunk leans from the root toward the crown.
+        M.compose(P.set(X + ox / 2, Y0 + (trunkH + crownH * 0.3) / 2, Z + oz / 2), q, S.set(tr, trunkH + crownH * 0.3, tr)); M.toArray(tm, i * 16);
+        const gk = `${form}|${Math.floor(hash2(t) * F.variants)}`;
+        if (!groups.has(gk)) groups.set(gk, []);
+        groups.get(gk).push(i);
+        far[form === 'cedar' ? 'conifer' : 'broad'].push(i);
+        sx += X; sy += Y0 + h / 2; sz += Z; sr += r;
       });
-      crowns.castShadow = true;
-      crowns.userData.list = L; crowns.name = 'crowns';
-      g.add(crowns);
-      if (dg) {                                             // crisp outlines for the diagram look
-        const eg = F.edges[form], pos = eg.attributes.position.array, out = new Float32Array(pos.length * L.length), v = new THREE.Vector3();
-        L.forEach((t, i) => { crowns.getMatrixAt(i, M); for (let k = 0; k < pos.length; k += 3) { v.set(pos[k], pos[k + 1], pos[k + 2]).applyMatrix4(M); out[i * pos.length + k] = v.x; out[i * pos.length + k + 1] = v.y; out[i * pos.length + k + 2] = v.z; } });
-        const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(out, 3));
-        g.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: base.clone().multiplyScalar(0.55), transparent: true, opacity: 0.6 })));
+      const inst = (geo, mat, idx, src, name) => {
+        const m = new THREE.InstancedMesh(geo, mat, idx.length);
+        idx.forEach((ti, k) => { M.fromArray(src, ti * 16); m.setMatrixAt(k, M); if (name) { c.fromArray(col, ti * 3); m.setColorAt(k, c); } });
+        m.castShadow = true;
+        if (name) { m.name = name; m.userData.list = idx.map(ti => L[ti]); }
+        return m;
+      };
+      const all = L.map((_, i) => i), lods = [new THREE.Group(), new THREE.Group(), new THREE.Group()];
+      for (const [gk, idx] of groups) {
+        const [form, v] = gk.split('|');
+        for (const lod of [0, 1]) {
+          const m = inst(F[form][v][lod], crownMat(), idx, cm, 'crowns');
+          lods[lod].add(m);
+          if (dg) lods[lod].add(outline(m, F.edge(form, v, lod), idx.length));
+        }
       }
+      for (const k of ['broad', 'conifer']) if (far[k].length) lods[2].add(inst(F.far[k], crownMat(), far[k], cm, 'crowns'));
+      lods[0].add(inst(F.trunk, trunkMat(), all, tm));
+      lods[1].add(inst(F.trunkFar, trunkMat(), all, tm));
+      lods[2].add(inst(F.trunkFar, trunkMat(), all, tm));
+      const ctr = new THREE.Vector3(sx / n, sy / n, sz / n); let rad = 0;
+      L.forEach((t) => { rad = Math.max(rad, Math.hypot((t.x - this.cx) * this.k - ctr.x, -(t.y - this.cy) * this.k - ctr.z)); });
+      lods[1].visible = lods[2].visible = false;
+      g.add(...lods);
+      this._treeTiles.push({ lods, ctr, rad, r: sr / n, lod: 0 });
     }
-    trunks.castShadow = true;
-    g.add(trunks);
+    this._treeCount = list.length;
+    this._treeLod(0);
     if (ghosts.length) {
       const gm = new THREE.MeshLambertMaterial({ color: 0xe0524a, transparent: true, opacity: 0.32, depthWrite: false });
-      const gc = new THREE.InstancedMesh(F.round, gm, ghosts.length), gt = new THREE.InstancedMesh(F.trunk, gm.clone(), ghosts.length);
+      const gc = new THREE.InstancedMesh(F.round[0][1], gm, ghosts.length), gt = new THREE.InstancedMesh(F.trunk, gm.clone(), ghosts.length);
       ghosts.forEach((t, i) => {
         const X = (t.x - this.cx) * this.k, Z = -(t.y - this.cy) * this.k, Y0 = (t.z - this.z0) * this.ex;
         const r = Math.max(0.6, t.r * this.k), h = Math.max(1.5, t.h), crownH = Math.min(h * 0.68, r * 2.2), trunkH = h - crownH;
@@ -423,6 +466,28 @@ export class SiteView3D {
     }
     g.name = 'trees';
     this.trees = g; this.scene.add(g);
+  }
+
+  /**
+   * Level of detail for the trees, every frame: each tile shows full, simplified or far trees by how big its crowns
+   * are on screen. The cut-offs move with the frame rate — when frames get slow, detail drops until they recover.
+   */
+  _treeLod(dt) {
+    const T = this._treeTiles; if (!T?.length) return;
+    let ql = this._treeQ ?? 1;
+    if (dt > 0 && dt < 250 && this._treeCount > 200) {
+      this._ft = this._ft ? this._ft * 0.9 + dt * 0.1 : dt;
+      if (this._ft > 40) ql = Math.max(0.04, ql * 0.96); else if (this._ft < 22) ql = Math.min(1, ql * 1.01);
+      this._treeQ = ql;
+    }
+    const cam = this.camera.position, f = this.renderer.domElement.clientHeight / (2 * Math.tan(this.camera.fov * Math.PI / 360));
+    for (const t of T) {
+      const d = Math.max(1e-3, cam.distanceTo(t.ctr) - t.rad), px = 2 * t.r * f / d * ql;
+      // (a little slack before switching back, so tiles on a boundary don't flicker)
+      const want = px > 70 ? 0 : px > 14 ? 1 : 2, keep = t.lod === 0 ? px > 58 : t.lod === 1 ? px > 11.5 && px <= 84 : px <= 17;
+      const lod = keep ? t.lod : want;
+      if (lod !== t.lod || !t.lods[lod].visible) { t.lod = lod; t.lods.forEach((o, i) => { o.visible = i === lod; }); }
+    }
   }
 
   /**
@@ -524,24 +589,11 @@ export class SiteView3D {
   }
 
   /** Water-flow particles: a Flow instance (native XY); updated every frame while shown. */
-  setFlow(flow, sinks) {
+  setFlow(flow, water) {
     this.flow = flow;
     if (this.flowPts) { this.scene.remove(this.flowPts); this.flowPts.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); this.flowPts = null; }
-    if (this.pond) { this.scene.remove(this.pond); this.pond.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); this.pond = null; }
+    this.setFlowWater(flow ? water : null);
     if (!flow) { delete this.frames.flow; return; }
-    if (sinks?.length) {
-      // Ponding spots: translucent blue discs at the water level a low spot would fill to.
-      this.pond = new THREE.Group();
-      const mat = new THREE.MeshBasicMaterial({ color: 0x3b82f6, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false });
-      for (const s of sinks) {
-        const r = Math.max(2, (1.5 + Math.min(4, s.depth) * 2) * this.g.s) * this.k;
-        const disc = new THREE.Mesh(new THREE.CircleGeometry(r, 28), mat.clone());
-        disc.rotation.x = -Math.PI / 2;
-        disc.position.set((s.x - this.cx) * this.k, (s.z + Math.min(s.depth, 0.5) - this.z0) * this.ex, -(s.y - this.cy) * this.k);
-        this.pond.add(disc);
-      }
-      this.scene.add(this.pond);
-    }
     // Each particle: a bright head plus a tail through its last few positions, fading into the ground.
     const T = 16, n = flow.n;
     const geo = new THREE.BufferGeometry();
@@ -583,6 +635,40 @@ export class SiteView3D {
       geo.attributes.position.needsUpdate = true;
       tgeo.attributes.position.needsUpdate = true;
     };
+  }
+
+  /** Standing water and streams for the water-flow view: { ponds: { mask }, streams: { seg, w, q, n } } from Flow. */
+  setFlowWater(water) {
+    if (this.pond) { this.scene.remove(this.pond); this.pond.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); this.pond = null; }
+    const f = this.flow; if (!f || !water) return;
+    const G = f.g, grp = new THREE.Group(), X = x => (x - this.cx) * this.k, Z = y => -(y - this.cy) * this.k, Y = z => (z - this.z0) * this.ex;
+    const mask = water.ponds?.mask;
+    if (mask && water.ponds.list.length) {
+      // Water surface: one square per ponded node, at the level the low spot fills to before it spills.
+      let n = 0; for (let q = 0; q < mask.length; q++) if (mask[q]) n++;
+      const pos = new Float32Array(n * 18), h = G.s / 2; let o = 0;
+      for (let q = 0; q < mask.length; q++) {
+        if (!mask[q]) continue;
+        const x = G.x0 + (q % G.nx) * G.s, y = G.y0 + ((q / G.nx) | 0) * G.s, yy = Y(f.zf[q]) + 0.05 * this.ex;
+        const x0 = X(x - h), x1 = X(x + h), z0 = Z(y - h), z1 = Z(y + h);
+        pos.set([x0, yy, z0, x1, yy, z0, x1, yy, z1, x0, yy, z0, x1, yy, z1, x0, yy, z1], o); o += 18;
+      }
+      const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0x3b82f6, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false }));
+      m.renderOrder = 2; grp.add(m);
+    }
+    const S = water.streams;
+    if (S?.n) {
+      const pos = new Float32Array(S.n * 6), col = new Float32Array(S.n * 6), lift = 0.35 * this.ex;
+      for (let k = 0; k < S.n; k++) {
+        const q = S.q[k], t = f.to[q], a = 0.45 + 0.55 * S.w[k];
+        pos.set([X(S.seg[k * 4]), Y(f.z[q]) + lift, Z(S.seg[k * 4 + 1]), X(S.seg[k * 4 + 2]), Y(f.z[t]) + lift, Z(S.seg[k * 4 + 3])], k * 6);
+        for (let e = 0; e < 2; e++) col.set([0.22 * a, 0.59 * a, 1.0 * a], k * 6 + e * 3);
+      }
+      const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      grp.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.95 })));
+    }
+    this.pond = grp; this.scene.add(grp);
   }
 
   /**
@@ -838,7 +924,7 @@ export class SiteView3D {
     const objs = [];
     const sm = this.sketch?.getObjectByName('sketchMass'); if (sm) objs.push(sm);
     if (this.bldg?.visible) objs.push(this.bldg);
-    this.trees?.children.forEach(o => { if (o.name === 'crowns' || (ghosts && o.name === 'ghost-trees')) objs.push(o); });
+    this.trees?.traverseVisible(o => { if (o.name === 'crowns' || (ghosts && o.name === 'ghost-trees')) objs.push(o); });
     this.revit?.children.forEach(o => { if (o.name === 'revitBuilding') objs.push(o); });
     if (!objs.length) return null;
     const hit = this._ray(sx, sy).intersectObjects(objs, false)[0];
@@ -885,14 +971,16 @@ export class SiteView3D {
 }
 
 /**
- * Crown forms for the trees, each fitting a unit sphere (x, z in −1…1, y in −1…1), built once. Clusters of lumpy
- * low-poly blobs read as abstract trees rather than lollipops; conifers are stacked cones.
+ * Crown forms for the trees, each fitting a unit box (x, z in −1…1, y in −1…1), built once. Clusters of lumpy
+ * low-poly blobs read as abstract trees rather than lollipops; conifers are cones. Every form is grown a few
+ * different ways (F.variants) and each variant exists at two levels of detail — F[form][variant][0 | 1] — plus one
+ * far-away stand-in for all broadleaf / pine crowns and one for cedars (F.far).
  */
 function treeForms() {
-  let seed = 11;
-  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
-  const blob = (cx, cy, cz, rx, ry, rz, detail = 1, lump = 0.18) => {
-    const g = new THREE.IcosahedronGeometry(1, detail).toNonIndexed(), p = g.attributes.position;
+  const VAR = 3;
+  const rng = seed => { let s = (seed * 48271 + 12345) % 2147483647; const f = () => { s = (s * 16807) % 2147483647; return s / 2147483647; }; f(); f(); f(); return f; };
+  const blob = (rnd, [cx, cy, cz, rx, ry, rz, detail, lump]) => {
+    const g = new THREE.IcosahedronGeometry(1, detail), p = g.attributes.position;
     const key = new Map();
     for (let i = 0; i < p.count; i++) {
       const x = p.getX(i), y = p.getY(i), z = p.getZ(i), k = `${x.toFixed(3)},${y.toFixed(3)},${z.toFixed(3)}`;
@@ -914,24 +1002,38 @@ function treeForms() {
     g.userData.shared = true;
     return g;
   };
-  const cluster = (n, spreadXZ, spreadY, size) => merge(Array.from({ length: n }, (_, i) => {
+  // A crown is a recipe of blobs [cx, cy, cz, rx, ry, rz, detail, lumpiness]; the recipe is the same at both levels
+  // of detail, only the facet count changes.
+  const cluster = (rnd, n, spreadXZ, spreadY, size) => Array.from({ length: n }, (_, i) => {
     const a = (i / n) * Math.PI * 2 + rnd() * 0.8, d = i === 0 ? 0 : spreadXZ * (0.5 + 0.5 * rnd());
     const s = size * (0.75 + 0.4 * rnd());
-    return blob(Math.cos(a) * d, (rnd() - 0.4) * spreadY, Math.sin(a) * d, s, s * (0.85 + 0.3 * rnd()), s, 1, 0.2);
-  }));
-  const F = {
-    round: cluster(5, 0.55, 0.5, 0.62),
-    oval: merge([blob(0, 0, 0, 0.8, 1.2, 0.8, 1, 0.2), blob(0.25, 0.55, 0.1, 0.55, 0.6, 0.55, 1, 0.2), blob(-0.3, -0.35, -0.1, 0.6, 0.55, 0.6, 1, 0.2)]),
-    cluster: cluster(7, 0.75, 0.7, 0.5),
-    lumpy: merge([blob(0, 0, 0, 1, 0.9, 1, 2, 0.28)]),
-    spread: merge([...Array.from({ length: 6 }, (_, i) => { const a = i / 6 * Math.PI * 2 + rnd(); return blob(Math.cos(a) * 0.75, (rnd() - 0.5) * 0.25, Math.sin(a) * 0.75, 0.55, 0.32, 0.55, 1, 0.22); }), blob(0, 0.15, 0, 0.7, 0.4, 0.7, 1, 0.2)]),
-    // Eastern red cedar: one dense, slightly lumpy teardrop.
-    cedar: (() => { const g = new THREE.ConeGeometry(1, 2.2, 9, 4).toNonIndexed(), p = g.attributes.position; for (let i = 0; i < p.count; i++) { const y = p.getY(i), k = 1 + (rnd() - 0.5) * 0.18, bulge = 1 + 0.25 * Math.sin((y + 1.1) / 2.2 * Math.PI); p.setXYZ(i, p.getX(i) * k * bulge, y, p.getZ(i) * k * bulge); } return merge([g]); })(),
+    return [Math.cos(a) * d, (rnd() - 0.4) * spreadY, Math.sin(a) * d, s, s * (0.85 + 0.3 * rnd()), s, 1, 0.2];
+  });
+  const j = (rnd, v, amt) => v + (rnd() - 0.5) * 2 * amt;
+  const recipes = {
+    round: rnd => cluster(rnd, 4 + Math.floor(rnd() * 3), 0.55, 0.5, 0.62),
+    oval: rnd => [[0, 0, 0, 0.8, 1.2, 0.8, 1, 0.2], [j(rnd, 0.25, 0.2), j(rnd, 0.55, 0.15), j(rnd, 0.1, 0.2), 0.55, 0.6, 0.55, 1, 0.2], [j(rnd, -0.3, 0.2), j(rnd, -0.35, 0.15), j(rnd, -0.1, 0.2), 0.6, 0.55, 0.6, 1, 0.2]],
+    cluster: rnd => cluster(rnd, 6 + Math.floor(rnd() * 3), 0.75, 0.7, 0.5),
+    lumpy: rnd => [[0, 0, 0, 1, 0.9, 1, 2, 0.28], ...(rnd() < 0.6 ? [[j(rnd, 0, 0.5), j(rnd, 0.45, 0.2), j(rnd, 0, 0.5), 0.5, 0.45, 0.5, 1, 0.25]] : [])],
+    spread: rnd => { const n = 5 + Math.floor(rnd() * 3); return [...Array.from({ length: n }, (_, i) => { const a = i / n * Math.PI * 2 + rnd(); return [Math.cos(a) * 0.75, (rnd() - 0.5) * 0.25, Math.sin(a) * 0.75, 0.55, 0.32, 0.55, 1, 0.22]; }), [0, 0.15, 0, 0.7, 0.4, 0.7, 1, 0.2]]; },
     // Pine: an open, flat-topped crown of a few irregular clumps (the tall bare trunk comes from the crown height).
-    pine: merge([blob(0, 0.2, 0, 0.8, 0.45, 0.75, 1, 0.25), blob(0.55, -0.15, 0.25, 0.5, 0.32, 0.5, 1, 0.25), blob(-0.5, -0.05, -0.3, 0.55, 0.35, 0.5, 1, 0.25), blob(0.1, -0.35, -0.45, 0.42, 0.28, 0.42, 1, 0.25)]),
-    trunk: (() => { const g = new THREE.CylinderGeometry(0.65, 1, 1, 6); g.userData.shared = true; return g; })(),
+    pine: rnd => [[0, 0.2, 0, 0.8, 0.45, 0.75, 1, 0.25], [j(rnd, 0.55, 0.15), -0.15, j(rnd, 0.25, 0.2), 0.5, 0.32, 0.5, 1, 0.25], [j(rnd, -0.5, 0.15), -0.05, j(rnd, -0.3, 0.2), 0.55, 0.35, 0.5, 1, 0.25], [j(rnd, 0.1, 0.2), -0.35, j(rnd, -0.45, 0.15), 0.42, 0.28, 0.42, 1, 0.25]],
   };
-  F.edges = {};
-  for (const k of ['round', 'oval', 'cluster', 'lumpy', 'spread', 'cedar', 'pine']) F.edges[k] = new THREE.EdgesGeometry(F[k], 35);
+  // Eastern red cedar: one dense, slightly lumpy teardrop.
+  const cedar = (rnd, sides, rings) => { const g = new THREE.ConeGeometry(1, 2.2, sides, rings).toNonIndexed(), p = g.attributes.position; const ph = rnd() * 0.6; for (let i = 0; i < p.count; i++) { const y = p.getY(i), k = 1 + (rnd() - 0.5) * 0.18, bulge = 1 + 0.25 * Math.sin((y + 1.1) / 2.2 * Math.PI + ph); p.setXYZ(i, p.getX(i) * k * bulge, y, p.getZ(i) * k * bulge); } return merge([g]); };
+  const F = { variants: VAR };
+  let seed = 11;
+  for (const [form, recipe] of Object.entries(recipes)) {
+    F[form] = Array.from({ length: VAR }, () => {
+      const parts = recipe(rng(seed += 7919)), r0 = rng(seed + 1), r1 = rng(seed + 2);
+      return [merge(parts.map(p => blob(r0, p))), merge(parts.map(p => blob(r1, [...p.slice(0, 6), 0, p[7]])))];
+    });
+  }
+  F.cedar = Array.from({ length: VAR }, () => [cedar(rng(seed += 7919), 9, 4), cedar(rng(seed), 6, 1)]);
+  F.far = { broad: merge([blob(rng(5), [0, 0, 0, 1, 1, 1, 0, 0.22])]), conifer: cedar(rng(6), 4, 1) };
+  F.trunk = (() => { const g = new THREE.CylinderGeometry(0.65, 1, 1, 6); g.userData.shared = true; return g; })();
+  F.trunkFar = (() => { const g = new THREE.CylinderGeometry(0.65, 1, 1, 3, 1, true); g.userData.shared = true; return g; })();
+  const edges = new Map();
+  F.edge = (form, v, lod) => { const k = `${form}|${v}|${lod}`; if (!edges.has(k)) { const e = new THREE.EdgesGeometry(F[form][v][lod], 35); e.userData.shared = true; edges.set(k, e); } return edges.get(k); };
   return F;
 }
